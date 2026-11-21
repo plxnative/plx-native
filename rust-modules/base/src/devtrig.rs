@@ -1,7 +1,8 @@
 //! The `/tmp` developer-trigger PRIMITIVES: the one door onto `/tmp/plxnative-*`.
 //!
 //! This app is driven headlessly by ~44 files under `/tmp/plxnative-*`: which screen to boot to,
-//! which item to play, which URL to stream, whether to auto-press OK, which PMS token to use.
+//! which item to play, which URL to stream, whether to auto-press OK, which PMS token to use (on a hosted platform with
+//! no runtime root to write them in, the same names armed from a table: [`set_preset`]).
 //! That is how `tests/run.py` and every capture scene work, and it is not going away. This module
 //! is the READ side of that surface — [`flag`], [`read`], [`read_sample`], the per-process latch
 //! [`latched_flag!`], and the handful of triggers whose answer is a plain value ([`no_wan`],
@@ -16,7 +17,8 @@
 //! behaviour switch any co-resident process can throw. Three are outright takeovers:
 //! `plxnative-token` beats the signed-in session (`app.rs`'s boot gate), `plxnative-servers` hands
 //! the app a whole additional server — an address AND the token to trust it with — and
-//! `plxnative-url` replaces the stream the player feeds.
+//! `plxnative-url` replaces the stream the player feeds. A table arms the same switches, so it exists in the same
+//! builds and no others.
 //!
 //! So every read goes through here, and here is `#[cfg]`-gated on the `devtriggers` feature. In a
 //! `--no-default-features` build [`flag`] is `false` and [`read`] is `None` at COMPILE time, so
@@ -31,6 +33,10 @@
 //! statement whose literal names a trigger (a log line saying `/tmp/plxnative-…`) carries its own
 //! `#[cfg(feature = "devtriggers")]`. Never rely on constant folding for this.
 //!
+//! A platform with no writable runtime root arms triggers from a table instead ([`set_preset`], `devtriggers` only): the
+//! file is consulted first, the table second, and every reader that takes the trigger's PATH instead of going through
+//! [`flag`]/[`read`] has to consult it too, as must the scans that list what is armed.
+//!
 //! **Never open a `/tmp` path directly.** The grep that audits this (`/tmp/plxnative-` outside
 //! `dev` and the unconditional log sinks, `ci/check-deps.sh`'s `tmppath`) is the only thing
 //! keeping the property true. A trigger's bare name is the argument to [`flag`] / [`read`] and the
@@ -43,7 +49,7 @@
 /// One gated table rather than literals at each consumer, for the reason `dev`'s `DIAG` is
 /// gated: a full trigger name in the release binary is exactly what `ci/check-package.py` grades as
 /// "dev triggers compiled in", and `plxnative-noidle` is its witness. A release build never arms a
-/// trigger (`dev::armed_triggers` is empty there), so it has no vocabulary to check against
+/// trigger (`dev::armed_triggers`, which lists files and [`preset_names`], is empty there), so it has no vocabulary to check against
 /// and the accessors below answer "not supported" / "not listed" without naming one.
 ///
 /// `ci/check-package.py` parses this array out of THIS file (and `DIAG` out of `dev.rs`), so it
@@ -164,11 +170,28 @@ mod preset {
     }
 
     pub(super) fn set(table: &[(&'static str, String)]) -> Result<(), super::PresetRefused> {
+        if table.iter().any(|(name, _)| super::NEVER_PRESET.contains(name)) {
+            return Err(super::PresetRefused);
+        }
         TABLE.set(table.to_vec()).map_err(|_| super::PresetRefused)
+    }
+
+    pub(super) fn names() -> Vec<&'static str> {
+        TABLE.get().map(|t| t.iter().map(|(n, _)| *n).collect()).unwrap_or_default()
     }
 }
 
-/// [`set_preset`] was already called: the table is set once per process, and the first one stays.
+/// The triggers a preset may NEVER arm: each one lets a debug build write to a REAL person's account (AGENTS.md, "Never
+/// write to a real person's Plex account"). Their guard is the owner's own file, which a hook refuses an agent to create
+/// and every harness sweep clears; a preset is neither seen by that hook nor swept, so it would be an arming nobody can
+/// find. Checked across every trigger name the code reads: `watchlist-live` (real plex.tv Watchlist writes,
+/// `plex/watchlist.rs`) is the one whose documentation permits a real-account write; the rest either read, drive the mock,
+/// or name a server and token the boot's `--guest` rule governs, the same as the file that arms them.
+#[cfg(feature = "devtriggers")]
+const NEVER_PRESET: [&str; 1] = ["watchlist-live"];
+
+/// [`set_preset`] refused the table: it was already set (once per process, the first one stays), or it names a trigger
+/// a preset may never arm (see `NEVER_PRESET`).
 #[cfg(feature = "devtriggers")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PresetRefused;
@@ -177,9 +200,24 @@ pub struct PresetRefused;
 /// without a runtime root's files arms, consulted by [`read`] and [`flag`] after the file. Once per process: a second
 /// call is refused with [`PresetRefused`] and changes nothing, so the answers a running thread already read
 /// cannot change under it. A pair with empty content arms a bare flag, as an empty file does.
+///
+/// **A table that names `watchlist-live` is refused, whole and unset** (so a later, clean call is still accepted): that
+/// trigger enables writes to the owner's real Watchlist, and its only guard, the owner's own file, is one a hook
+/// refuses an agent and a sweep clears, neither of which can see a table.
+///
+/// A preset arms a trigger exactly as a file does for every reader, so the directory scans that list armed triggers
+/// (`dev::any_trigger_present`, `dev::armed_triggers`) take [`preset_names`] beside the files.
 #[cfg(feature = "devtriggers")]
 pub fn set_preset(table: &[(&'static str, String)]) -> Result<(), PresetRefused> {
     preset::set(table)
+}
+
+/// The bare names of the preset table (empty until [`set_preset`], and for a table of none), in the order they were
+/// given. The one accessor the application's trigger scans need: those scans list FILES, and a preset arms a trigger
+/// as a file does, so they list these too. The values stay behind [`read`].
+#[cfg(feature = "devtriggers")]
+pub fn preset_names() -> Vec<&'static str> {
+    preset::names()
 }
 
 /// Boot-latched main-thread checker escape hatch. File content must be exactly `log`.
@@ -412,7 +450,7 @@ mod tests {
 /// names are its own (`devtest-preset-*`) so no other test or trigger reads them.
 #[cfg(all(test, feature = "devtriggers"))]
 mod preset_tests {
-    use super::{flag, path, read, set_preset, with_private_triggers, PresetRefused};
+    use super::{flag, path, preset_names, read, set_preset, with_private_triggers, PresetRefused};
 
     #[test]
     fn the_file_wins_and_the_preset_answers_when_there_is_no_file() {
@@ -436,10 +474,33 @@ mod preset_tests {
             std::fs::write(path("devtest-preset-b"), "from-file\n").unwrap();
             assert_eq!(read("devtest-preset-b").as_deref(), Some("from-file"), "a file beats the preset");
 
+            assert_eq!(preset_names(), ["devtest-preset-a", "devtest-preset-b", "devtest-preset-flag"], "the names, in order");
             assert_eq!(set_preset(&[("devtest-preset-c", "late".to_string())]), Err(PresetRefused));
             assert_eq!(read("devtest-preset-c"), None, "a refused set changes nothing");
             assert_eq!(read("devtest-preset-a").as_deref(), Some("from-preset"), "and the first table stays");
         });
+    }
+}
+
+/// The owner's live switch cannot be armed from a table. The refused call changes nothing: it leaves the slot unset.
+/// A separate test from the once-set one above would race it for the slot, so it only asserts what holds either way:
+/// the refusal itself, and that the name never answers.
+#[cfg(all(test, feature = "devtriggers"))]
+mod preset_refusal_tests {
+    use super::{flag, preset_names, read, set_preset, PresetRefused, NEVER_PRESET};
+
+    #[test]
+    fn a_table_naming_a_real_account_write_switch_is_refused() {
+        for name in NEVER_PRESET {
+            assert_eq!(set_preset(&[(name, String::new())]), Err(PresetRefused), "{name}");
+            assert_eq!(set_preset(&[("devtest-ok", "x".to_string()), (name, String::new())]), Err(PresetRefused), "{name} among others");
+            super::with_private_triggers(|| {
+                assert!(!flag(name), "{name} never answers from a table");
+                assert_eq!(read(name), None);
+            });
+            assert!(!preset_names().contains(&name));
+        }
+        assert_eq!(NEVER_PRESET, ["watchlist-live"]);
     }
 }
 
