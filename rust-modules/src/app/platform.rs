@@ -300,8 +300,16 @@ impl Platform {
 
     /// Hand the lower layers the platform's `tv` services, once: `run_application` does it before
     /// anything reads `tv`. A second call is refused by `tv` and changes nothing.
+    ///
+    /// The second line publishes the platform's [`Layout`](plx_os::tv::Layout) into `plx_base::paths`
+    /// (`paths` is below `tv` and cannot read it, as `scrub::set_identities` is pushed from above). It
+    /// must run before the first read of `app_dir()` (`pre_boot_diagnostics`' `appdir:` line, the
+    /// first one); a refusal is logged here, after the fact, because `paths` itself never logs.
     pub(crate) fn install_services(&self) {
         let _ = plx_os::tv::install(self.services);
+        if let Err(refused) = plx_base::paths::publish(self.services.layout) {
+            plx_base::eventlog::log(&format!("layout: not published: {refused}"));
+        }
     }
 }
 
@@ -656,5 +664,60 @@ mod tests {
             1,
             "`tv::install` is called by `Platform::install_services` and nowhere else"
         );
+    }
+
+    /// The layout is published by the install's second line, and nothing the process runs before that
+    /// line reads `app_dir()` or the state root: not `run_application` (the install is its first
+    /// statement), not a platform's entry, and not `host`. A read earlier than the publish would
+    /// freeze the derivation (`paths::publish` then refuses, and the platform's directories are
+    /// silently not used). Reads the source, like the install pin above, because no host test can run
+    /// the entry.
+    #[test]
+    fn the_layout_is_published_second_and_nothing_reads_the_directories_before_it() {
+        let install = include_str!("platform.rs")
+            .split_once("pub(crate) fn install_services(")
+            .expect("install_services")
+            .1
+            .split_once("\n    }\n")
+            .expect("the end of install_services")
+            .0;
+        let tv_install = install.find(concat!("tv::", "install(")).expect("the tv install");
+        let publish = install.find(concat!("paths::", "publish(")).expect("the layout publish");
+        assert!(tv_install < publish, "the layout is published right after the install, never before it");
+        assert_eq!(
+            install.matches(concat!("paths::", "publish(")).count(),
+            1,
+            "one publish, in install_services"
+        );
+        assert_eq!(
+            crate_sources().iter().map(|text| text.matches(concat!("paths::", "publish(")).count()).sum::<usize>(),
+            1,
+            "`paths::publish` is called by `Platform::install_services` and nowhere else"
+        );
+
+        // What runs before the install: the application's entry up to it, `host::run`, and each
+        // platform's own entry. None names a directory read.
+        let reads = [
+            concat!("app_", "dir("),
+            concat!("in_app_", "dir("),
+            concat!("app_dir_", "line("),
+            concat!("persistent_state_", "root("),
+        ];
+        let body = include_str!("mod.rs")
+            .split_once("fn run_application(")
+            .expect("run_application")
+            .1
+            .split_once('{')
+            .expect("run_application's body")
+            .1;
+        let before = body.split_once(concat!("platform.install_", "services();")).expect("the install").0;
+        let host = include_str!("../host.rs");
+        let port = include_str!("../../platform-webos/src/port.rs");
+        let desktop = include_str!("../../platform-desktop/src/lib.rs");
+        for (what, text) in [("run_application", before), ("host.rs", host), ("platform-webos port.rs", port), ("platform-desktop lib.rs", desktop)] {
+            for read in reads {
+                assert!(!text.contains(read), "{what} must not read `{read}` before the layout is published");
+            }
+        }
     }
 }
