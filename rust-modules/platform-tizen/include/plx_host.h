@@ -37,7 +37,9 @@
  *                        after plx_host_stop, see STOP).
  *     PLX_HOST_E_LAUNCH  launch_json was refused (not JSON, a required key missing or of the wrong type, a
  *                        value out of range). Nothing was started.
- *     PLX_HOST_E_WINDOW  the Ecore window or the EGL libraries could not be brought up. Nothing was started.
+ *     PLX_HOST_E_WINDOW  the Ecore window or the EGL libraries could not be brought up (a library that does
+ *                        not open, a window that cannot be made), or bringing the platform up panicked; what
+ *                        was made is released first. Nothing was started.
  *     PLX_HOST_E_THREAD  the loop thread could not be started. Nothing was started.
  *   For the three refusals on_stopped(1, 1) is called on the HOST thread, before plx_host_start returns, and
  *   the return value is the code above (clean = 1: nothing is held).

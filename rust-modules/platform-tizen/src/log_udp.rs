@@ -140,12 +140,18 @@ mod tests {
         assert_eq!(recv(&rx), "000001 kept\n");
     }
 
-    /// The socket is non-blocking: a burst far larger than any socket buffer returns at once instead of
-    /// waiting on a receiver that never reads.
+    /// **The socket is non-blocking**, asserted directly: a read on the sender's own socket, which nothing
+    /// ever writes to, returns `WouldBlock` at once instead of waiting. (A send to a full loopback receiver is
+    /// dropped by the kernel whatever the mode, so a burst cannot tell the two apart.) A burst far larger than
+    /// any socket buffer must also return and still number every line.
     #[test]
     fn a_send_never_waits_for_a_receiver_that_does_not_read() {
         let (_rx, addr) = receiver();
         let tx = UdpLog::open(addr).unwrap();
+        let before = std::time::Instant::now();
+        let err = tx.socket.recv(&mut [0u8; 16]).expect_err("nothing was sent to the sender's socket");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock, "a blocking socket would have waited here");
+        assert!(before.elapsed() < Duration::from_secs(1), "returned at once");
         let started = std::time::Instant::now();
         for i in 0..20_000 {
             tx.send_line(&format!("burst {i} {}", "x".repeat(900)));
@@ -171,16 +177,19 @@ mod tests {
     fn the_channel_is_off_until_installed_and_then_carries_the_log() {
         let (rx, addr) = receiver();
         plx_base::eventlog::with_private_log(|| {
+            // Before the install there is no sender for the tap to send through: the channel is off, whatever
+            // the receiver would have heard. (This test is the only one that installs.)
+            assert!(SENDER.get().is_none(), "no sender exists before the install");
             plx_base::eventlog::log("udp-test: before the install");
-            rx.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-            assert!(rx.recv(&mut [0u8; 64]).is_err(), "nothing was sent while the channel was off");
-            rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            tap("udp-test: a tap call with no sender sends nothing, and does not fail");
             install(addr).expect("the first install is accepted");
             plx_base::eventlog::log("udp-test: after the install X-Plex-Token=SECRETQQ99 ok");
             // Other tests in this process log on their own threads and the tap is process-wide, so read
             // until this test's own line arrives.
+            assert!(SENDER.get().is_some(), "the install made the sender");
             let got = (0..200)
                 .map(|_| recv(&rx))
+                .inspect(|d| assert!(!d.contains("udp-test: before the install"), "an off channel sent {d:?}"))
                 .find(|d| d.contains("udp-test: after the install"))
                 .expect("this test's line reaches the receiver");
             let (seq, _) = got.split_once(' ').expect("a sequence prefix");

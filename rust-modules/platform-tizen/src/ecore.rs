@@ -14,11 +14,10 @@
 //! is all-or-nothing, so the optional symbols live in tables of their own: the embedder's EGL-window path
 //! ([`ecore_wl2_egl`]) with `libwayland-egl` ([`wayland_egl`]) as the logged fallback, and the window
 //! options ([`ecore_wl2_opts`]). The Ecore event ids are DATA symbols, which `dynlib!` does not bind: they
-//! are read through `Handle::sym` ([`event_ids`]). The handler functions are bound from `libecore_wl2.so.1`
-//! first: that is the handle the emulator run resolved them from (E6), and it reaches `libecore`'s definition
-//! through its own dependency. `libecore.so.1` is only the candidate for an image where `libecore_wl2` does
-//! not open (`dynlib!` takes the first candidate that opens and does not try the next on a missing symbol);
-//! whether it resolves them by name is UNVERIFIED.
+//! are read through `Handle::sym` ([`event_ids`]). The handler functions are bound from `libecore_wl2.so.1`:
+//! that is the handle the emulator run resolved them from (E6), and it reaches `libecore`'s definition
+//! through its own dependency. There is no second candidate: [`Window::create`] has already refused when
+//! `libecore_wl2` does not open, so a fallback to `libecore.so.1` could never be reached.
 //!
 //! **UNVERIFIED on a retail set: the layout of `Ecore_Event_Key`.** Only its first two pointers (`keyname`,
 //! `key`, first in every EFL version) and `keycode` are read, as the emulator run did; a wrong offset reads
@@ -103,9 +102,17 @@ plx_base::dynlib! {
 
 plx_base::dynlib! {
     /// The event handlers, from the handle the emulator run resolved them from; see the module note.
-    ecore_events: ["libecore_wl2.so.1", "libecore.so.1"] {
+    ecore_events: ["libecore_wl2.so.1"] {
         fn ecore_event_handler_add(kind: c_int, cb: EventCb, data: *const c_void) -> *mut c_void;
         fn ecore_event_handler_del(handler: *mut c_void) -> *mut c_void;
+    }
+}
+
+plx_base::dynlib! {
+    /// `ecore_event_init`, the retry when an event id still reads 0 (a one-entry table of its own: a missing
+    /// symbol costs only the retry).
+    ecore_input: ["libecore_input.so.1"] {
+        fn ecore_event_init() -> c_int;
     }
 }
 
@@ -131,6 +138,31 @@ pub(crate) fn loaded(what: &str, result: Loaded) -> bool {
     }
 }
 
+/// One library table to load: its name for the log, and its loader.
+type Required = (&'static str, fn() -> Loaded);
+
+/// The tables [`Window::create`] cannot work without, and the EGL table the loop thread needs: a missing
+/// `libEGL` is refused here, on the host thread, as `PLX_HOST_E_WINDOW` (the header's promise), not found
+/// later by the loop thread as an `OK` start that ends in `on_stopped(1, 0)`.
+fn required_libraries() -> [Required; 4] {
+    [
+        ("ecore_wl2", || ecore_wl2::load(None)),
+        ("ecore_wl2_end", || ecore_wl2_end::load(None)),
+        ("ecore_events", || ecore_events::load(None)),
+        ("egl", crate::egl::load),
+    ]
+}
+
+/// Load every table in `required`, logging each outcome (none is skipped after a failure, so one start says
+/// everything an image lacks); `true` when all are live.
+fn all_loaded(required: &[Required]) -> bool {
+    let mut all = true;
+    for (what, load) in required {
+        all &= loaded(what, load());
+    }
+    all
+}
+
 /// The native window and everything Ecore made for it. Raw handles only: the struct is moved once, to the
 /// loop thread's surface, which uses [`Window::native_window`] for EGL and hands the whole value back to the
 /// host thread to destroy.
@@ -152,6 +184,12 @@ pub struct Window {
     pub height: i32,
 }
 
+impl crate::hosted::Made for Window {
+    fn unmake(mut self) {
+        self.destroy();
+    }
+}
+
 // SAFETY: the handles are opaque tokens. After the one move to the loop thread they are used for EGL
 // (native_window, wl_display) there, and the host thread alone calls Ecore with them (`destroy`).
 unsafe impl Send for Window {}
@@ -160,10 +198,7 @@ impl Window {
     /// Steps 1-6 and the options, then the handlers. HOST THREAD. Every failure is logged where it happens
     /// and answers [`host_abi::E_WINDOW`]; what was made is released first.
     pub fn create() -> Result<Window, i32> {
-        if !(loaded("ecore_wl2", ecore_wl2::load(None))
-            && loaded("ecore_wl2_end", ecore_wl2_end::load(None))
-            && loaded("ecore_events", ecore_events::load(None)))
-        {
+        if !all_loaded(&required_libraries()) {
             return Err(host_abi::E_WINDOW);
         }
         // SAFETY (whole function): the embedder's calls with the embedder's arguments; every returned
@@ -304,11 +339,12 @@ impl Window {
     fn register_handlers(&mut self) -> Result<(), i32> {
         let Some(ids) = event_ids() else { return Err(host_abi::E_WINDOW) };
         for (what, kind, cb, data) in [
-            ("key down", ids.key_down, key_cb as EventCb, 1usize),
-            ("key up", ids.key_up, key_cb as EventCb, 0),
+            ("key down", Some(ids.key_down), key_cb as EventCb, 1usize),
+            ("key up", Some(ids.key_up), key_cb as EventCb, 0),
             ("focus in", ids.focus_in, focus_cb as EventCb, 1),
             ("focus out", ids.focus_out, focus_cb as EventCb, 0),
         ] {
+            let Some(kind) = kind else { continue }; // a focus id that was absent: logged by `ids_from`
             // SAFETY: the live events table; `data` is a tag the callbacks read, never dereferenced.
             let handler = unsafe { ecore_event_handler_add(kind, cb, data as *const c_void) };
             log(&format!("ecore: handler {what} (event {kind}) -> {handler:p}"));
@@ -368,8 +404,9 @@ impl Window {
 struct EventIds {
     key_down: c_int,
     key_up: c_int,
-    focus_in: c_int,
-    focus_out: c_int,
+    /// Diagnostic only: a missing one is logged and its handler is not registered.
+    focus_in: Option<c_int>,
+    focus_out: Option<c_int>,
 }
 
 /// Read an event id, a DATA symbol (`int ECORE_EVENT_KEY_DOWN`), which `dynlib!` does not bind.
@@ -381,7 +418,7 @@ fn id_of(handles: &[Handle], name: &str) -> Option<c_int> {
 }
 
 /// The ids, as `libecore_input` and `libecore_wl2` allocated them. `ecore_wl2_init` normally initialises
-/// the input library; if an id still reads 0, `ecore_event_init` is called once and the ids are read again.
+/// the input library; if a KEY id still reads 0, `ecore_event_init` is called once and the ids are read again.
 fn event_ids() -> Option<EventIds> {
     let Some((input, _)) = Handle::open(&["libecore_input.so.1"]) else {
         log("ecore: libecore_input.so.1 did not open");
@@ -391,28 +428,63 @@ fn event_ids() -> Option<EventIds> {
         log("ecore: libecore_wl2.so.1 did not open (event ids)");
         return None;
     };
-    let read = || {
-        Some(EventIds {
-            key_down: id_of(&[input], "ECORE_EVENT_KEY_DOWN")?,
-            key_up: id_of(&[input], "ECORE_EVENT_KEY_UP")?,
-            focus_in: id_of(&[wl2], "ECORE_WL2_EVENT_FOCUS_IN")?,
-            focus_out: id_of(&[wl2], "ECORE_WL2_EVENT_FOCUS_OUT")?,
-        })
-    };
-    let mut ids = read();
-    if ids.as_ref().is_none_or(|i| i.key_down == 0 || i.key_up == 0) {
-        if let Some(init) = input.sym("ecore_event_init").filter(|p| !p.is_null()) {
-            // SAFETY: `int ecore_event_init(void)`, called on the host thread that owns Ecore.
-            let n = unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> c_int>(init)() };
-            log(&format!("ecore: the key event ids read 0; ecore_event_init -> {n}"));
-            ids = read();
+    ids_from(
+        |name| id_of(&[if name.starts_with("ECORE_WL2_") { wl2 } else { input }], name),
+        || {
+            if !loaded("ecore_input", ecore_input::load(None)) {
+                return None;
+            }
+            // SAFETY: `int ecore_event_init(void)` from a live table, called on the host thread that owns Ecore.
+            Some(unsafe { ecore_event_init() })
+        },
+    )
+}
+
+/// [`event_ids`] over the two readers: `read` answers a data symbol's value, `init` runs `ecore_event_init`
+/// (`None`: it could not be called). The key ids are required: a missing or 0 one runs `init` once, then they
+/// are read again, and a start that still has no key id is refused. The focus ids are not: each missing one is
+/// logged by name and never causes the retry or the refusal.
+fn ids_from(read: impl Fn(&str) -> Option<c_int>, init: impl FnOnce() -> Option<c_int>) -> Option<EventIds> {
+    let keys = |say: bool| {
+        let one = |name: &str| {
+            let id = read(name);
+            if id.is_none() && say {
+                log(&format!("ecore: symbol {name} not found"));
+            }
+            id
+        };
+        match (one("ECORE_EVENT_KEY_DOWN"), one("ECORE_EVENT_KEY_UP")) {
+            (Some(down), Some(up)) if down != 0 && up != 0 => Some((down, up)),
+            _ => None,
         }
-    }
-    let ids = ids.filter(|i| i.key_down != 0 && i.key_up != 0);
-    if ids.is_none() {
-        log("ecore: the key event ids could not be read");
-    }
-    ids
+    };
+    let (key_down, key_up) = match keys(false) {
+        Some(ids) => ids,
+        None => {
+            match init() {
+                Some(n) => log(&format!("ecore: a key event id was absent or 0; ecore_event_init -> {n}")),
+                None => log("ecore: a key event id was absent or 0, and ecore_event_init could not be called"),
+            }
+            let Some(ids) = keys(true) else {
+                log("ecore: the key event ids could not be read");
+                return None;
+            };
+            ids
+        }
+    };
+    let focus = |name: &str| {
+        let id = read(name);
+        if id.is_none() {
+            log(&format!("ecore: symbol {name} not found (no focus diagnostics for it)"));
+        }
+        id
+    };
+    Some(EventIds {
+        key_down,
+        key_up,
+        focus_in: focus("ECORE_WL2_EVENT_FOCUS_IN"),
+        focus_out: focus("ECORE_WL2_EVENT_FOCUS_OUT"),
+    })
 }
 
 /// Mirror of EFL's `Ecore_Event_Key` as far as `keycode` (see the module's UNVERIFIED note).
@@ -519,7 +591,97 @@ mod tests {
             std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
         });
         assert!(log.contains("ecore: ecore_wl2: no candidate library opened"), "{log}");
-        assert_eq!(log.lines().count(), 1, "one line, and nothing further was attempted: {log}");
+        assert!(log.contains("ecore: egl"), "the EGL table is part of the same refusal: {log}");
+        assert_eq!(log.lines().count(), 4, "one line per table, and no Ecore call was attempted: {log}");
+    }
+
+    /// **A missing libEGL is refused on the host thread**, in the same chain as the Ecore tables, so the start
+    /// answers `E_WINDOW` (the header's promise) instead of `OK` and an `on_stopped(1, 0)` from the loop thread.
+    /// Every table is tried and logged even after one fails; only a fully live set passes.
+    #[test]
+    fn a_missing_egl_library_fails_the_window_chain_and_names_itself() {
+        let names: Vec<&str> = required_libraries().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["ecore_wl2", "ecore_wl2_end", "ecore_events", "egl"]);
+        let live: Required = ("a", || Loaded::Ok("liba.so.1"));
+        let no_egl: Required = ("egl", || Loaded::NoLibrary);
+        let log = plx_base::eventlog::with_private_log(|| {
+            assert!(all_loaded(&[live, live]));
+            assert!(!all_loaded(&[live, no_egl, live]));
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert!(log.contains("ecore: egl: no candidate library opened"), "{log}");
+        assert_eq!(log.matches("ecore: a bound from liba.so.1").count(), 4, "a failure skips nothing: {log}");
+    }
+
+    fn reader(table: &'static [(&'static str, c_int)]) -> impl Fn(&str) -> Option<c_int> {
+        move |name| table.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    }
+
+    /// Ids that read non-zero never call `ecore_event_init`.
+    #[test]
+    fn event_ids_that_read_fine_need_no_retry() {
+        let ids = ids_from(
+            reader(&[
+                ("ECORE_EVENT_KEY_DOWN", 7),
+                ("ECORE_EVENT_KEY_UP", 8),
+                ("ECORE_WL2_EVENT_FOCUS_IN", 9),
+                ("ECORE_WL2_EVENT_FOCUS_OUT", 10),
+            ]),
+            || panic!("no retry"),
+        )
+        .expect("ids");
+        assert_eq!((ids.key_down, ids.key_up, ids.focus_in, ids.focus_out), (7, 8, Some(9), Some(10)));
+    }
+
+    /// **A missing focus symbol is not a key problem**: no retry, no refusal, the symbol is named in the log
+    /// and only its handler is skipped (`register_handlers` treats focus as a diagnostic).
+    #[test]
+    fn a_missing_focus_id_is_logged_by_name_and_never_retries_or_refuses() {
+        let log = plx_base::eventlog::with_private_log(|| {
+            let ids = ids_from(
+                reader(&[("ECORE_EVENT_KEY_DOWN", 7), ("ECORE_EVENT_KEY_UP", 8), ("ECORE_WL2_EVENT_FOCUS_IN", 9)]),
+                || panic!("a focus id is not a reason to retry"),
+            )
+            .expect("the keys are enough");
+            assert_eq!((ids.key_down, ids.key_up, ids.focus_in, ids.focus_out), (7, 8, Some(9), None));
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert!(log.contains("ECORE_WL2_EVENT_FOCUS_OUT not found"), "{log}");
+        assert!(!log.contains("key event ids could not be read"), "{log}");
+    }
+
+    /// A key id that reads 0 runs `ecore_event_init` once and is read again; one that stays 0 or absent is
+    /// refused, with the missing symbol named.
+    #[test]
+    fn a_zero_key_id_retries_once_and_a_missing_one_is_refused_by_name() {
+        use std::cell::Cell;
+        let calls = Cell::new(0);
+        let after = Cell::new(false);
+        let read = |name: &str| match name {
+            "ECORE_EVENT_KEY_DOWN" => Some(if after.get() { 5 } else { 0 }),
+            "ECORE_EVENT_KEY_UP" => Some(6),
+            _ => Some(1),
+        };
+        let ids = ids_from(read, || {
+            calls.set(calls.get() + 1);
+            after.set(true);
+            Some(1)
+        })
+        .expect("the retry made the id");
+        assert_eq!((calls.get(), ids.key_down, ids.key_up), (1, 5, 6));
+
+        let log = plx_base::eventlog::with_private_log(|| {
+            let calls = Cell::new(0);
+            let refused = ids_from(reader(&[("ECORE_EVENT_KEY_DOWN", 7)]), || {
+                calls.set(calls.get() + 1);
+                Some(0)
+            });
+            assert!(refused.is_none());
+            assert_eq!(calls.get(), 1, "one retry, no more");
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert!(log.contains("symbol ECORE_EVENT_KEY_UP not found"), "{log}");
+        assert!(log.contains("the key event ids could not be read"), "{log}");
     }
 
     /// Each way a table can fail to load is one log line that names the table and the reason, and only a
