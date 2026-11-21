@@ -6,7 +6,8 @@
 //! [`crate::exports`]) so a host test builds its own and drives it with a fake host table and injected
 //! closures for the two things that need the platform: bringing the window up on the host thread
 //! (`bring_up`) and running the application on the loop thread (`run`). The contract's list is tested
-//! here: a refused table or launch string, a quit while idle, a stop with a callback in flight
+//! here (they run under `cargo test --lib -p plx_platform_tizen --features tizen`: the crate is empty
+//! without its `tizen` feature, which no `make check` target passes): a refused table or launch string, a quit while idle, a stop with a callback in flight
 //! (`clean = 1` only after it returns), a loop that returns with a retained worker (`clean = 0`), a
 //! stalled loop and the deadline, a pause then a stop.
 //!

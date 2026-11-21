@@ -3,7 +3,9 @@
  *
  * The single source of the contract: the Rust side (rust-modules/platform-tizen/src/host_abi.rs) and the
  * .NET host's DllImports and its export check are both written from this file, and a host test pins that the
- * names, values and field order below equal the Rust ones.
+ * names, values and field order below equal the Rust ones. That test (and the crate's others) is compiled
+ * only with the crate's `tizen` feature: it runs under `cargo test --lib -p plx_platform_tizen --features
+ * tizen`, and a plain `cargo test -p plx_platform_tizen` builds an empty crate.
  *
  * Three exports, no others:
  *     int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);
@@ -49,14 +51,22 @@
  * STOP
  *   plx_host_stop (host thread, from OnTerminate) refuses every later callback into the host, asks the
  *   application to end and returns at once. It never blocks. on_stopped then arrives once:
- *     - from the loop thread with clean = 1, after the application returned having released its window and
- *       GL context and every callback that was running has returned; or
+ *     - from the loop thread with clean = 1, after the application returned, its GL context is released
+ *       and every callback that was running has returned; or
+ *     - from the loop thread with clean = 0, when the application returned with a worker still inside
+ *       firmware (the loop's own report: that worker holds what it holds); or
  *     - from the library's deadline thread with clean = 0, when the loop has not finished within the
- *       deadline (a stalled swap), or when the loop returned with a worker still inside firmware.
- *   With clean = 1 the host may release its callbacks and surfaces; with clean = 0 it releases nothing.
+ *       deadline (a stalled swap); or
+ *     - from the HOST thread with clean = 0, inside plx_host_stop itself, when the library could not start
+ *       its deadline thread (code 1).
+ *   With clean = 1 the host may release its callbacks; with clean = 0 it releases nothing. The Ecore window
+ *   is not part of that promise: after a host-initiated stop the library does not release it (it lives until
+ *   the process ends, see run_on_host); it is released only when the application ended by itself and the
+ *   host ran the teardown the library queued.
  *   After on_stopped no callback is made again. on_stopped may be called on the loop thread, the deadline
- *   thread or, for a refused start, the host thread; it must return promptly and make no call into the
- *   library.
+ *   thread, the host thread (a refused start, or inside plx_host_stop as above); it must return promptly
+ *   and make no call into the library. A host must therefore not hold, across plx_host_stop, a lock that
+ *   its on_stopped takes.
  *
  * run_on_host
  *   The loop never waits on the host thread. Work that must run there (freeing the Ecore window when the
