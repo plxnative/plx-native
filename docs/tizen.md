@@ -9,7 +9,7 @@
 - **Emulator only.** The one configuration that is built and checked is x86_64: the Tizen TV 10.0 emulator image, `tizen80`.
   An armv7 (retail) configuration is recorded in `docs/platform-ports.md` and refused by the makefile (`TIZEN_ARCH`) until a retail
   set has answered what it must (H1, H2 there).
-- **No playback.** No backend is composed (`compose: backends=none`): Play is shown disabled with its reason.
+- **No playback.** No backend is composed (`compose: backends=none`). On a detail page Resume is dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`). On Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below).
 - **No frame-rate or latency claim.** The emulator's GL runs on llvmpipe through the emulator's GL forwarding; a number taken there
   says nothing about a television, and none is quoted.
 - **A mock server, never a real account.** The package signs in against the mock Plex server (`tests/mock_pms.py`) with a placeholder
@@ -176,13 +176,20 @@ In the receiver, in order (the host's lines are fixed by `Program.cs`; the libra
 2. `dev boot: the members of .../dev-boot.json ...` (no `dev boot: none`);
 3. `plx_host_start OK; the library's loop is running`, and no `plx_host_start FAILED`, `DllNotFoundException` or `EntryPointNotFoundException`;
 4. the library's own lines: the platform identity (Tizen, emulator, no playback), the mock server's identity, the GL line without a failure,
-   Home reached with the mock's libraries, Play disabled with its reason, and each remote key logged as an action;
+   Home reached with the mock's libraries, Resume dimmed on a detail page with `preview: blocked ... reason=Cached(RefusedDirect)` (the Home hero's Play is a known gap, below), and each remote key logged as an action;
 5. no sequence gap in the receiver, and no crash lines;
 6. a Home-button round trip logs `OnPause` then `OnResume` and the screen redraws; closing the app logs `OnTerminate` and ends with
    `on_stopped code=0 clean=1`.
 
-State plainly what was not seen. A screen capture of the emulator cannot show the GL output (the emulator forwards GL to the host), so
-the screen is read by eye or photographed, and the rest comes from the log.
+State plainly what was not seen. The log is the evidence. A host-side window capture of the emulator does show the GL UI (a Windows
+`PrintWindow` capture showed Home, the detail page and the focus ring), so a capture is a record of the screen to attach beside the log.
+
+## Known gaps seen on the emulator (2026-11-21)
+
+- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line.
+- `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`; it affects only frames over a video plane, which this build has none of.
+- webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, `surface: webOS major 0`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
+- Closing the app logs `surface: the host did not take the window teardown; it lives until the process ends`.
 
 ## CI
 
