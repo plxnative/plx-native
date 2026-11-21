@@ -100,10 +100,11 @@ pub trait Shell: Sync {
 ///
 /// `window` is the raw handle the [`Shell`]'s per-window calls still take (`bind_window`,
 /// `grab_surface`, and `textinput`'s focus read), so every call site the `frame` gate pins stays where
-/// it is; W9 folds those into this trait (plan, §1). **Two event paths, one of them temporary:** a
+/// it is; folding those into this trait was expected of W9, which kept them (the Tizen shell states them as no-ops
+/// over a null `window`), so the fold waits for the SDL shells to deliver through the sink and is not scheduled. **Two event paths, one of them temporary:** a
 /// platform delivers its events through [`deliver`](Surface::deliver) and [`EventSink`]; the SDL shells
 /// still deliver through [`poll`](Surface::poll), SDL-shaped bytes, and their `deliver` delivers nothing.
-/// `poll` is retired once the SDL shells deliver through the sink (W9 at the latest). There is no
+/// `poll` is retired once the SDL shells deliver through the sink (not scheduled). There is no
 /// destructor: the `App` is leaked at exit and a worker may still hold the handle, so the end is the
 /// explicit, decided [`quit`](Surface::quit).
 pub trait Surface {

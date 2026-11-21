@@ -8,8 +8,9 @@
 //! renders is the thread that owns the context. [`Surface::quit`] releases the context on the loop thread
 //! first, and only then asks the host's main thread to take the window down (`run_on_host`, without
 //! waiting): the loop never blocks on the host thread, and the host thread never touches a context it
-//! does not own. A host that has already stopped the library refuses that request, and the window then
-//! lives to the end of the process (the host owns it then).
+//! does not own. After `plx_host_stop` it is the library's own gate that refuses that request, without
+//! calling the host, and the window then lives to the end of the process; a host that refuses a request made
+//! before the stop gets the other log line (`TizenShell::teardown`).
 //!
 //! **The window handle is null, and that is safe** ([`Surface::window`], D1). The SDL-shaped calls that read
 //! it (`textinput`'s focus read, the on-screen keyboard probe) take SDL's "no window" answer when SDL was
