@@ -65,9 +65,10 @@ LICENSE_DOCS = ("LICENSE", "LICENSING.md", "TRADEMARKS.md")
 # The generated, gitignored files of the host project, removed before every staging.
 GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", "res/appfont.ttf", "res/appfont-bold.ttf", "res/OFL.txt",
              f"res/{NOTICES_FILE}", "res/licenses", f"shared/res/{PACKAGE_ID}.png")
-# What bin/ and lib/ may hold: nothing but our own assembly (and its symbols) and the library. Tizen.NET, Tizen.NET.API8 and the SDK are
-# referenced and provided by the device's runtime, not carried (PlxHost.deps.json lists them with no runtime assets), and
-# THIRD-PARTY-NOTICES.md section 2.8 says so: a new assembly or native library needs an entry there FIRST.
+# What bin/ and lib/ may hold: nothing but our own assembly (and its symbols) and the library. The four packages PlxHost.deps.json lists carry no
+# runtime or native assets into the package: Tizen.NET and Tizen.NET.API8 are referenced and provided by the device's runtime,
+# Tizen.NET.Sdk is build-time only, and Microsoft.NETCore.Platforms is a metadata package with no assemblies. THIRD-PARTY-NOTICES.md section 2.8
+# says so: a new assembly or native library needs an entry there FIRST.
 ALLOWED_BIN = ("bin/PlxHost.dll", "bin/PlxHost.pdb")
 ALLOWED_LIB = ("lib/libplx.so",)
 REQUIRED_IN_TPK = ("tizen-manifest.xml", "bin/PlxHost.dll", "lib/libplx.so", "res/appfont.ttf", "res/OFL.txt",
