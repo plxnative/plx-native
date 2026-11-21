@@ -13,7 +13,6 @@
 //! The config asks for what the emulator run proved and the renderer needs: an RGBA8888 window config
 //! that supports ES2, an ES2 context. UNVERIFIED on a retail set: whether `EGL_ALPHA_SIZE` 8 is offered
 //! (the first config the driver returns that matches is used, and the log names the attributes asked).
-use plx_base::dynlib::Loaded;
 use plx_base::eventlog::log;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -86,10 +85,8 @@ impl Egl {
     /// THIS thread. Every step that can fail is logged with `eglGetError`; whatever was made before the
     /// failure is released.
     pub fn create(wl_display: *mut c_void, native_window: *mut c_void) -> Result<Egl, String> {
-        match libegl::load(None) {
-            Loaded::Ok(soname) => log(&format!("egl: bound from {soname}")),
-            Loaded::NoLibrary => return Err("egl: libEGL.so.1 did not open".into()),
-            Loaded::Incomplete(soname, missing) => return Err(format!("egl: {soname} lacks {missing} symbol(s)")),
+        if !crate::ecore::loaded("egl", libegl::load(None)) {
+            return Err("egl: libEGL.so.1 is not usable (the log line above says why)".into());
         }
         // SAFETY (whole function): EGL calls with EGL's arguments on a live table; every returned handle is
         // checked before use, and a handle made is destroyed on the error paths below.
@@ -210,6 +207,9 @@ mod tests {
     /// and nothing was called.
     #[test]
     fn without_the_library_the_context_is_refused_with_a_reason() {
+        if libegl::load(None).ok() {
+            return; // a host with a complete EGL is not the absent-library case; it is never driven from a test
+        }
         let result = plx_base::eventlog::with_private_log(|| Egl::create(null_mut(), null_mut()));
         match result {
             Err(why) => assert!(why.starts_with("egl: "), "{why}"),

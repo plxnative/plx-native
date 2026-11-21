@@ -80,7 +80,7 @@ pub fn lookup(name: &str) -> Option<Option<Action>> {
 
 /// How many keys can be held at once before the oldest is forgotten (a remote has one key down; a wedged
 /// handler must not grow this without bound).
-const HELD_MAX: usize = 16;
+const HELD_LIMIT: usize = 16;
 
 /// Turns Ecore's down and up events into the application's press edges. The first down of a key is
 /// [`Edge::Down`], a down of a key that is still held is the auto-repeat ([`Edge::Repeat`]: Ecore has no
@@ -102,7 +102,7 @@ impl Decoder {
             if self.held.iter().any(|h| h == name) {
                 Edge::Repeat
             } else {
-                if self.held.len() >= HELD_MAX {
+                if self.held.len() >= HELD_LIMIT {
                     self.held.remove(0);
                 }
                 self.held.push(name.to_string());
@@ -271,9 +271,9 @@ mod tests {
     #[test]
     fn a_wedged_handler_cannot_grow_the_held_set_without_bound() {
         let mut d = Decoder::new();
-        for i in 0..(HELD_MAX * 4) {
+        for i in 0..(HELD_LIMIT * 4) {
             let _ = d.decode(&format!("k{i}"), true);
         }
-        assert_eq!(d.held.len(), HELD_MAX);
+        assert_eq!(d.held.len(), HELD_LIMIT);
     }
 }

@@ -105,7 +105,7 @@ plx_base::dynlib! {
 const WINDOW_TYPE_TOPLEVEL: c_int = 1;
 
 /// Load one table, saying why when it does not load; `true` when it is live.
-fn loaded(what: &str, result: Loaded) -> bool {
+pub(crate) fn loaded(what: &str, result: Loaded) -> bool {
     match result {
         Loaded::Ok(soname) => {
             log(&format!("ecore: {what} bound from {soname}"));
@@ -486,12 +486,35 @@ mod tests {
     /// device without the libraries takes, and the one every other test relies on staying inert.
     #[test]
     fn without_the_libraries_the_window_layer_refuses_cleanly() {
+        if ecore_wl2::load(None).ok() {
+            return; // a host that has EFL is not the absent-library case this tests
+        }
         let log = plx_base::eventlog::with_private_log(|| {
             assert!(matches!(Window::create(), Err(code) if code == host_abi::E_WINDOW));
             std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
         });
         assert!(log.contains("ecore: ecore_wl2: no candidate library opened"), "{log}");
         assert_eq!(log.lines().count(), 1, "one line, and nothing further was attempted: {log}");
+    }
+
+    /// Each way a table can fail to load is one log line that names the table and the reason, and only a
+    /// complete table is live. (The mapper the EGL layer shares.)
+    #[test]
+    fn a_load_result_is_one_line_and_only_a_complete_table_is_live() {
+        let log = plx_base::eventlog::with_private_log(|| {
+            assert!(loaded("t", Loaded::Ok("libx.so.1")));
+            assert!(!loaded("t", Loaded::NoLibrary));
+            assert!(!loaded("t", Loaded::Incomplete("libx.so.1", 2)));
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            [
+                "ecore: t bound from libx.so.1",
+                "ecore: t: no candidate library opened",
+                "ecore: t: libx.so.1 lacks 2 symbol(s)"
+            ]
+        );
     }
 
     /// A key name is read bounded and a null or empty one is no name.
