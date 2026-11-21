@@ -159,8 +159,8 @@ SRC_PLATFORM_WEBOS=rust-modules/platform-webos/src
 SRC_PLATFORM_DESKTOP=rust-modules/platform-desktop/src
 SRC_PLATFORM_TIZEN=rust-modules/platform-tizen/src
 # The webOS and desktop platform crates took files out of `$SRC` (`port.rs`, `system.rs`, `platform_desktop.rs`, `bin/sim.rs`) and
-# out of `$SRC_OS` (`keymanager.rs`, `webos.rs`, `webos/`); the Tizen one (W9) is empty today and is named in the same
-# rules so that its code is gated from its first line. A rule that reads the WHOLE of `$SRC` or of `$SRC_OS` reads
+# out of `$SRC_OS` (`keymanager.rs`, `webos.rs`, `webos/`); the Tizen one (W9) holds code now and is named in the same
+# rules so that it is gated like the others. A rule that reads the WHOLE of `$SRC` or of `$SRC_OS` reads
 # every platform crate too, so that moving a file into one does not move it out of the gate; only a rule scoped to a
 # directory of `$SRC` (`app/`, `dev/`) or to a file of `$SRC_OS` (`tv/plane.rs`) cannot reach them and stays as it is.
 # `tests/test_harness.py` (`DepGates.test_a_gate_that_reads_the_whole_app_or_os_crate_reads_the_platform_crates`) fails

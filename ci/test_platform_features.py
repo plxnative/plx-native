@@ -2,7 +2,7 @@
 """The platform crates forward the application's features, and enable none of them behind its back.
 
 `plx_platform_webos` (the ARM staticlib's crate), `plx_platform_desktop` (the simulator's) and `plx_platform_tizen`
-(W9, empty so far) depend on the application crate, `plxnative-modules`. The Makefile and the workflows select features with `-p <platform
+(W9) depend on the application crate, `plxnative-modules`. The Makefile and the workflows select features with `-p <platform
 crate> --no-default-features --features <words>`, and a word is only meaningful on a package that declares it.
 So each platform crate declares every feature of the application and forwards it, with the application's own
 defaults. A feature added to the application and not forwarded here would pass `--workspace` and every host
