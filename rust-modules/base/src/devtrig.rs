@@ -77,11 +77,12 @@ pub fn listed(_triggers: &[String], _name: &str) -> bool {
     false
 }
 
-/// Is the trigger `name` (bare, without the `plxnative-` prefix) present?
+/// Is the trigger `name` (bare, without the `plxnative-` prefix) present: a file in the runtime root, or, when there is
+/// none, a name of the platform's [`set_preset`] table?
 #[cfg(feature = "devtriggers")]
 pub fn flag(name: &str) -> bool {
     crate::step::assert_io_allowed("developer trigger flag");
-    path(name).exists()
+    path(name).exists() || preset::value(name).is_some()
 }
 #[cfg(not(feature = "devtriggers"))]
 pub fn flag(_name: &str) -> bool {
@@ -124,7 +125,8 @@ macro_rules! __latched_flag {
 }
 pub use __latched_flag as latched_flag;
 
-/// The trigger's CONTENT, trimmed. `Some("")` for a trigger armed as an empty file — several
+/// The trigger's CONTENT, trimmed, from the file in the runtime root or, when there is no file, from the platform's
+/// [`set_preset`] table. `Some("")` for a trigger armed as an empty file — several
 /// distinguish empty (take the default) from a value (`autoseek`, `library`, `marker`), so an
 /// empty file must not read the same as an absent one.
 #[cfg(feature = "devtriggers")]
@@ -133,10 +135,51 @@ pub fn read(name: &str) -> Option<String> {
     std::fs::read_to_string(path(name))
         .ok()
         .map(|s| s.trim().to_string())
+        .or_else(|| preset::value(name).map(str::to_string))
 }
 #[cfg(not(feature = "devtriggers"))]
 pub fn read(_name: &str) -> Option<String> {
     None
+}
+
+/// The platform's PRESET: the triggers a platform with no writable runtime root arms in a table instead of files.
+///
+/// A hosted platform (the Tizen emulator build) has nobody who can write `plxnative-token` into its runtime root, so
+/// it states the dev-boot values it was launched with here, once, before it runs the application. [`read`] and
+/// [`flag`] consult the file in the runtime root FIRST, exactly as every other build does, and the table second:
+/// a file always wins, and a build with no table set behaves as it did before this existed.
+///
+/// **It exists only under `devtriggers`**, like the readers it feeds: a release build has no such function to call, so
+/// it cannot be armed from a table either. It performs no IO, and the platform that fills it from its launch parameters
+/// owns whatever read them. The names are the bare trigger names ([`flag`]'s, without the `plxnative-` prefix) and
+/// belong to the platform's own source, so the base names no trigger here.
+#[cfg(feature = "devtriggers")]
+mod preset {
+    use std::sync::OnceLock;
+
+    static TABLE: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+
+    pub(super) fn value(name: &str) -> Option<&'static str> {
+        TABLE.get()?.iter().find(|(n, _)| *n == name).map(|(_, v)| v.trim())
+    }
+
+    pub(super) fn set(table: &[(&'static str, String)]) -> Result<(), super::PresetRefused> {
+        TABLE.set(table.to_vec()).map_err(|_| super::PresetRefused)
+    }
+}
+
+/// [`set_preset`] was already called: the table is set once per process, and the first one stays.
+#[cfg(feature = "devtriggers")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresetRefused;
+
+/// Fill the preset table (see the `preset` module's note above): `(bare trigger name, content)` pairs a platform
+/// without a runtime root's files arms, consulted by [`read`] and [`flag`] after the file. Once per process: a second
+/// call is refused with [`PresetRefused`] and changes nothing, so the answers a running thread already read
+/// cannot change under it. A pair with empty content arms a bare flag, as an empty file does.
+#[cfg(feature = "devtriggers")]
+pub fn set_preset(table: &[(&'static str, String)]) -> Result<(), PresetRefused> {
+    preset::set(table)
 }
 
 /// Boot-latched main-thread checker escape hatch. File content must be exactly `log`.
@@ -362,5 +405,52 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(super::path("devtest-panic"), shared);
+    }
+}
+
+/// The preset table, in a build that has `devtriggers`. It is a once-set process global, so ONE test sets it, and the
+/// names are its own (`devtest-preset-*`) so no other test or trigger reads them.
+#[cfg(all(test, feature = "devtriggers"))]
+mod preset_tests {
+    use super::{flag, path, read, set_preset, with_private_triggers, PresetRefused};
+
+    #[test]
+    fn the_file_wins_and_the_preset_answers_when_there_is_no_file() {
+        with_private_triggers(|| {
+            assert_eq!(read("devtest-preset-a"), None, "nothing is set yet");
+            assert!(!flag("devtest-preset-flag"));
+
+            set_preset(&[
+                ("devtest-preset-a", " from-preset \n".to_string()),
+                ("devtest-preset-b", "preset-b".to_string()),
+                ("devtest-preset-flag", String::new()),
+            ])
+            .expect("the first set is accepted");
+
+            assert_eq!(read("devtest-preset-a").as_deref(), Some("from-preset"), "no file: the preset answers, trimmed");
+            assert!(flag("devtest-preset-flag"), "a preset name arms the flag");
+            assert_eq!(read("devtest-preset-flag").as_deref(), Some(""), "an empty preset is armed, not absent");
+            assert_eq!(read("devtest-preset-unlisted"), None, "a name in neither place stays absent");
+            assert!(!flag("devtest-preset-unlisted"));
+
+            std::fs::write(path("devtest-preset-b"), "from-file\n").unwrap();
+            assert_eq!(read("devtest-preset-b").as_deref(), Some("from-file"), "a file beats the preset");
+
+            assert_eq!(set_preset(&[("devtest-preset-c", "late".to_string())]), Err(PresetRefused));
+            assert_eq!(read("devtest-preset-c"), None, "a refused set changes nothing");
+            assert_eq!(read("devtest-preset-a").as_deref(), Some("from-preset"), "and the first table stays");
+        });
+    }
+}
+
+/// Without `devtriggers` there is no preset: the item is not compiled, and the readers answer nothing whatever a
+/// platform wished (the build that proves it compiles is `cargo check -p plx_base --no-default-features`).
+#[cfg(all(test, not(feature = "devtriggers")))]
+mod no_preset_tests {
+    #[test]
+    fn a_build_without_devtriggers_has_no_table_to_arm() {
+        assert!(!super::ENABLED);
+        assert_eq!(super::read("devtest-preset-a"), None);
+        assert!(!super::flag("devtest-preset-a"));
     }
 }
