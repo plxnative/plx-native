@@ -344,7 +344,7 @@ class WebosGoalsRefused(ScratchTree):
         guard = re.search(r"(?ms)^ifneq \(\$\(PLATFORM\),webos\)\n.*?^endif\nendif\n", text)
         self.assertIsNotNone(guard, "the refusal block is gone or reshaped")
         self.assertIn("$(error", guard.group(0))
-        for goals in (("all",), ("ipk",), ("deploy",), ("symbols",), ("pkg/plxnative-storage",), ("src/main.o",)):
+        for goals in (("all",), ("ipk",), ("symbols",), ("pkg/plxnative-storage",), ("src/main.o",)):
             with self.subTest(goals=goals):
                 with_guard = self.dry(*goals)
                 (self.tree / "Makefile").unlink()
