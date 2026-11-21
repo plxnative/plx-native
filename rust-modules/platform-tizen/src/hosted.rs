@@ -58,6 +58,8 @@ pub struct Hosted {
     queue: Mutex<VecDeque<Input>>,
     /// Pushes refused because the queue was full.
     dropped: AtomicUsize,
+    /// How many of those [`Hosted::deliver`] has said so in the log.
+    said: AtomicUsize,
     /// `deliver` has handed the application the stop as a quit.
     quit_sent: AtomicBool,
 }
@@ -77,6 +79,7 @@ impl Hosted {
             done: Completion::new(),
             queue: Mutex::new(VecDeque::new()),
             dropped: AtomicUsize::new(0),
+            said: AtomicUsize::new(0),
             quit_sent: AtomicBool::new(false),
         }
     }
@@ -91,7 +94,7 @@ impl Hosted {
 
     /// A refusal after the table was accepted: nothing was started and nothing is held, so the report is
     /// `on_stopped(1, 1)` on this (the host) thread, and later callbacks are refused.
-    fn refuse(&self, code: i32) -> i32 {
+    pub(crate) fn refuse(&self, code: i32) -> i32 {
         self.gate.stop();
         self.done.deliver(Stopped { code: 1, clean: true }, |s| self.report(s));
         code
@@ -181,6 +184,7 @@ impl Hosted {
     }
 
     /// How many inputs were refused for a full queue.
+    #[cfg(test)]
     pub fn dropped(&self) -> usize {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -217,6 +221,10 @@ impl Hosted {
                     sink.lifecycle(Lifecycle::DidForeground);
                 }
             }
+        }
+        let lost = self.dropped.load(Ordering::Relaxed);
+        if lost > self.said.swap(lost, Ordering::Relaxed) {
+            plx_base::eventlog::log(&format!("host: {lost} input(s) dropped so far (the queue was full)"));
         }
         if self.gate.stopping() && !self.quit_sent.swap(true, Ordering::SeqCst) {
             sink.quit();

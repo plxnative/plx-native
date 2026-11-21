@@ -15,7 +15,8 @@
 use crate::launch::Dev;
 
 /// The preset table for `dev`: bare trigger name, then its content. The names are the triggers the
-/// application's dev boot reads (`dev/scenarios.rs`).
+/// application's dev boot reads (`dev/scenarios.rs`). Only a build with dev triggers has a table to fill.
+#[cfg(any(feature = "devtriggers", test))]
 pub fn table(dev: &Dev) -> Vec<(&'static str, String)> {
     let mut table = Vec::new();
     if let Some(token) = &dev.token {

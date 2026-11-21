@@ -78,6 +78,15 @@ pub enum InstallError {
     Installed,
 }
 
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallError::Socket(e) => write!(f, "the socket could not be opened ({e})"),
+            InstallError::Installed => f.write_str("a log channel is already installed"),
+        }
+    }
+}
+
 /// Turn the channel on: open the socket to `target` and make it the event log's tap. Once per process.
 /// Called on the host thread inside `plx_host_start`, before the application's loop exists, so the first
 /// line the loop logs is already on the wire.

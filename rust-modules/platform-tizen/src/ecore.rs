@@ -25,7 +25,7 @@ use crate::host_abi;
 use crate::keys::{self, Decoder};
 use plx_base::dynlib::{Handle, Loaded};
 use plx_base::eventlog::log;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
@@ -506,7 +506,6 @@ mod tests {
             let long = CString::new("k".repeat(500)).unwrap();
             assert_eq!(text_of(long.as_ptr()).map(|s| s.len()), Some(NAME_LIMIT));
         }
-        let _ = CStr::from_bytes_with_nul(b"\0");
     }
 
     /// The key callback reads the event the way the emulator run's layout does and queues the press.
