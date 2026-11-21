@@ -88,6 +88,7 @@ namespace PlxHost
         internal const int PLX_HOST_PLAYER_E_BUSY = -2;
         internal const int PLX_HOST_PLAYER_E_ARGS = -3;
         internal const int PLX_HOST_PLAYER_E_STALE = -4;
+        internal const int PLX_HOST_PLAYER_FAIL_BASE = 2147418112;
         internal const int PLX_HOST_EVENT_PAUSE = 1;
         internal const int PLX_HOST_EVENT_RESUME = 2;
         internal const int PLX_HOST_EVENT_PLAYER_PREPARED = 16;

@@ -57,6 +57,10 @@ pub const EVENT_PLAYER_INTERRUPTED: u32 = 25;
 pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
 
+/// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
+#[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) reads it
+pub const PLAYER_FAIL_BASE: i64 = 2_147_418_112;
+
 /// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (W10 part B) is their caller; the tests use them now.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const VERB_PLAY: u32 = 1;
@@ -395,6 +399,7 @@ mod tests {
             ("PLX_HOST_EVENT_PLAYER_INTERRUPTED", i64::from(EVENT_PLAYER_INTERRUPTED)),
             ("PLX_HOST_EVENT_PLAYER_CLOSED", i64::from(EVENT_PLAYER_CLOSED)),
             ("PLX_HOST_EVENT_PLAYER_STALL", i64::from(EVENT_PLAYER_STALL)),
+            ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
             ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
             ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),
             ("PLX_HOST_PLAYER_VERB_SEEK", i64::from(VERB_SEEK)),

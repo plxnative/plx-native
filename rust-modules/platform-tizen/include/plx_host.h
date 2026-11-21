@@ -130,21 +130,23 @@
  *     return code. PLAYER_PREPARED follows a successful prepare.
  *   - player_verb(epoch, verb, arg0, arg1): PLX_HOST_PLAYER_VERB_PLAY (a play requested before PREPARED
  *     starts at PREPARED), _PAUSE, _SEEK (arg0 = target milliseconds, arg1 = the library's command id, echoed
- *     in PLAYER_SEEK_DONE) and _CLOSE. CLOSE ends in exactly ONE PLAYER_CLOSED for that epoch, whether or not a
+ *     in PLAYER_SEEK_DONE; a seek before PREPARED, or while another is in flight, is held and the newest sent when it can be: every
+ *     command id gets its SEEK_DONE) and _CLOSE. CLOSE ends in exactly ONE PLAYER_CLOSED for that epoch, whether or not a
  *     player existed, and releases it (the host never leaves a player behind). A verb for an epoch that is not
  *     the host's current one is refused with PLX_HOST_PLAYER_E_STALE.
  *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
  *       PLAYER_SEEK_DONE(a = command id, b = ms)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
- *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code)  PLAYER_INTERRUPTED(a = native code)
+ *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code, or PLX_HOST_PLAYER_FAIL_BASE + n)  PLAYER_INTERRUPTED(a = native code)
  *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)
  *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
  *     PLAYER_POSITION and PLAYER_BUFFERING, which keep only the latest per epoch. Position is polled on the HOST
  *     side (about every 250 ms while playing, off the request queue) and posted: there is no synchronous
  *     position call.
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
- *     never on the Ecore main thread and never on the loop thread. plx_host_post may be called from any thread,
+ *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
+ *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,
  *     including a native callback of the player. After plx_host_stop no request is made (the library's gate
  *     refuses it); a request already running holds the clean on_stopped until it returns.
  */
@@ -176,6 +178,9 @@ extern "C" {
 #define PLX_HOST_PLAYER_E_BUSY (-2)        /* the host's request queue is full */
 #define PLX_HOST_PLAYER_E_ARGS (-3)        /* epoch 0, a NULL or empty uri, an unknown verb */
 #define PLX_HOST_PLAYER_E_STALE (-4)       /* a verb for an epoch that is not the host's current one */
+/* PLAYER_ERROR.a >= this is a failure of the HOST (+1 the library's window was not found, +2 the display bind did not finish, +3 a request threw);
+   anything below it is the native player's own error code. */
+#define PLX_HOST_PLAYER_FAIL_BASE 2147418112
 
 /* PlxHostEvent.kind */
 #define PLX_HOST_EVENT_PAUSE 1  /* OnPause: the app went to the background */

@@ -54,8 +54,11 @@ namespace PlxHost
             internal volatile bool Playing; // read by the poller
             internal volatile bool Closing; // read by the poller and the main-thread bind
             internal bool StallSent; // poller only
-            // Seeks in flight, oldest first: the native completion callback carries no command id, and completions arrive in order.
-            internal readonly List<long[]> Seeks = new List<long[]>(); // { command id, target ms }
+            // At most ONE native seek is in flight (nothing measured says two overlap safely): `SeekNow` is it, `SeekLater` holds the newest request
+            // that arrived meanwhile (or before PREPARED). A seek is { target ms, the command ids it answers }; a request that replaces a held one folds
+            // the older command ids into it, and every one of them gets its PLAYER_SEEK_DONE (with the final target) when that seek lands.
+            internal Seek SeekNow;
+            internal Seek SeekLater;
             // Held by anything that calls into the native player on this handle off the video thread (position reads, the display bind). The
             // video thread takes it, with a bound, before it destroys the handle.
             internal readonly object HandleGate = new object();
@@ -63,7 +66,22 @@ namespace PlxHost
             internal Session(uint epoch) { Epoch = epoch; }
         }
 
-        private readonly BlockingCollection<Action> queue = new BlockingCollection<Action>(QueueLimit);
+        private sealed class Seek
+        {
+            internal int TargetMs;
+            internal readonly List<long> Commands = new List<long>();
+        }
+
+        // A job and the epoch it works for, so a job that throws can be answered with that epoch's PLAYER_ERROR.
+        private struct Job
+        {
+            internal uint Epoch;
+            internal Action Run;
+        }
+
+        // Unbounded for what the player's own callbacks hand over (prepared, completed, seek-done: dropping one would lose the player's story); the
+        // library's requests are bounded by QueueLimit at the door (TryEnqueue).
+        private readonly BlockingCollection<Job> queue = new BlockingCollection<Job>();
         private readonly object startGate = new object();
         private Thread videoThread;
         private Thread pollThread;
@@ -150,8 +168,10 @@ namespace PlxHost
         private int Open(uint epoch, string uri, int x, int y, int w, int h)
         {
             if (!EnsureThreads()) return Native.PLX_HOST_PLAYER_E_UNAVAILABLE;
-            Interlocked.Exchange(ref latestEpoch, epoch);
-            return TryEnqueue(() => DoOpen(epoch, uri, x, y, w, h));
+            long previous = Interlocked.Exchange(ref latestEpoch, epoch);
+            int rc = TryEnqueue(epoch, () => DoOpen(epoch, uri, x, y, w, h));
+            if (rc != Native.PLX_HOST_PLAYER_OK) Interlocked.Exchange(ref latestEpoch, previous); // the open never happened: the old player keeps its verbs
+            return rc;
         }
 
         private int Verb(uint epoch, uint verb, long arg0, long arg1)
@@ -161,22 +181,25 @@ namespace PlxHost
             {
                 case Native.PLX_HOST_PLAYER_VERB_CLOSE:
                     // Always accepted: it ends in one PLAYER_CLOSED whether or not a player exists.
-                    return TryEnqueue(() => DoClose(epoch));
+                    return TryEnqueue(epoch, () => DoClose(epoch));
                 case Native.PLX_HOST_PLAYER_VERB_PLAY:
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE:
                 case Native.PLX_HOST_PLAYER_VERB_SEEK:
                     if (Interlocked.Read(ref latestEpoch) != epoch) return Native.PLX_HOST_PLAYER_E_STALE;
-                    return TryEnqueue(() => DoVerb(epoch, (int)verb, arg0, arg1));
+                    return TryEnqueue(epoch, () => DoVerb(epoch, (int)verb, arg0, arg1));
                 default:
                     return Native.PLX_HOST_PLAYER_E_ARGS;
             }
         }
 
-        private int TryEnqueue(Action job)
+        // The library's requests: refused as BUSY when QueueLimit jobs wait.
+        private int TryEnqueue(uint epoch, Action job)
         {
             try
             {
-                return queue.TryAdd(job) ? Native.PLX_HOST_PLAYER_OK : Native.PLX_HOST_PLAYER_E_BUSY;
+                if (queue.Count >= QueueLimit) return Native.PLX_HOST_PLAYER_E_BUSY;
+                queue.Add(new Job { Epoch = epoch, Run = job });
+                return Native.PLX_HOST_PLAYER_OK;
             }
             catch (InvalidOperationException)
             {
@@ -184,16 +207,24 @@ namespace PlxHost
             }
         }
 
-        // A native callback's hand-off to the video thread (it never blocks the callback thread: a full queue drops the job and says so).
+        // A native callback's hand-off to the video thread: never blocks the callback thread and never drops (the queue is unbounded for these).
         private void Enqueue(uint epoch, Action<Session> job)
         {
-            if (TryEnqueue(() =>
+            try
             {
-                Session s = current;
-                if (s != null && s.Epoch == epoch) job(s);
-            }) != Native.PLX_HOST_PLAYER_OK)
+                queue.Add(new Job
+                {
+                    Epoch = epoch,
+                    Run = () =>
+                    {
+                        Session s = current;
+                        if (s != null && s.Epoch == epoch) job(s);
+                    },
+                });
+            }
+            catch (InvalidOperationException)
             {
-                PlxApp.Log("player: a callback for epoch " + epoch + " was dropped (the request queue is full or shut down)");
+                PlxApp.Log("player: a callback for epoch " + epoch + " arrived after the shutdown");
             }
         }
 
@@ -224,33 +255,37 @@ namespace PlxHost
 
         private void VideoLoop()
         {
-            foreach (Action job in queue.GetConsumingEnumerable())
+            foreach (Job job in queue.GetConsumingEnumerable())
             {
-                try { job(); }
-                catch (Exception e) { PlxApp.Log("player: a request threw: " + e.GetType().Name + ": " + e.Message); }
+                try { job.Run(); }
+                catch (Exception e)
+                {
+                    // plx_host.h: a failure after the request was queued arrives as PLAYER_ERROR (an entry point missing on some firmware, say).
+                    PlxApp.Log("player: epoch " + job.Epoch + ": a request threw " + e.GetType().Name + ": " + e.Message);
+                    if (job.Epoch != 0) Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, job.Epoch, Native.PLX_HOST_PLAYER_FAIL_BASE + 3, 0);
+                }
             }
         }
 
         private static void Post(uint kind, uint epoch, long a, long b) { PlxApp.PostPlayer(kind, epoch, a, b); }
 
+        // PLAYER_ERROR with the native player's own code in `a`.
         private static void Fail(Session s, string step, int rc)
         {
             PlxApp.Log("player: epoch " + s.Epoch + ": " + step + " returned " + rc);
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, s.Epoch, rc, 0);
         }
 
-        // Anything an open throws (a missing entry point on some firmware, say) is the player's ERROR for this epoch, so the library is never left waiting.
+        // PLAYER_ERROR for a failure that is the HOST's, not the native player's: `a` is PLX_HOST_PLAYER_FAIL_BASE + n, a value no native code takes.
+        private static void FailHost(Session s, string step, int n)
+        {
+            PlxApp.Log("player: epoch " + s.Epoch + ": " + step + " (host failure " + n + ")");
+            Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, s.Epoch, Native.PLX_HOST_PLAYER_FAIL_BASE + n, 0);
+        }
+
         private void DoOpen(uint epoch, string uri, int x, int y, int w, int h)
         {
-            try
-            {
-                OpenSteps(epoch, uri, x, y, w, h);
-            }
-            catch (Exception e)
-            {
-                PlxApp.Log("player: epoch " + epoch + ": the open threw " + e.GetType().Name + ": " + e.Message);
-                Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, epoch, -100, 0);
-            }
+            OpenSteps(epoch, uri, x, y, w, h);
         }
 
         private void OpenSteps(uint epoch, string uri, int x, int y, int w, int h)
@@ -266,7 +301,8 @@ namespace PlxHost
             if (rc != 0) { Fail(s, "player_set_uri", rc); return; }
             // The display is bound BEFORE prepare: measured on the emulator, a player with no display does not advance.
             rc = BindDisplay(s, x, y, w, h);
-            if (rc != 0) { Fail(s, "bind the display", rc); return; }
+            if (rc >= Native.PLX_HOST_PLAYER_FAIL_BASE) { FailHost(s, "bind the display", rc - Native.PLX_HOST_PLAYER_FAIL_BASE); return; }
+            if (rc != 0) { Fail(s, "player_set_ecore_wl_display", rc); return; }
             rc = MediaPlayerNative.player_set_display_mode(s.Handle, MediaPlayerNative.DISPLAY_MODE_LETTER_BOX);
             if (rc != 0) { Fail(s, "player_set_display_mode", rc); return; }
             MediaPlayerNative.player_set_completed_cb(s.Handle, CompletedCb, user);
@@ -291,14 +327,14 @@ namespace PlxHost
                     IntPtr window = display == IntPtr.Zero ? IntPtr.Zero : MediaPlayerNative.ecore_wl2_display_window_find(display, LibraryWindowId);
                     PlxApp.Log("player: ecore window id " + LibraryWindowId + " -> 0x" + window.ToInt64().ToString("x")
                         + " (compare with the library's `ecore: window_new(...) -> ` line)");
-                    if (window == IntPtr.Zero) { rc = -2; return; }
+                    if (window == IntPtr.Zero) { rc = Native.PLX_HOST_PLAYER_FAIL_BASE + 1; return; }
                     rc = MediaPlayerNative.player_set_ecore_wl_display(s.Handle, MediaPlayerNative.DISPLAY_TYPE_OVERLAY, window, x, y, w, h);
                 }
             }, BindWaitMs);
             if (!ran)
             {
                 PlxApp.Log("player: binding the display did not finish within " + BindWaitMs + " ms on the main thread");
-                return -3;
+                return Native.PLX_HOST_PLAYER_FAIL_BASE + 2;
             }
             return rc;
         }
@@ -335,15 +371,27 @@ namespace PlxHost
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PAUSED, s.Epoch, 0, 0);
         }
 
+        // A seek before PREPARED, or while another is in flight, is held (the newest wins, the older command ids are folded into it); it is sent
+        // when the player is prepared / when the one in flight has landed.
         private void DoSeek(Session s, long targetMs, long command)
         {
-            if (!s.Prepared) { Fail(s, "seek before prepared", -1); return; }
             int ms = (int)Math.Max(0, Math.Min(targetMs, int.MaxValue));
-            s.Seeks.Add(new[] { command, ms });
-            int rc = MediaPlayerNative.player_set_play_position(s.Handle, ms, 1, SeekDoneCb, UserOf(s.Epoch));
+            if (s.SeekLater == null) s.SeekLater = new Seek();
+            s.SeekLater.TargetMs = ms;
+            s.SeekLater.Commands.Add(command);
+            SendHeldSeek(s);
+        }
+
+        private void SendHeldSeek(Session s)
+        {
+            if (!s.Prepared || s.SeekNow != null || s.SeekLater == null) return;
+            Seek seek = s.SeekLater;
+            s.SeekLater = null;
+            s.SeekNow = seek;
+            int rc = MediaPlayerNative.player_set_play_position(s.Handle, seek.TargetMs, 1, SeekDoneCb, UserOf(s.Epoch));
             if (rc != 0)
             {
-                s.Seeks.RemoveAt(s.Seeks.Count - 1);
+                s.SeekNow = null;
                 Fail(s, "player_set_play_position", rc);
             }
         }
@@ -359,15 +407,20 @@ namespace PlxHost
             {
                 Post((uint)Native.PLX_HOST_EVENT_PLAYER_VIDEO_SIZE, s.Epoch, width, height);
             }
+            SendHeldSeek(s); // a seek asked for before PREPARED goes first, so play starts from it
             if (s.PlayPending) DoPlay(s);
         }
 
         private void OnSeekDone(Session s)
         {
-            if (s.Seeks.Count == 0) return;
-            long[] head = s.Seeks[0];
-            s.Seeks.RemoveAt(0);
-            Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, head[0], head[1]);
+            Seek landed = s.SeekNow;
+            if (landed == null) return;
+            s.SeekNow = null;
+            foreach (long command in landed.Commands)
+            {
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, landed.TargetMs);
+            }
+            SendHeldSeek(s);
         }
 
         // MEASURED: the completed callback fires with the native state still PLAYING (it changes at player_stop), so the state cannot validate
@@ -483,10 +536,14 @@ namespace PlxHost
             if (video == null) return;
             try
             {
-                queue.TryAdd(() =>
+                queue.Add(new Job
                 {
-                    Session s = current;
-                    if (s != null) DoClose(s.Epoch);
+                    Epoch = 0,
+                    Run = () =>
+                    {
+                        Session s = current;
+                        if (s != null) DoClose(s.Epoch);
+                    },
                 });
                 queue.CompleteAdding();
             }
