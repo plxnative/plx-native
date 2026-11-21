@@ -239,7 +239,21 @@ namespace PlxHost
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, s.Epoch, rc, 0);
         }
 
+        // Anything an open throws (a missing entry point on some firmware, say) is the player's ERROR for this epoch, so the library is never left waiting.
         private void DoOpen(uint epoch, string uri, int x, int y, int w, int h)
+        {
+            try
+            {
+                OpenSteps(epoch, uri, x, y, w, h);
+            }
+            catch (Exception e)
+            {
+                PlxApp.Log("player: epoch " + epoch + ": the open threw " + e.GetType().Name + ": " + e.Message);
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_ERROR, epoch, -100, 0);
+            }
+        }
+
+        private void OpenSteps(uint epoch, string uri, int x, int y, int w, int h)
         {
             if (current != null) DoClose(current.Epoch); // an open while another is open closes that one first
             var s = new Session(epoch);

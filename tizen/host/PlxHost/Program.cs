@@ -314,7 +314,17 @@ namespace PlxHost
             // The media player: both pointers, or neither. A device without libcapi-media-player gets NULLs, and the library then plays nothing
             // (plx_host.h, START: a table without the player group is not refused).
             string playerNote;
-            bool player = PlxPlayer.Probe(out playerNote);
+            bool player;
+            try
+            {
+                player = PlxPlayer.Probe(out playerNote);
+            }
+            catch (Exception e)
+            {
+                // Skew means "no playback", never a refused start: anything the probe throws (the dlopen binding, the player's static state) leaves the pointers NULL.
+                player = false;
+                playerNote = "media player: the probe threw " + e.GetType().Name + ": " + e.Message + "; the table leaves the player pointers NULL";
+            }
             Log(playerNote);
             if (player)
             {
