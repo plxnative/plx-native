@@ -562,7 +562,7 @@ time (`plx_base::dynlib!`; the crates it compiles are the `cargo tree` of `plx_p
 (`rust-modules/platform-tizen/src/ecore.rs:40-114` and `:423-427`; `libecore_wl2` brings in `libwayland-client`, which this library does not name); and, only
 if the user starts a playback trace in Settings, `libgstreamer-1.0.so.0` (`rust-modules/os/src/playback_trace.rs:29`). All of them are the Tizen
 image's own; none is staged. The library also tries names this package does NOT ship, which fail to open: the bundled FFmpeg (`libavformat-plx.so.63`,
-`libavcodec-plx.so.63`, `libavutil-plx.so.61`, `libswscale-plx.so.10`; `rust-modules/media-codecs/src/ffi.rs:310-455`, the `ff: ... MISSING` lines of
+`libavcodec-plx.so.63`, `libavutil-plx.so.61`, and the dev capture's scaler; `rust-modules/media-codecs/src/ffi.rs:310-455`, the `ff: ... MISSING` lines of
 `docs/tizen.md`), `libass-plx*.so.0` (`rust-modules/gfx/src/rtl.rs:55` for Arabic and Hebrew text, `rust-modules/media/src/player/ass.rs:1272` for
 subtitles) and, in a `devtriggers` build with the dev capture on, `libturbojpeg.so.0` in the application directory (`rust-modules/src/capture.rs:472`).
 Not compiled into this library at all: the webOS port (`libhelpers.so.2`, `rust-modules/platform-webos/src/system.rs:985`), the separate storage
