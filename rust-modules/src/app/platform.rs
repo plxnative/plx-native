@@ -807,6 +807,7 @@ mod tests {
             concat!("curl::", "load("),
             concat!("global_", "init("),
             concat!("curlmulti::", "load("),
+            concat!("raw::", "load("),
         ];
         for (what, text) in texts {
             for read in reads {

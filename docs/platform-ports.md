@@ -310,6 +310,7 @@ Citations in this section quote the tree at e9924f0f9 with its old names (see "N
   - `EGL_SONAMES: &[&str] = &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]` (`gfx/src/egl.rs:110`);
   - libcurl's `["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]`
     (`net/src/net/connect_only.rs:14`).
+  (As found, at the time of the review. W8b has since moved both into the platform's `libraries` group.)
 - F28. Branch `samsung/hello-tpk` now carries the hello-world. `git log --oneline
   origin/main..origin/samsung/hello-tpk` lists `72c5cd82a` ("tizen/hello: sign with a Samsung
   certificate profile, stream the log over UDP"), `ab0ba40ca` ("tizen/hello: log without eprint, ...")
@@ -875,7 +876,7 @@ split by who reads it (critic M4):
      and cannot read it; `tv` re-exports it), and `Platform::install_services` publishes it into a publish-once slot in
      `paths` as its second line, after the `tv` install, so `app_dir()` and `persistent_state_root()` answer from it and
      fall back to the derivation (`current_exe` and the environment) when none was published. `Layout::DERIVED` states
-     "no layout of my own": webOS, the desktop and the host-test value say it, and their `appdir:` line is unchanged.
+     "no layout of my own": the desktop and the host-test value say it (webOS says it with its own `fallback_dir`), and their `appdir:` line is unchanged.
      A publish after `app_dir()` was read, or a second one, is refused (`paths` never logs, so `install_services` logs
      the refusal). The runtime root and the app id stay out: the webOS C shim freezes both before any Rust runs;
    - `libraries { curl, egl }` (W8b): the OS-owned library names that differ per platform, two ordered `&[&str]` lists:

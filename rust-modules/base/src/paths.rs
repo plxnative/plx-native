@@ -66,8 +66,9 @@ pub const STABLE_APP_ID: &str = "com.beb.plxnative";
 /// MIGRATION source, a literal that names the shipped install's directory by design (the same family
 /// as the `/media/developer|internal` candidate lists below). It is NOT this module's last resort any
 /// more: the directory a process falls back to when its executable path cannot be read is the
-/// platform's to state ([`Layout::fallback_dir`]), and the webOS platform states this value there.
-pub const LEGACY_APP_DIR: &str = "/media/developer/apps/usr/palm/applications/com.beb.plxnative";
+/// platform's to state ([`Layout::fallback_dir`]); the webOS platform spells the same directory in its
+/// own table, and a test there holds the two together through [`session_candidates`].
+const LEGACY_APP_DIR: &str = "/media/developer/apps/usr/palm/applications/com.beb.plxnative";
 
 /// **Which install this process is** — `com.beb.plxnative` for the app users get, or
 /// `com.beb.plxnative.<flavour>` for a developer build sitting beside it on the same television.
@@ -315,8 +316,8 @@ pub const NO_FALLBACK_DIR: &str = ".";
 
 impl Layout {
     /// Nothing stated: both directories derive from the executable and the environment, exactly as a
-    /// process that published no layout resolves them. webOS and the desktop say this, as does the
-    /// host-test value.
+    /// process that published no layout resolves them, and the last resort is [`NO_FALLBACK_DIR`]. The
+    /// desktop says this, as does the host-test value; webOS says it with its own `fallback_dir`.
     pub const DERIVED: Self = Self {
         payload_dir: || derive_app_dir().0,
         state_root: derive_state_root,
@@ -1092,10 +1093,11 @@ mod tests {
 
     /// `app_dir` must hand back an ABSOLUTE directory and must not panic however it got there.
     ///
-    /// This used to say it exercised the LEGACY_APP_DIR fallback, because `read_link` of
+    /// This used to say it exercised the install-prefix fallback, because `read_link` of
     /// `/proc/self/exe` fails on the dev Mac. It no longer does: `current_exe` answers on both
     /// platforms, so the fallback is now a guard neither reaches and this asserts the property
-    /// rather than the arm.
+    /// rather than the arm. (The last arm answers the platform's `Layout::fallback_dir`, which is the
+    /// neutral relative `.` for a platform with no install prefix; no host reaches it.)
     #[test]
     fn app_dir_is_absolute_and_infallible() {
         let d = super::app_dir();

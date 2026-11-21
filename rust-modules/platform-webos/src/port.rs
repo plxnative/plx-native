@@ -20,6 +20,12 @@ const DISPLAY: &dyn plx_os::tv::sink::DisplaySink = &crate::webos::video_sink::S
 #[cfg(test)]
 const DISPLAY: &dyn plx_os::tv::sink::DisplaySink = SINK;
 
+/// The Developer Mode install directory of the shipped app: the payload's last resort when `/proc/self/exe`
+/// cannot be read (not expected on a device), which the table's `layout` states. `paths` spells the same
+/// directory once more, as the migration source for the pre-flavour `auth.json`; a test below holds the two
+/// together.
+const INSTALL_DIR: &str = "/media/developer/apps/usr/palm/applications/com.beb.plxnative";
+
 /// What the lower layers read: the webOS identity, key manager, Home key and toast, the storage helper
 /// and the native playback seam. The window, the bus pump and the frame probe are the loop's own, in [`PLATFORM`].
 static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
@@ -45,10 +51,11 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
     storage: plx_os::tv::StorageHooks { authority: plx_os::tv::authority::Authority::Helper },
     // The derivation, with the one thing only webOS knows: the Developer Mode install directory, the
     // payload's last resort when `/proc/self/exe` cannot be read (not expected on a device).
-    layout: plx_os::tv::Layout { fallback_dir: plx_base::paths::LEGACY_APP_DIR, ..plx_os::tv::Layout::DERIVED },
+    layout: plx_os::tv::Layout { fallback_dir: INSTALL_DIR, ..plx_os::tv::Layout::DERIVED },
     // What this television's firmwares answer to, in the order worth trying (`plx_base::dynlib::Handle::open`:
     // releases 5.3.1 and 6.4.0 keep a `libcurl.so.5` alias beside the real `.so.4`); EGL is LG's
-    // `libEGLfk.so.2` on webOS 2.2.3-5.3.1 and `libEGL.so.1` from 6. The Mac's dylib name is the desktop's.
+    // `libEGLfk.so.2` where a set carries it (webOS 2.2.3-5.3.1), else `libEGL.so.1`. The Mac's dylib name is
+    // the desktop's.
     libraries: plx_os::tv::Libraries {
         curl: &["libcurl.so.4", "libcurl.so.5"],
         egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
@@ -231,6 +238,12 @@ mod tests {
             SERVICES.layout.fallback_dir,
             "/media/developer/apps/usr/palm/applications/com.beb.plxnative"
         );
+        // The same directory `paths` names as the shipped install's migration source: on a shipped (no
+        // flavour) install the session candidates carry its `auth.json`.
+        if plx_base::paths::flavour().is_none() {
+            let migration = std::path::Path::new(SERVICES.layout.fallback_dir).join("auth.json");
+            assert!(plx_base::paths::session_candidates().contains(&migration), "the two spellings agree");
+        }
         assert_ne!(SERVICES.libraries, plx_os::tv::Libraries::NONE, "a television has libcurl and EGL");
     }
 
