@@ -361,8 +361,10 @@ namespace PlxHost
 
         // Whether an on_stopped means the application must end: the library was running and the host did not ask it to stop. A library that
         // ends by itself has torn its window down, and a .NET process left behind with no window answers the next launch (launch_mode
-        // "single") with that dead instance. NOT unit-tested (no C# runner in this repository's gates): the emulator run exercises it, by the
-        // remote's exit key.
+        // "single") with that dead instance. NOT unit-tested (no C# runner in this repository's gates), and NOT exercised on the emulator
+        // either: the remote's Exit key reaches the library as `Exit Down`, but the platform treats Exit as a system key, sends OnPause at once and
+        // OnTerminate 365 ms later, so `stopRequested` is already set when on_stopped arrives; Back on Home does not quit. No remote route makes
+        // the library end by itself there.
         internal static bool ShouldExitHost(bool stopWasRequested, bool isRunning)
         {
             return isRunning && !stopWasRequested;

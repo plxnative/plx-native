@@ -200,6 +200,11 @@ State plainly what was not seen. The log is the evidence. A host-side window cap
 - `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`; it affects only frames over a video plane, which this build has none of.
 - webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, `surface: webOS major 0`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
 - Closing the app logs `surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends`.
+- **The host's self-exit path is unexercised on the emulator.** When the library ends without a host stop (an `Exit` the platform does not intercept, or a
+  `Shell::open` refusal after an OK start), `Program.cs` queues the application's own `Exit()` on the main thread; that decision (`ShouldExitHost`) is
+  not unit-tested either. The remote's Exit key reaches the library as `Exit Down`, but the platform treats Exit as a system key: it sends `OnPause` at
+  once and `OnTerminate` about 365 ms later, so the host's stop is already requested when `on_stopped` arrives; Back on Home does not quit.
+  No remote route makes the library end by itself there.
 - The image cache's candidate directories (`plx_base::paths::image_cache_candidates`) are webOS paths, so the log reads `imgcache: no writable directory; disk cache unavailable` and the disk cache is off: a shared-path follow-up.
 
 ## CI

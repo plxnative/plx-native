@@ -886,7 +886,9 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
 SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk
-PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
+# A BARE `make PLATFORM=tizen` has no goal either, and its default goal is `tizen-check` (mk/platform-tizen.mk), which is side-effect free;
+# a bare webOS or desktop `make` builds the package and stays a reset.
+PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),$(if $(filter tizen,$(PLATFORM)),yes,))
 # `PLAYBACK_BACKENDS=none` builds no television package. It is refused HERE, at parse time and before
 # the stamp reset below: a recipe-level refusal ran after that reset, so a mistyped
 # `make PLAYBACK_BACKENDS=none [ipk|deploy]` first deleted the last real build's binary and staged

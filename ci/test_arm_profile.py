@@ -210,7 +210,7 @@ class ScratchTree(unittest.TestCase):
 
     def run_goal(self, goal: str, seeded_stamp: str, *extra: str):
         """Run `make <goal>` with the default (tvdev) configuration; report what the reset took."""
-        proc = self.make(f"TV={PLACEHOLDER_TV}", "FLAVOR=debug", *extra, goal)
+        proc = self.make(f"TV={PLACEHOLDER_TV}", "FLAVOR=debug", *extra, *([goal] if goal else []))  # "" is the bare `make`
         self.assertEqual(proc.returncode, 0, (goal, proc.stderr[-300:]))
         deleted = [rel for rel in RESET_PATHS if not (self.tree / rel).exists()]
         stamp = (self.tree / STAMP).read_text()
@@ -435,6 +435,16 @@ class HostOnlyGoalsKeepTheBuild(ScratchTree):
         for goal in TIZEN_GOALS:
             with self.subTest(goal):
                 self.assert_keeps_the_build(goal, "PLATFORM=tizen")
+
+    def test_a_bare_make_of_the_tizen_platform_keeps_a_release_build(self):
+        # no goal: `.DEFAULT_GOAL := tizen-check` (docs/tizen.md says `make PLATFORM=tizen` is that), and MAKECMDGOALS is empty
+        self.assert_keeps_the_build("", "PLATFORM=tizen")
+
+    def test_a_bare_webos_make_still_resets_the_stamp(self):
+        # the other side: the default goal builds the package, so it is not a pure query and must keep resetting
+        seeded = self.seed_release_build()
+        deleted, stamp_changed, _ = self.run_goal("", seeded)
+        self.assertTrue(deleted or stamp_changed, "a bare webOS make no longer resets a stale stamp")
 
     def test_every_tizen_goal_is_in_the_exempt_list_and_the_query_is_a_query(self):
         text = (ROOT / "Makefile").read_text()
