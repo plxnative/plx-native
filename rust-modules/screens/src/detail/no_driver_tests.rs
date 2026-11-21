@@ -923,6 +923,39 @@ fn the_same_inputs_before_the_item_lands_leave_the_page_free_to_move_off_the_tog
     }
 }
 
+/// **The claim ends only once the page's own seat is in place.** In the landing frame the item is
+/// there but `reconcile` has not run, so focus is still on the watched toggle, which writes now.
+/// An OK-down then arms a press that commits only if focus is still on its key: were the claim
+/// ended by that OK, `reconcile` would stop moving focus and the press could commit on the toggle,
+/// a write to the account. The claim holds, `reconcile` moves focus off the toggle, and the press
+/// never commits there.
+#[test]
+fn an_input_in_the_landing_frame_before_the_seat_is_placed_does_not_end_the_claim() {
+    let sid = ServerId::UNSET;
+    for (what, kind) in acts_at_the_seat() {
+        let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
+        let _driver = NoDriver::set(true);
+        let mut run = Running::open(bare(&guard, sid, "movie"));
+        assert_eq!(run.focus(), hero::ELEM_MARK_WATCHED, "{what}: premise");
+        run.land(resumable(sid));
+        assert_eq!(run.focus(), hero::ELEM_MARK_WATCHED, "{what}: premise: the landing is processed, reconcile has not run");
+        run.input(kind);
+        assert!(run.screen.provisional, "{what}: the page's seat is not in place, so nothing here is the viewer's choice of it");
+        run.frames(6);
+        assert_eq!(run.focus(), first_extra(&run.screen), "{what}: reconcile took focus off the toggle");
+        clear();
+    }
+    let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
+    let _driver = NoDriver::set(true);
+    let mut run = Running::open(bare(&guard, sid, "movie"));
+    run.land(resumable(sid));
+    run.input(InputKind::Key { key: Key::Ok, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false });
+    assert!(run.screen.provisional, "an OK-down in the landing frame");
+    run.frames(6);
+    assert!(!is_write(run.focus()), "the press that OK armed finds focus off the toggle");
+    clear();
+}
+
 /// **Only a move the viewer makes ends the page's claim on its seat.** A key that moved focus, the
 /// pointer and a script are the viewer's; the engine's own seat and the reconcile that follows a
 /// landing are the page's, and must not end it, or the first frame after the landing would.

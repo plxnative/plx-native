@@ -262,10 +262,11 @@ pub struct DetailScreen {
     /// every frame's `reconcile` answers the page's default ([`Self::default_elem`]), so that seat
     /// follows the head wherever the landing puts it (the item, a later Also available landing) and
     /// never waits on a restore to fire. It ends with the viewer's own act: a move a direction key
-    /// or the pointer makes, an OK on a landed page, a hold that opens a menu, or, on a landed page,
-    /// any key-down, pointer, click, drag or wheel (the Library's rule: such an input moves no focus
-    /// for a `FocusMoved` to report). A hold that opens nothing and every input before the item
-    /// lands leave the seat the page's. Never set with a driver composed, where Play is the default from the first frame and the page keeps no
+    /// or the pointer makes, an OK on a landed page, a hold that opens a menu, or, on a landed
+    /// page whose seat the page has placed (focus is on [`Self::default_elem`]), any key-down,
+    /// pointer, click, drag or wheel (the Library's rule: such an input moves no focus for a
+    /// `FocusMoved` to report). A hold that opens nothing, every input before the item lands and one
+    /// in the landing frame, before `reconcile` has moved focus off the toggle, leave the seat the page's. Never set with a driver composed, where Play is the default from the first frame and the page keeps no
     /// self-seat. Not hashed, not in [`SHAPE`]: a `SHAPE` bump would invalidate every detail
     /// fixture, and a fixture's page has a driver.
     provisional: bool,
@@ -2473,7 +2474,12 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                 // `FocusMoved` ends the claim and a later landing would take the seat from them. It
                 // counts only once the item is there, as an OK does (`activate`): before that the seat
                 // is the watched toggle, which writes once the item lands, and none of these chose it.
+                // It also counts only once the page's own seat is in place (focus is on what
+                // `reconcile` answers, `default_elem`): in the landing frame focus is still on the
+                // toggle, and an OK-down ending the claim there would stop `reconcile` moving it, so
+                // the press it arms could commit on the toggle and write to the account.
                 if self.detail(meta).is_some()
+                    && cx.focus.current.is_some_and(|key| key.entry == self.entry && key.elem == self.default_elem(cx))
                     && matches!(input.kind, InputKind::Key { edge: Edge::Down, .. } | InputKind::Pointer { .. }
                         | InputKind::Click { .. } | InputKind::Drag { .. } | InputKind::Wheel { .. }) {
                     self.provisional = false;
