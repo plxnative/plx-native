@@ -96,11 +96,16 @@ fn memory_only() -> bool {
     plx_os::tv::secure::mode() == StoreMode::MemoryOnly
 }
 
-/// What a [`StoreMode::MemoryOnly`] load, write or clear reports: nothing was attempted, by design.
-const NOT_PERSISTED: PersistOutcome = PersistOutcome {
-    write: PersistResult::NotAttempted,
-    cleanup: CleanupResult::NotAttempted,
-};
+/// What a [`StoreMode::MemoryOnly`] load, write or clear reports, and publishes: nothing was
+/// attempted, by design.
+fn not_persisted() -> PersistOutcome {
+    let outcome = PersistOutcome {
+        write: PersistResult::NotAttempted,
+        cleanup: CleanupResult::NotAttempted,
+    };
+    publish(outcome);
+    outcome
+}
 
 fn root() -> PathBuf {
     plx_base::paths::persistent_state_root()
@@ -205,7 +210,7 @@ pub fn load(legacy: &[PathBuf]) -> Consent {
 /// [`load`] with the platform's authority and the helper's transport handed in.
 fn load_with(authority: Authority, transport: &mut dyn client::Transport, legacy: &[PathBuf]) -> Consent {
     if memory_only() {
-        publish(NOT_PERSISTED);
+        not_persisted();
         return Consent::default();
     }
     if authority == Authority::Helper {
@@ -731,8 +736,7 @@ fn record_with(
     canonical_root: PathBuf,
 ) -> PersistOutcome {
     if memory_only() {
-        publish(NOT_PERSISTED);
-        return NOT_PERSISTED;
+        return not_persisted();
     }
     if authority == Authority::Helper {
         let _ = canonical_root;
@@ -914,8 +918,7 @@ pub(super) fn forget_at(legacy: &[PathBuf], canonical_root: PathBuf) -> PersistO
 /// it takes no transport.
 fn forget_with(authority: Authority, legacy: &[PathBuf], canonical_root: PathBuf) -> PersistOutcome {
     if memory_only() {
-        publish(NOT_PERSISTED);
-        return NOT_PERSISTED;
+        return not_persisted();
     }
     if authority == Authority::Helper {
         let _ = canonical_root;

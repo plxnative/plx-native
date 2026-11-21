@@ -266,8 +266,9 @@ pub struct DetailScreen {
     /// page whose seat the page has placed (focus is on [`Self::default_elem`]), any key-down,
     /// pointer, click, drag or wheel (the Library's rule: such an input moves no focus for a
     /// `FocusMoved` to report). A hold that opens nothing, every input before the item lands and one
-    /// in the landing frame, before `reconcile` has moved focus off the toggle, leave the seat the page's. Never set with a driver composed, where Play is the default from the first frame and the page keeps no
-    /// self-seat. Not hashed, not in [`SHAPE`]: a `SHAPE` bump would invalidate every detail
+    /// in the landing frame, before `reconcile` has moved focus off the toggle, leave the seat the
+    /// page's. Never set with a driver composed, where Play is the default from the first frame and
+    /// the page keeps no self-seat. Not hashed, not in [`SHAPE`]: a `SHAPE` bump would invalidate every detail
     /// fixture, and a fixture's page has a driver.
     provisional: bool,
     /// This page has already sent its addressed `ClearItem` to the Metadata store. §3.4's
@@ -2469,15 +2470,12 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                     }
                 }
                 // Any key-down, pointer motion, click, drag or wheel is the viewer acting at the seat
-                // they hold, the Library's rule (`LibraryScreen`'s `Input` arm): a wheel scrolls with
-                // focus staying put and a hover on the control already focused moves nothing, so no
-                // `FocusMoved` ends the claim and a later landing would take the seat from them. It
-                // counts only once the item is there, as an OK does (`activate`): before that the seat
-                // is the watched toggle, which writes once the item lands, and none of these chose it.
-                // It also counts only once the page's own seat is in place (focus is on what
-                // `reconcile` answers, `default_elem`): in the landing frame focus is still on the
-                // toggle, and an OK-down ending the claim there would stop `reconcile` moving it, so
-                // the press it arms could commit on the toggle and write to the account.
+                // they hold, the Library's rule (`LibraryScreen`'s `Input` arm): a wheel or a hover on
+                // the focused control moves no focus, so no `FocusMoved` ends the claim. It counts
+                // only once the item is there and the page's own seat is in place (focus is on
+                // `default_elem`, what `reconcile` answers). Before that the seat is the watched
+                // toggle, which writes once the item lands: in the landing frame an OK-down ending the
+                // claim would stop `reconcile` moving focus off it, and the press it arms could commit.
                 if self.detail(meta).is_some()
                     && cx.focus.current.is_some_and(|key| key.entry == self.entry && key.elem == self.default_elem(cx))
                     && matches!(input.kind, InputKind::Key { edge: Edge::Down, .. } | InputKind::Pointer { .. }
