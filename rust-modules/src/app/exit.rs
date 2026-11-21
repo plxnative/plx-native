@@ -36,8 +36,9 @@
 //!
 //! [`HostGate`], [`InFlight`], [`Completion`] and [`Stopped`] are the hosted entry's half of the contract (the
 //! Tizen host's callbacks, `plx_host_stop` and its deadline watchdog). They are `pub` and reach a platform
-//! crate through `host`, like [`Exit`] and [`Release`]. They are plain values, not
-//! statics, and decide nothing by themselves that a runner has to wait for: [`HostGate::report`]
+//! crate through `host`, like [`Exit`] and [`Release`]. They are plain values with a
+//! `const fn new`: the application declares no `static` of them, and the hosted platform keeps them in its own (its
+//! `plx_host_stop` takes no argument, so the gate it closes has to be reachable from a static). They decide nothing by themselves that a runner has to wait for: [`HostGate::report`]
 //! answers "not yet" while a gated callback is running and the runner asks again. The C ABI that
 //! drives them is the hosted platform's; `lifecycle_tests` drives them through a fake host.
 //!
