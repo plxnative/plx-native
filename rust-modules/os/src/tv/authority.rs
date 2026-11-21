@@ -35,7 +35,7 @@
 //! The helper's wake-up is not a member of this group, and it stays where it is. Its type is the
 //! helper's own wire diagnostics (`storage::wire::failure::Detail`), `wire` is mounted under `storage`,
 //! and `tv` names no `storage` (`docs/module-layers.md`, L15: that edge was cut on purpose, and a
-//! `tv`-owned copy of the 60-variant `Stage` would be a second definition of a wire type). So the
+//! `tv`-owned copy of the helper's `Stage` would be a second definition of a wire type). So the
 //! wake-up is `storage::client::install_activator`, an install point `storage` owns, which the webOS
 //! platform calls from `port::plex_main`; a platform that installs none (the desktop, a host test,
 //! Tizen) gets `Stage::Unsupported`, the right answer for a platform with no helper. Under

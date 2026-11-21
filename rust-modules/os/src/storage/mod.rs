@@ -133,7 +133,8 @@ pub enum CommitStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Nothing needs this allow today: with it deleted, no variant warns on the host or on
 // `armv7-unknown-linux-gnueabi`, because the enum is public and `lib.rs` allows `dead_code` on all of
-// `storage` as well. Whether to drop it is the `os` directory's W8a PR's call.
+// `storage` as well. It stays: it is a plain allow, not one of the arm-and-linux sites W8a retired, and
+// dropping it changes no count.
 #[allow(dead_code)]
 pub enum StoreError {
     Io { stage: CommitStage, errno: i32 },

@@ -742,9 +742,11 @@ suite is 5603 tests before and after (157 + 66 + 218 + 5162). What it taught bey
   their real LS2 arms (`extern "C"` blocks a host test binary cannot link), `i18n::current()` with
   its "initialized before any screen" panic instead of the English default, and `storage` without
   the commit-failure hook. Each is `cfg(any(test, feature = "test-support"))` now, and
-  `cfg(not(any(...)))` for the shipping arm. Items that only the layer's own tests use
-  (`webos::storage_activation_reply`, `webos::caps::{ProbeFailure, parse_dv_reply}`) stay
-  `cfg(test)`: under `test-support` alone they would be dead code.
+  `cfg(not(any(...)))` for the shipping arm. In `plx_platform_webos`, which no other crate's
+  tests build, the pair is plain: `webos::caps::run_transport` is `cfg(not(test))` for the real
+  arm and `cfg(test)` for the host stub, and the items beside it (`ProbeFailure`, `parse_dv_reply`,
+  `platform_gate`) are ungated because the real arm calls them. Gating an item `cfg(test)` alone
+  is right only when nothing outside tests calls it; under `test-support` alone it would be dead code.
 - **`test-support` may add or switch behaviour; it may not remove an item the application names.**
   `cargo check --lib --tests` (the lab line of `make check`) builds the application's non-test
   library with the dev-dependency features unified in, so `i18n::initialize` and
