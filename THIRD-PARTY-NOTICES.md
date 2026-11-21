@@ -4,7 +4,7 @@ This file accompanies the **PlxNative** application package (`com.beb.plxnative`
 native Plex client for LG webOS 4.x televisions. PlxNative itself is Copyright (c) 2026 Gleb
 Linnik and is distributed under GPL-3.0-or-later (see `LICENSE`; the brand reservation and the
 non-affiliation statements are in `TRADEMARKS.md`, alongside it in both the repository and this
-package). The Tizen package (`plxntizen0`) carries this file too, and section 2.8 is its entry.
+package). The Tizen package (`plxntizen0`) carries this file too: section 2.8 is its ADDITIONAL entry, and the sections that entry names apply to it as well.
 
 The file is organised by **relationship**. Both the applicable license and the actual
 relationship affect obligations; dynamic linking is not a blanket exemption:
@@ -552,9 +552,20 @@ upstream release archives and their sha256), compiled unaltered by `tizen/build-
 Portions of this software are copyright © The FreeType Project (https://freetype.org). All rights reserved.
 
 This package carries this file as `res/THIRD-PARTY-NOTICES.md` and the licence texts it names as `res/licenses/` (the same set section 5 lists
-for the `.ipk`), and `tizen/package.py` refuses a package without them. The webOS-package sections of this file (1 to 6 and the source-only attribution) do not otherwise
-describe it: it has no FFmpeg, libass, Sentry Native or bundled CA roots; the Rust crates of section 2.4 are the same code, built for
-`x86_64-unknown-linux-gnu`.
+for the `.ipk`), and `tizen/package.py` refuses a package without them. This entry is ADDITIONAL to the rest of the file, which covers the
+Tizen package wherever it holds the same thing:
+
+- **Apply as written:** section 2.1 (nanosvg: `svg.o` is linked into `libplx.so`); section 2.2 (the icon artwork is compiled into the library with
+  `include_str!`); section 2.4 (the same Rust code, built for `x86_64-unknown-linux-gnu`); and section 2.3 for **Inter** only (`res/appfont.ttf`,
+  `res/appfont-bold.ttf` and `res/OFL.txt`). The Noto CJK, Emoji, Arabic, Hebrew and subtitle faces of section 2.3 are not staged into this
+  package. Sections 4 to 6 (what is undetermined, the list of licence texts, what is deliberately left out) are not tied to either package's contents.
+- **Section 2.5 does not apply as written:** its GCC startup objects are the webOS NDK's and its `getauxval` seam (`src/compat/getauxval.c`) is
+  compiled for 32-bit ARM Linux only. This library is linked by the build host's own compiler (`cc -shared`); GCC's startup objects, if that
+  compiler is GCC, are under the same GCC Runtime Library Exception (`licenses/GCC-exception-3.1.txt`, which this package carries), and the
+  C runtime, `libm`, `libdl` and `libgcc_s` are the television's own, loaded by name (section 3's reading applies to them).
+- **Not in this package:** section 1 (FFmpeg and libass are not linked; the link line names only `svg.o`, SDL2_ttf, SDL2 and the system libraries,
+  and `tizen-verify` refuses any other undefined symbol or `DT_NEEDED`); section 2.6 (the Sentry Native symbols are declared only for 32-bit ARM
+  Linux, and no crash handler is staged); section 2.7 (`le-roots.pem` is not staged).
 
 ---
 
