@@ -131,12 +131,14 @@ $(if $(filter $(FLAVOR),$(FLAVORS)),,$(error unknown FLAVOR "$(FLAVOR)" — one 
 # --- WHICH OS: the PLATFORM axis -----------------------------------------------------------
 #
 # `webos` (the television this file has always built for, and the default), `desktop` (the macOS and
-# Windows/WSLg simulators and the macOS app) or `tizen` (a name only: no goal builds it yet). It is the
-# TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
+# Windows/WSLg simulators and the macOS app) or `tizen` (the Samsung television: `mk/platform-tizen.mk`,
+# included at the END of this file only under `PLATFORM=tizen`, builds its library and package; docs/tizen.md).
+# It is the TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
 # target (`RUST_TARGET`), the sysroot (`SYSROOT`) and, once a platform needs them, a managed TFM, a
 # firmware floor and the signing path — stays a set of separate variables that PLATFORM does not choose:
-# `make -s print-rust-target` answers the same under every PLATFORM. Today the axis labels and validates;
-# no recipe reads it, so the default `PLATFORM=webos` builds exactly what it built before the axis existed.
+# `make -s print-rust-target` answers the same under every PLATFORM. Apart from `tizen`'s own file, which
+# nothing reads under another platform, the axis labels and validates and no recipe reads it, so the default
+# `PLATFORM=webos` builds exactly what it built before the axis existed.
 #
 # The simulators and the macOS app are desktop builds, so `sim`, `sim-*`, `macapp` and `macapp-zip` imply
 # PLATFORM=desktop when it was not given: `$(origin PLATFORM)` is `undefined` (not on the command line,
@@ -2806,3 +2808,12 @@ fetch-profile:
 
 .PHONY: setup-rust libass libass-host screenshots screenshots-sim demo-library disk symbols symbols-libs sentry-symbols sentry-native all setup-env telemetry-local deploy verify-deploy run run-stream kill check check-unlocked check-ffmpeg lint test ipk clean tv-lock-require threadprobe sockprobe logmprobe mali-hwcnt-probe tv-capture-bench mali-irq-sample plxnative-stackwalk sim sim-macos sim-linux site-video-sim sim-wsl sim-run sim-macos-run sim-shot sim-macos-shot sim-token sim-macos-token sim-play sim-macos-play sim-clean sim-macos-clean macapp macapp-zip fixtures fixtures-quick fixtures-pipeline fetch-profile \
         release-guard lab-guard install uninstall $(QUERY_GOALS)
+
+# --- the Tizen platform (W9, docs/tizen.md) ------------------------------------------------------------
+#
+# Last in the file, so its recipes see every variable above and its `.DEFAULT_GOAL` cannot become this file's: under
+# `PLATFORM=tizen` a bare `make` is `tizen-check` instead of the television package. Only `PLATFORM=tizen` reads it, so a
+# default `make` and `make -n` are the same text they were before the file existed (the dry-run diff in docs/tizen.md).
+ifeq ($(PLATFORM),tizen)
+include mk/platform-tizen.mk
+endif
