@@ -176,6 +176,16 @@ pub(crate) fn compose_feed_alone(adapter: &mut PlayerAdapter, _controlled: bool)
     Composition::default()
 }
 
+/// The `early_init` of a platform that has no playback plane to boot: nothing to initialize. `host::NO_MEDIA` states it.
+pub(crate) fn no_early_init(_mt: &MainThread) {}
+
+/// The `compose` of a platform that has no playback driver: it installs nothing, so the adapter composes
+/// `BackendSet::NONE` and there is no resolver, and [`publish_composition`](crate::app::platform::publish_composition)
+/// logs that as `compose: backends=none resolver=no`. `host::NO_MEDIA` states it.
+pub(crate) fn compose_none(_adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
+    Composition::default()
+}
+
 /// The webOS composition, [`Platform::media`](crate::app::platform::Platform)'s `compose` for the
 /// television: [`compose_with`] over the product URI driver this build has (none in a build without
 /// `play-uri`).
