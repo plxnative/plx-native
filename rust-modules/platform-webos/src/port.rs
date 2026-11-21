@@ -43,7 +43,16 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
         deliver_toast: crate::webos::toast::deliver,
     },
     storage: plx_os::tv::StorageHooks { authority: plx_os::tv::authority::Authority::Helper },
-    layout: plx_os::tv::Layout::DERIVED,
+    // The derivation, with the one thing only webOS knows: the Developer Mode install directory, the
+    // payload's last resort when `/proc/self/exe` cannot be read (not expected on a device).
+    layout: plx_os::tv::Layout { fallback_dir: plx_base::paths::LEGACY_APP_DIR, ..plx_os::tv::Layout::DERIVED },
+    // What this television's firmwares answer to, in the order worth trying (`plx_base::dynlib::Handle::open`:
+    // releases 5.3.1 and 6.4.0 keep a `libcurl.so.5` alias beside the real `.so.4`); EGL is LG's
+    // `libEGLfk.so.2` on webOS 2.2.3-5.3.1 and `libEGL.so.1` from 6. The Mac's dylib name is the desktop's.
+    libraries: plx_os::tv::Libraries {
+        curl: &["libcurl.so.4", "libcurl.so.5"],
+        egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
+    },
     legacy_webos_media: plx_os::tv::LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,
@@ -207,6 +216,22 @@ mod tests {
     fn the_webos_table_states_the_storage_helper_as_the_authority() {
         assert_eq!(SERVICES.storage.authority, Authority::Helper);
         assert_eq!(SERVICES.secure.mode, plx_os::tv::secure::StoreMode::Durable);
+    }
+
+    /// **The webOS library names and install fallback, pinned element for element.** The lists are what the
+    /// three libcurl tables and the EGL probe carried as literals before the platform stated them, minus the
+    /// macOS dylib that can never open on a television; the ORDER is part of the pin (`.so.4` before `.so.5`,
+    /// LG's `libEGLfk.so.2` before the Mesa-style `libEGL.so.1`). The last resort is the shipped Developer
+    /// Mode install directory, byte for byte what `paths` hardcoded.
+    #[test]
+    fn the_webos_table_states_its_library_names_and_its_install_fallback() {
+        assert_eq!(SERVICES.libraries.curl, ["libcurl.so.4", "libcurl.so.5"]);
+        assert_eq!(SERVICES.libraries.egl, ["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]);
+        assert_eq!(
+            SERVICES.layout.fallback_dir,
+            "/media/developer/apps/usr/palm/applications/com.beb.plxnative"
+        );
+        assert_ne!(SERVICES.libraries, plx_os::tv::Libraries::NONE, "a television has libcurl and EGL");
     }
 
     /// **The two LG hooks are the webOS shell's `init`, handed in the order SDL needs.** The shell crate
