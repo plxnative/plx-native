@@ -10,8 +10,9 @@ pub mod feed_driver;
 pub mod feed_resources;
 pub mod feed_pump;
 pub mod feed_state;
-/// The simulator's stand-in for the Starfish/ACB seam (`hostsim` builds only; see its module doc).
-#[cfg(feature = "hostsim")]
+/// The host's stand-in for the Starfish/ACB seam (the simulator's `hostsim` build, and the tests: this
+/// crate's own and the ones that enable `test-support`; see its module doc).
+#[cfg(any(test, feature = "test-support", feature = "hostsim"))]
 pub mod ffi_host;
 pub mod ff_pcm;
 mod ff;

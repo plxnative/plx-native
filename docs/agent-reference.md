@@ -227,11 +227,14 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
   same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
   EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`, which the `tizen-so` job of `.github/workflows/tizen.yml` runs (the only CI job that does, and only for a change under that workflow's path filter); `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
-  which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
-  configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
-  default pass and cannot fail it — which is how the prime-livelock regression
+  which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists in the hostsim
+  configuration and, since W8c-1, in every test build (`cfg(test)`, or a dependent that enables
+  `test-support`), so a test that drives an access unit through `sf_feed` runs in the default pass
+  too. Until then it existed ONLY under hostsim and every such test was compiled out of the default
+  pass and could not fail it — which is how the prime-livelock regression
   (`player::engine::prime_livelock_tests`) sat outside the gate entirely while 1398 default-feature
-  tests passed. Cargo keys fingerprints by feature set, so the two coexist in one `target/` and the
+  tests passed. A test that needs `hostsim` itself (a runtime root the environment can steer, the
+  application crate's lifecycle rig) is still hostsim-only. Cargo keys fingerprints by feature set, so the two coexist in one `target/` and the
   second pass costs seconds warm. See the testing section for what it does and does not cover.
   **The per-crate test binaries (`UNIT_SUITE`) run side by side, not one after another.** `cargo test` executes the
   binaries it builds serially, so after the workspace split the suite's wall time was the SUM of
@@ -308,8 +311,9 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   process. Adopting it would also need the tool on every machine and CI job.
 - `make test-hostsim [C=<crate>] [T=filter]` — the `hostsim`-feature unit tests
   (`#[cfg(all(test, feature = "hostsim"))]`: the application crate's `app/run.rs`
-  `lifecycle_regression_tests`, the player-return rig; `plx_media`'s `player/engine.rs`, `pump.rs`,
-  `route/decision.rs`), which `test-fast` and `test-crate` do not build. `C` names the crate under
+  `lifecycle_regression_tests`, the player-return rig), which `test-fast` and `test-crate` do not
+  build; `plx_media`'s engine, pump and `route/decision.rs` tests were here until W8c-1 and are now
+  `cfg(test)`, so `test-crate` runs them and this pass re-runs them with the feature on. `C` names the crate under
   test, spelled as for `test-crate` (`C=plx_media`, `C=media`; several allowed) and defaulting to
   the application crate (`C=app`); it changes nothing else, so there is one recipe, one managed dir
   and one `--require-match` for all of them. It runs `cargo test --lib -p <crate> --features
