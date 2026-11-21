@@ -4,8 +4,10 @@
 //! it does not compile. It carries four things, split by who reads them:
 //!
 //! - `services`: [`plx_os::tv::Services`], what the LOWER layers read through the private `tv`
-//!   accessors (identity, the secure store, Home and the toast, the legacy webOS media verbs).
-//!   `run_application` installs it into `tv` once, and nothing else in the app reads it.
+//!   accessors (identity, the secure store, Home and the toast, the legacy webOS media verbs), and
+//!   its `layout` group, which `plx_base::paths` reads. `run_application` hands it over once, through
+//!   [`Platform::install_services`]: the table goes into `tv`, and the `layout` group goes into
+//!   `plx_base::paths`, which `tv` sits above. Nothing else in the app reads it.
 //! - `shell`: the window, the bus and the pointer's visibility, [`Shell`]. Its consumers are boot
 //!   (`app::boot` brings the window up with the platform it was handed: `init`, then `open`, which
 //!   returns the [`Surface`] the `App` owns from then on), the loop (`app::run` drives it every
@@ -714,7 +716,21 @@ mod tests {
         let host = include_str!("../host.rs");
         let port = include_str!("../../platform-webos/src/port.rs");
         let desktop = include_str!("../../platform-desktop/src/lib.rs");
-        for (what, text) in [("run_application", before), ("host.rs", host), ("platform-webos port.rs", port), ("platform-desktop lib.rs", desktop)] {
+        // The simulator's `main` runs before `plx_platform_desktop::run`, which is `host::run`.
+        let sim = include_str!("../../platform-desktop/src/bin/sim.rs")
+            .split_once("fn main(")
+            .expect("the simulator's main")
+            .1
+            .split_once(concat!("plx_platform_desktop::", "run("))
+            .expect("the simulator's call to the desktop entry")
+            .0;
+        for (what, text) in [
+            ("run_application", before),
+            ("host.rs", host),
+            ("platform-webos port.rs", port),
+            ("platform-desktop lib.rs", desktop),
+            ("platform-desktop bin/sim.rs (main, up to the run call)", sim),
+        ] {
             for read in reads {
                 assert!(!text.contains(read), "{what} must not read `{read}` before the layout is published");
             }
