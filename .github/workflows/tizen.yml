@@ -5,11 +5,11 @@ name: Tizen library CI
 # no emulator, no .NET SDK, no certificate, no Samsung tool. It proves that the library still LINKS against exactly the system libraries
 # a Tizen television has (`-z defs`), that its DT_NEEDED set, undefined symbols, exports and glibc ceiling are the allowlist's
 # (`ci/check-tizen-so.py verify`), and that the C header and the .NET host agree on the three exports (`ci/check-tizen-so.py abi`).
-# Nothing here proves that the library RUNS on a television: that is the emulator's, run by hand (docs/tizen.md, "Install and launch").
+# Nothing here proves that the library RUNS on a television: that is the emulator's, run by hand (docs/tizen.md, "Build, install, launch").
 #
 # NOT A REQUIRED CHECK. `ci.yml`'s two required status names are untouched and do not wait for this workflow, and branch protection is not
 # edited; it starts only for the paths below, which is also why it is its own workflow: `ci.yml`'s job set is pinned by ci/test_ci_split.py
-# and its `changes` job gates every job behind one path filter. Run order and the measured cost of a cold link are in docs/tizen.md.
+# and its `changes` job gates every job behind one path filter. The cold-run cost is unmeasured (see the `timeout-minutes` note on the job).
 #
 # THE PATH FILTER names the files whose change can alter the link or the checks: `rust-modules/**` is in it because the library is the WHOLE
 # application behind one platform crate (a new `extern` symbol anywhere in it is this link's undefined symbol), as simulators.yml's is for the

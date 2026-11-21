@@ -67,8 +67,9 @@ symbol is exported. The link is written to `libplx.so.part` and renamed, so a fa
 **Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
 in the documentation shipped with the product), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
 `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`, the set the `.ipk` ships); `tizen/package.py` stages them and
-`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 3 lists them for the webOS
-package as the television's own libraries and, for this package, says they are linked in.
+`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 2.8 is this package's entry
+for them (statically linked, versions from the `ci/dependencies.json` pins); section 3 describes the webOS package, where the same names are
+the television's own libraries.
 
 ### What `tizen-verify` checks
 

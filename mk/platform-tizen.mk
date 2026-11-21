@@ -74,7 +74,8 @@ TIZEN_GUARD        = test "$$(uname -s)-$$(uname -m)" = Linux-x86_64 || { echo "
 tizen-abi:
 	python3 ci/check-tizen-so.py abi --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS)
 
-# Compile-only: no link, no SDL, no certificate, any host with the target's std installed. The unit of the CI job's first step.
+# Compile-only: no link, no SDL, no certificate, any host with the target's std installed. The local loop's fast check: CI
+# (.github/workflows/tizen.yml) runs `tizen-abi` and the full link (`tizen-so`, `tizen-verify`) instead of this.
 tizen-check: tizen-abi
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" CARGO_INCREMENTAL=0 RUSTFLAGS="$(RUST_REMAP) $(RUST_CAPLINTS)" \
 	  cargo +$(RUST_TOOLCHAIN) check --lib $(TIZEN_PROFILE_FLAG) --target $(TIZEN_RUST_TARGET) \

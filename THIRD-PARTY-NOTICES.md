@@ -4,7 +4,7 @@ This file accompanies the **PlxNative** application package (`com.beb.plxnative`
 native Plex client for LG webOS 4.x televisions. PlxNative itself is Copyright (c) 2026 Gleb
 Linnik and is distributed under GPL-3.0-or-later (see `LICENSE`; the brand reservation and the
 non-affiliation statements are in `TRADEMARKS.md`, alongside it in both the repository and this
-package).
+package). The Tizen package (`plxntizen0`) carries this file too, and section 2.8 is its entry.
 
 The file is organised by **relationship**. Both the applicable license and the actual
 relationship affect obligations; dynamic linking is not a blanket exemption:
@@ -552,7 +552,7 @@ upstream release archives and their sha256), compiled unaltered by `tizen/build-
 Portions of this software are copyright © The FreeType Project (https://freetype.org). All rights reserved.
 
 This package carries this file as `res/THIRD-PARTY-NOTICES.md` and the licence texts it names as `res/licenses/` (the same set section 5 lists
-for the `.ipk`), and `tizen/package.py` refuses a package without them. The webOS-package sections of this file (1 to 7) do not otherwise
+for the `.ipk`), and `tizen/package.py` refuses a package without them. The webOS-package sections of this file (1 to 6 and the source-only attribution) do not otherwise
 describe it: it has no FFmpeg, libass, Sentry Native or bundled CA roots; the Rust crates of section 2.4 are the same code, built for
 `x86_64-unknown-linux-gnu`.
 
