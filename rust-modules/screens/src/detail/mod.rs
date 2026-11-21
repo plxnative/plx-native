@@ -2329,7 +2329,7 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                 // The page is seated before its item lands (the item is requested right here). With
                 // no playback driver that first seat is the watched toggle, the row's only stop
                 // until the item is there, and it must not stay there: it writes the moment the item
-                // lands. The seat is the page's, not the viewer's, until the viewer moves focus
+                // lands. The seat is the page's, not the viewer's, until the viewer acts at it
                 // (`provisional`): `reconcile` answers the page's default every frame it holds,
                 // whatever the restore a navigation arrives with does or does not do. A return
                 // (`Restored`) is the viewer's own place and ends it.

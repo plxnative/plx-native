@@ -868,9 +868,9 @@ fn an_ok_on_a_landed_page_keeps_the_seat_it_pressed_on() {
 }
 
 /// The inputs that act at a seat without moving focus: a wheel, a hover on the control already
-/// focused, a click, a drag, and any key-down (the Library's set, `LibraryScreen::provisional`).
-fn acts_at_the_seat() -> [(&'static str, InputKind<u32>); 5] {
-    let hit = Some(hero::ELEM_MARK_WATCHED);
+/// focused (`focused`: a hover on any other control is a `FocusMoved`), a click, a drag, and any key-down (the Library's set, `LibraryScreen::provisional`).
+fn acts_at_the_seat(focused: u32) -> [(&'static str, InputKind<u32>); 5] {
+    let hit = Some(focused);
     [
         ("a wheel", InputKind::Wheel { dy: 1.0 }),
         ("a pointer on the focused control", InputKind::Pointer { x: 0.0, y: 0.0, hit }),
@@ -886,11 +886,12 @@ fn acts_at_the_seat() -> [(&'static str, InputKind<u32>); 5] {
 /// the viewer was acting, the way the Library's does.
 #[test]
 fn a_wheel_pointer_click_drag_or_key_on_a_landed_page_ends_the_pages_claim_on_the_seat() {
-    for (what, kind) in acts_at_the_seat() {
+    for case in 0..acts_at_the_seat(0).len() {
         let (guard, sid, other, _driver) = movie_awaiting_its_second_source();
         let mut run = Running::open(bare(&guard, sid, "movie"));
         run.frames(3);
         let below = first_extra(&run.screen);
+        let (what, kind) = acts_at_the_seat(below).into_iter().nth(case).expect("a case");
         assert_eq!(run.focus(), below, "{what}: premise: the page seated below the row");
         assert!(run.screen.provisional, "{what}: premise: the seat is the page's");
         run.input(kind);
@@ -909,7 +910,7 @@ fn a_wheel_pointer_click_drag_or_key_on_a_landed_page_ends_the_pages_claim_on_th
 #[test]
 fn the_same_inputs_before_the_item_lands_leave_the_page_free_to_move_off_the_toggle() {
     let sid = ServerId::UNSET;
-    for (what, kind) in acts_at_the_seat() {
+    for (what, kind) in acts_at_the_seat(hero::ELEM_MARK_WATCHED) {
         let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
         let _driver = NoDriver::set(true);
         let mut run = Running::open(bare(&guard, sid, "movie"));
@@ -932,7 +933,7 @@ fn the_same_inputs_before_the_item_lands_leave_the_page_free_to_move_off_the_tog
 #[test]
 fn an_input_in_the_landing_frame_before_the_seat_is_placed_does_not_end_the_claim() {
     let sid = ServerId::UNSET;
-    for (what, kind) in acts_at_the_seat() {
+    for (what, kind) in acts_at_the_seat(hero::ELEM_MARK_WATCHED) {
         let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
         let _driver = NoDriver::set(true);
         let mut run = Running::open(bare(&guard, sid, "movie"));
