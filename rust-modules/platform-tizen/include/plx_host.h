@@ -53,8 +53,9 @@
  *   application to end and returns at once. It never blocks. on_stopped then arrives once:
  *     - from the loop thread with clean = 1, after the application returned, its GL context is released
  *       and every callback that was running has returned; or
- *     - from the loop thread with clean = 0, when the application returned with a worker still inside
- *       firmware (the loop's own report: that worker holds what it holds); or
+ *     - from the loop thread with clean = 0, when the application returned without releasing everything: a
+ *       worker still inside firmware, a refused boot, or a panic caught on the loop thread (the loop's own
+ *       report: what it did not release stays held); or
  *     - from the library's deadline thread with clean = 0, when the loop has not finished within the
  *       deadline (a stalled swap); or
  *     - from the HOST thread with clean = 0, inside plx_host_stop itself, when the library could not start

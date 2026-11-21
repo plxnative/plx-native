@@ -1884,8 +1884,10 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   machine crates; this crate is runner code).
   - D1, the null window handle (landed): on Tizen `Surface::window()` returns null and `bind_window`,
     `grab_surface` and the other SDL-shaped `Shell` calls are stated no-ops, because the window is Ecore's and the
-    W9 build never initialises SDL's video subsystem; the calls that still read the handle (`textinput`'s focus read,
-    the on-screen-keyboard probe) take SDL's "no window" answer. Pinned by
+    W9 build never initialises SDL's video subsystem; of the calls that still read the handle,
+    `textinput`'s `has_focus` returns `None` for a null window before any SDL call (logged as `focus=?`), and only
+    the on-screen-keyboard probe (`keyboard_probe(win)`, called from `app/boot.rs`) takes SDL's "no window"
+    answer from `SDL_GetWindowFlags(NULL)`. Pinned by
     `the_real_sdl_answers_a_null_window_with_video_uninitialised` (`shell-sdl/src/text.rs`) and
     `a_null_window_has_no_focus_reading_and_asks_sdl_nothing` (`src/textinput.rs`); the Tizen crate's
     own tests run under `cargo test --lib -p plx_platform_tizen --features tizen`.
