@@ -1312,6 +1312,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate, **empty so far**: its library is
   `#![cfg(feature = "tizen")]` (its own feature, in no default set), its one dependency (the application) is `optional` and only
   `tizen` enables it, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
+  Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),
   and, since phase 9 (Player was the last), no legacy screens at all — every route mounts an owned
