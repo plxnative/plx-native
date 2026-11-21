@@ -18,6 +18,14 @@
 - **Not a required check.** `.github/workflows/tizen.yml` proves the library links and passes its checks; it is compile-only, and the
   emulator run is by hand.
 
+## State of the crate
+
+`plx_host.h` and the Rust types that mirror it (`rust-modules/platform-tizen/src/host_abi.rs`) are in. The three exported entry points
+are not yet defined in the crate (they land with its lifecycle part): until they are, the library has nothing to export, and `tizen-verify`
+(and so the CI job) fails on exactly that, naming the three missing functions: the check doing its job. (The Linux link itself has not been run by
+the lane that wrote this.) `tizen-abi` and the unit tests
+do not depend on the link and pass today.
+
 ## What is where
 
 | Path | What |
