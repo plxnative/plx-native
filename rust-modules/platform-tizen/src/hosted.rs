@@ -62,6 +62,9 @@ pub struct Hosted {
     said: AtomicUsize,
     /// `deliver` has handed the application the stop as a quit.
     quit_sent: AtomicBool,
+    /// The application was told it went to the background and has not been told it came back. Loop thread
+    /// only (`deliver`); atomic so that `new` stays `const`.
+    paused: AtomicBool,
 }
 
 impl Default for Hosted {
@@ -81,6 +84,7 @@ impl Hosted {
             dropped: AtomicUsize::new(0),
             said: AtomicUsize::new(0),
             quit_sent: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
         }
     }
 
@@ -211,14 +215,18 @@ impl Hosted {
                     sink.key(Some(action), None, edge);
                 }
                 Input::Pause => {
-                    sink.lifecycle(Lifecycle::WillBackground);
-                    sink.lifecycle(Lifecycle::DidBackground);
-                    plx_base::task::watchdog::disarm();
+                    // One transition is one DID edge: the application works and logs once per edge, and DID
+                    // alone is complete. A pause while paused is no transition.
+                    if !self.paused.swap(true, Ordering::SeqCst) {
+                        sink.lifecycle(Lifecycle::DidBackground);
+                        plx_base::task::watchdog::disarm();
+                    }
                 }
                 Input::Resume => {
-                    plx_base::task::watchdog::arm();
-                    sink.lifecycle(Lifecycle::WillForeground);
-                    sink.lifecycle(Lifecycle::DidForeground);
+                    if self.paused.swap(false, Ordering::SeqCst) {
+                        plx_base::task::watchdog::arm();
+                        sink.lifecycle(Lifecycle::DidForeground);
+                    }
                 }
             }
         }
@@ -229,6 +237,11 @@ impl Hosted {
         if self.gate.stopping() && !self.quit_sent.swap(true, Ordering::SeqCst) {
             sink.quit();
         }
+    }
+
+    /// A stop was requested (`plx_host_stop` closed the gate).
+    pub(crate) fn stopping(&self) -> bool {
+        self.gate.stopping()
     }
 
     /// Ask the host to run `job` on its main thread, through `run_on_host`, without waiting for it. `false`
@@ -618,7 +631,7 @@ mod tests {
                 let mut rec = Rec::default();
                 let mut states = Vec::new();
                 // pause, then resume, then pause again: armed state after each is what is asserted.
-                for (phase, expected_len) in [(Input::Pause, 2usize), (Input::Resume, 4), (Input::Pause, 6)] {
+                for (phase, expected_len) in [(Input::Pause, 1usize), (Input::Resume, 2), (Input::Pause, 3)] {
                     hosted.push(phase).unwrap();
                     hosted.deliver(&mut rec);
                     assert_eq!(rec.seen.len(), expected_len, "{:?}", rec.seen);
@@ -637,19 +650,43 @@ mod tests {
         assert_eq!(states, [false, true, false], "pause disarms, resume re-arms");
         assert_eq!(
             told,
-            [
-                "lifecycle WillBackground",
-                "lifecycle DidBackground",
-                "lifecycle WillForeground",
-                "lifecycle DidForeground",
-                "lifecycle WillBackground",
-                "lifecycle DidBackground",
-            ]
+            ["lifecycle DidBackground", "lifecycle DidForeground", "lifecycle DidBackground"]
         );
         hosted.stop(Duration::from_secs(30));
         w.wait_stopped(1);
         let armed_at_report = seen(|s| s.stopped[0].2);
         assert!(!armed_at_report, "the watchdog was disarmed when on_stopped ran");
+    }
+
+    /// **One transition is one event.** The application logs and works once per lifecycle edge it is sent
+    /// (`run::host_background`, `host_foreground`), and the DID edge alone is a complete transition (`Lifecycle`'s
+    /// doc: a platform that sends only DID background is enough on its own), so a pause is ONE `DidBackground`
+    /// and a resume ONE `DidForeground`. A host that reports the same state twice (the .NET `OnPause` and a
+    /// window event, a resume at launch before any pause) makes no second transition: a pause while paused and a
+    /// resume while running are dropped, and the watchdog is only touched by a real one.
+    #[test]
+    fn one_transition_is_one_event_and_a_repeat_is_not_a_transition() {
+        let w = World::new();
+        w.hosted.running.store(true, Ordering::SeqCst);
+        plx_base::task::watchdog::arm();
+        let mut rec = Rec::default();
+        // A resume before any pause (the host's resume at launch): nothing.
+        w.hosted.push(Input::Resume).unwrap();
+        w.hosted.deliver(&mut rec);
+        assert_eq!(rec.seen, Vec::<String>::new());
+        assert!(plx_base::task::watchdog::is_armed());
+        // Two pauses: one background edge, watchdog disarmed.
+        w.hosted.push(Input::Pause).unwrap();
+        w.hosted.push(Input::Pause).unwrap();
+        w.hosted.deliver(&mut rec);
+        assert_eq!(rec.seen, ["lifecycle DidBackground"]);
+        assert!(!plx_base::task::watchdog::is_armed());
+        // Two resumes: one foreground edge, watchdog armed again.
+        w.hosted.push(Input::Resume).unwrap();
+        w.hosted.push(Input::Resume).unwrap();
+        w.hosted.deliver(&mut rec);
+        assert_eq!(rec.seen, ["lifecycle DidBackground", "lifecycle DidForeground"]);
+        assert!(plx_base::task::watchdog::is_armed());
     }
 
     /// `post` is a bounded push that never blocks: before a start and after a stop it answers E_STATE, a bad
@@ -685,7 +722,7 @@ mod tests {
         assert_eq!(hosted.dropped(), refused);
         let mut rec = Rec::default();
         hosted.deliver(&mut rec);
-        assert_eq!(&rec.seen[..4], ["lifecycle WillBackground", "lifecycle DidBackground", "lifecycle WillForeground", "lifecycle DidForeground"]);
+        assert_eq!(&rec.seen[..2], ["lifecycle DidBackground", "lifecycle DidForeground"]);
         hosted.stop(Duration::from_secs(30));
         assert_eq!(hosted.post(&pause), host_abi::E_STATE, "stopping");
         go_tx.send(()).unwrap();
@@ -759,7 +796,7 @@ mod tests {
         w.hosted.deliver(&mut rec);
         assert_eq!(
             rec.seen,
-            ["key Some(Right) None Down", "key Some(Right) None Up", "lifecycle WillBackground", "lifecycle DidBackground", "key Some(Back) None Down"]
+            ["key Some(Right) None Down", "key Some(Right) None Up", "lifecycle DidBackground", "key Some(Back) None Down"]
         );
         plx_base::task::watchdog::arm();
     }

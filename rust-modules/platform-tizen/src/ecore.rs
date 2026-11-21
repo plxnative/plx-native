@@ -488,7 +488,16 @@ unsafe extern "C" fn key_cb(data: *mut c_void, _kind: c_int, event: *mut c_void)
 /// the log says so. The event body is not read.
 unsafe extern "C" fn focus_cb(data: *mut c_void, _kind: c_int, _event: *mut c_void) -> u8 {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        log(if data.is_null() { "ecore: window focus OUT" } else { "ecore: window focus IN" });
+        if data.is_null() {
+            log("ecore: window focus OUT");
+            // The up of a held key goes to whoever took the focus: release them here (see `keys::Decoder`).
+            let released = DECODER.lock().unwrap_or_else(|e| e.into_inner()).release_all();
+            for (action, edge) in released {
+                let _ = crate::HOSTED.push(crate::hosted::Input::Key(action, edge));
+            }
+        } else {
+            log("ecore: window focus IN");
+        }
     }));
     1
 }

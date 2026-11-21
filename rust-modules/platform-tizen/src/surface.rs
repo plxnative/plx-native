@@ -51,8 +51,15 @@ impl TizenShell {
     /// Ask the host's main thread to take `window` down. Dropped unrun (and the window left to the
     /// process's end) when the host has stopped the library or refuses the request.
     fn teardown(&self, mut window: Window) {
-        if !self.hosted.on_host(Box::new(move || window.destroy())) {
-            log("surface: the host did not take the window teardown; it lives until the process ends");
+        if self.hosted.on_host(Box::new(move || window.destroy())) {
+            return;
+        }
+        if self.hosted.stopping() {
+            // Not the host being slow: `plx_host_stop` closed the library's gate the moment it was called, and the
+            // contract is that `run_on_host` is never called after a stop (`plx_host.h`).
+            log("surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends");
+        } else {
+            log("surface: the host refused the window teardown; it lives until the process ends");
         }
     }
 }
@@ -240,6 +247,27 @@ mod tests {
         unsafe { surface.quit() };
         assert_eq!(seen(|s| s.tasks.len()), 1, "one teardown, however many quits");
         finish(&w, release);
+    }
+
+    /// **After the host stopped the library the window teardown is not asked for, and the log says why.** The
+    /// cause is the library's own gate, not a blocked host thread: `plx_host_stop` closes it at once, and
+    /// `run_on_host` is never called after a stop (the header's contract), so the window lives until the
+    /// process ends. The line names the stop; a refusal by the host is the other line.
+    #[test]
+    fn a_window_teardown_after_a_stop_is_not_asked_for_and_the_log_names_the_stop() {
+        let w = World::new();
+        w.hosted.stop(std::time::Duration::from_secs(1)); // closes the gate; no loop runs, so no deadline is armed
+        let shell = TizenShell { hosted: w.hosted };
+        let log = plx_base::eventlog::with_private_log(|| {
+            shell.teardown(Window::detached());
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert_eq!(seen(|s| s.tasks.len()), 0, "the host was asked for nothing");
+        assert!(
+            log.contains("surface: the host asked the library to stop, so the window teardown is not requested"),
+            "{log}"
+        );
+        assert!(!log.contains("refused"), "{log}");
     }
 
     /// The shell's hooks are the stated no-ops: nothing is released, nothing is a cursor swap. (The three the

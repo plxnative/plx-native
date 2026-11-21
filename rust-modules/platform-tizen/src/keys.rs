@@ -96,6 +96,15 @@ impl Decoder {
         Self { held: Vec::new() }
     }
 
+    /// Every held key released at once (the window lost focus): the up of each key that has an action, in the
+    /// order they went down. The held set is empty afterwards.
+    pub fn release_all(&mut self) -> Vec<(Action, Edge)> {
+        std::mem::take(&mut self.held)
+            .iter()
+            .filter_map(|name| lookup(name).flatten().map(|action| (action, Edge::Up)))
+            .collect()
+    }
+
     /// The press `name` makes, or `None` for a key with no action or a name the table does not list.
     pub fn decode(&mut self, name: &str, down: bool) -> Option<(Action, Edge)> {
         let edge = if down {
@@ -266,6 +275,20 @@ mod tests {
         assert_eq!(d.decode("XF86Color", false), None);
         assert_eq!(d.decode("XF86Mystery", true), None);
         assert_eq!(d.decode("XF86Mystery", false), None);
+    }
+
+    /// **Losing focus releases every held key**: the key-up goes to whatever took the focus, so without this the
+    /// first press after the focus returns would be a repeat with no down (SDL, the shared path, sends a release
+    /// for every held key when its window loses focus). Keys with no action have nothing to release.
+    #[test]
+    fn losing_focus_releases_every_held_key_once() {
+        let mut d = Decoder::new();
+        d.decode("Right", true);
+        d.decode("XF86Color", true);
+        d.decode("Return", true);
+        assert_eq!(d.release_all(), [(Action::Right, Edge::Up), (Action::Ok, Edge::Up)]);
+        assert_eq!(d.release_all(), [], "nothing is held any more");
+        assert_eq!(d.decode("Right", true), Some((Action::Right, Edge::Down)), "the next press is a fresh one");
     }
 
     #[test]

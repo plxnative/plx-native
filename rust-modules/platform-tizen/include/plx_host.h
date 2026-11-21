@@ -60,9 +60,12 @@
  *   The loop never waits on the host thread. Work that must run there (freeing the Ecore window when the
  *   application ends by itself) leaves as run_on_host(task, arg): the host queues task(arg) for its main
  *   thread, calls it there exactly once, and returns 0; any other return means the request was refused and
- *   the library drops it. It is never called after a stop was requested, so a host that stopped the library
- *   owns the window's end with the process's. A task already queued is still run by the host after
- *   on_stopped(.., 1): it touches only library memory, which stays mapped for ever.
+ *   the library drops it. It is never called after a stop was requested: plx_host_stop closes the library's
+ *   gate at once, whether or not the host thread is busy, so the window of a host-initiated stop is NOT torn
+ *   down by the library and lives until the process ends. (A teardown that waited for on_stopped could not be
+ *   requested either: the host thread is the one returning from OnTerminate.) A task queued before a stop
+ *   (the window teardown of an application that ended by itself) calls Ecore, so the host must run its queue
+ *   before it shuts EFL down; the code and library memory it uses stay mapped for ever.
  *
  * LAUNCH JSON (UTF-8, copied; unknown keys are ignored)
  *   required   "payload_dir"       string, absolute: the package's read-only payload (res/: fonts, icons)
@@ -83,6 +86,8 @@
  *   the queue was full and the event was dropped; PLX_HOST_E_STATE, that the library is not running (not
  *   started, or a stop was requested); PLX_HOST_E_ARGS, a NULL event, a size below PLX_HOST_EVENT_V1_SIZE or
  *   an unknown kind.
+ *   A pause or a resume is one transition: the application is told once per change of state. A pause while
+ *   paused, and a resume while running (the host's resume at launch), are accepted and make no event.
  */
 #ifndef PLX_HOST_H
 #define PLX_HOST_H
