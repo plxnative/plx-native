@@ -23,7 +23,8 @@ pub enum LocaleReply { NoPlatform, Unavailable, Reply(String) }
 
 /// What the lower layers read from the platform, in six groups. Installed once ([`install`]) before
 /// anything reads it, and read only by `tv`'s own modules, so no other module can issue a verb the
-/// interfaces below do not offer. The window, the bus pump and the frame probe are NOT here: only
+/// interfaces below do not offer. The one exception is [`layout`](Services::layout): it is no verb, and
+/// the application's `Platform::install_services` reads it to publish it into `plx_base::paths`. The window, the bus pump and the frame probe are NOT here: only
 /// the loop reads them, so they belong to the application's own `Platform`.
 ///
 /// Every hook is required. A platform states each field of each group, and a named `NONE` is that
@@ -34,8 +35,9 @@ pub struct Services {
     pub secure: SecureHooks,
     pub system: SystemHooks,
     pub storage: StorageHooks,
-    /// Where the platform's payload and state live. `run_application` publishes it into `plx_base::paths`
-    /// (the one group `tv` does not keep: `paths` is below it and is what reads it), right after the install.
+    /// Where the platform's payload and state live. `Platform::install_services` publishes it into
+    /// `plx_base::paths`, right after the install: the one group `tv` itself never reads, because `paths`
+    /// is below `tv` and is what reads it.
     pub layout: Layout,
     pub legacy_webos_media: LegacyWebosMedia,
 }

@@ -369,7 +369,7 @@ the port fills at boot. `tv::Services` is a table of function pointers and state
 that reads it. With nothing installed (host unit
 tests, where nothing calls `plex_run`) `tv::Services::HOST_TEST` answers what the host arms answered before; a
 shipping build that reaches it logs `tv: port not installed - using the no-port defaults` once.
-Only `tv`'s own modules read the table. Two things leave it: the sink, through
+Only `tv`'s own modules read the table, except its `layout` group, which `Platform::install_services` reads to publish into `plx_base::paths`. Two things leave it: the sink, through
 `tv::sink::installed()` (rule `sink` of `ci/check-deps.sh` fences naming `VideoSink` or `installed` to `media`'s
 `player/`, `os`'s `tv/` and `tv.rs`, `platform-webos`'s `webos/` and `port.rs`, `platform-desktop`'s `lib.rs` (each platform's table names its own
 sink) and `app/adapters/backends.rs`; those are three paths, not the platform crates, so `system.rs`, `keymanager.rs`, `webos.rs` and the `lib.rs` of
