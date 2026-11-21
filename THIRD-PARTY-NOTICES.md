@@ -569,10 +569,11 @@ Not compiled into this library at all: the webOS port (`libhelpers.so.2`, `rust-
 service binary (`luna-service2` and `glib-2.0`, `rust-modules/os/src/storage_service/bus.rs:23,42`), Sentry Native (declared for 32-bit ARM Linux
 only, `rust-modules/telemetry/src/telemetry/native.rs:790`) and zlib (the `lab-diagnostics` feature, `rust-modules/base/src/diag.rs:7`, which
 `TIZEN_FEATURES` does not enable). EGL lookups by `rust-modules/gfx/src/egl.rs:110` only look at an EGL already mapped (`RTLD_NOLOAD`) and open nothing.
-The .NET host adds `bin/PlxHost.dll`, the project's own code under the project's own licence; `PlxHost.csproj` references `Tizen.NET` with
-`ExcludeAssets=Runtime` (the platform provides it, so no `Tizen.NET` assembly is copied from that package) and `Tizen.NET.Sdk` is a build-time
-package; whether the transitive `Tizen.NET.API8` contributes any assembly to `bin/` has not been read from a built package, and `verify_tpk`
-(`REQUIRED_IN_TPK`) requires `bin/PlxHost.dll` without forbidding others. Every other heading of this file has exactly one disposition for the `.tpk`:
+The package carries ONLY our own `bin/PlxHost.dll` (and its `bin/PlxHost.pdb`) besides `lib/libplx.so`: `PlxHost.deps.json` of the emulator-run package
+gives runtime assets for `PlxHost/1.0.0` alone, and lists `Tizen.NET` 8.0.0.15631, `Tizen.NET.API8` 8.0.0.15631, `Microsoft.NETCore.Platforms` 3.1.0 and
+`Tizen.NET.Sdk` 1.1.9 as referenced packages with no runtime or native assets: the device's runtime provides them, they are not carried. `verify_tpk`
+(`tizen/package.py`, `ALLOWED_BIN`, `ALLOWED_LIB`) refuses a package with any other file under `bin/` or `lib/`, so a new assembly or native library
+needs an entry in this section first. Every other heading of this file has exactly one disposition for the `.tpk`:
 
 - **1.1 FFmpeg: does not apply.** Not linked and not staged; the library's attempt to open its own FFmpeg names finds nothing.
 - **1.2 Native ASS rendering: does not apply.** libass, FriBidi, HarfBuzz and libunibreak are not linked or staged; the attempt to open `libass-plx*`

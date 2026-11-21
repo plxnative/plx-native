@@ -235,6 +235,23 @@ class PackageCheck(unittest.TestCase):
                 with self.assertRaisesRegex(package.PackageError, re.escape(gone)):
                     package.verify_tpk(tpk, so, None, None)
 
+    def test_the_exact_bin_and_lib_set_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "bin/PlxHost.pdb", "PlxHost.deps.json", "bin/", "lib/"))
+            package.verify_tpk(tpk, so, None, None)
+
+    def test_an_extra_assembly_is_refused_until_it_has_a_notices_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "bin/Foo.dll"))
+            with self.assertRaisesRegex(package.PackageError, r"bin/Foo\.dll.*section 2\.8"):
+                package.verify_tpk(tpk, so, None, None)
+
+    def test_an_extra_native_library_is_refused_until_it_has_a_notices_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "lib/libfoo.so"))
+            with self.assertRaisesRegex(package.PackageError, r"lib/libfoo\.so.*section 2\.8"):
+                package.verify_tpk(tpk, so, None, None)
+
     def test_missing_member_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), [n for n in package.REQUIRED_IN_TPK if n != "res/OFL.txt"])

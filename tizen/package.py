@@ -65,6 +65,11 @@ LICENSE_DOCS = ("LICENSE", "LICENSING.md", "TRADEMARKS.md")
 # The generated, gitignored files of the host project, removed before every staging.
 GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", "res/appfont.ttf", "res/appfont-bold.ttf", "res/OFL.txt",
              f"res/{NOTICES_FILE}", "res/licenses", f"shared/res/{PACKAGE_ID}.png")
+# What bin/ and lib/ may hold: nothing but our own assembly (and its symbols) and the library. Tizen.NET, Tizen.NET.API8 and the SDK are
+# referenced and provided by the device's runtime, not carried (PlxHost.deps.json lists them with no runtime assets), and
+# THIRD-PARTY-NOTICES.md section 2.8 says so: a new assembly or native library needs an entry there FIRST.
+ALLOWED_BIN = ("bin/PlxHost.dll", "bin/PlxHost.pdb")
+ALLOWED_LIB = ("lib/libplx.so",)
 REQUIRED_IN_TPK = ("tizen-manifest.xml", "bin/PlxHost.dll", "lib/libplx.so", "res/appfont.ttf", "res/OFL.txt",
                    f"res/{NOTICES_FILE}", "res/licenses/LICENSE", "res/licenses/Zlib.txt", "res/licenses/FreeType.txt",
                    "author-signature.xml", "signature1.xml")
@@ -227,6 +232,11 @@ def verify_tpk(tpk: Path, so: Path, mock: str | None, log: str | None) -> None:
             if (want is not None) != (name in names):
                 raise PackageError(f"{tpk.name} {'lacks' if want is not None else 'carries'} {name} "
                                    f"{'although it was asked for' if want is not None else 'although it was not asked for (stale staging?)'}")
+        for prefix, allowed in (("bin/", ALLOWED_BIN), ("lib/", ALLOWED_LIB)):
+            extra = sorted(n for n in names if n.startswith(prefix) and not n.endswith("/") and n not in allowed)
+            if extra:
+                raise PackageError(f"{tpk.name} carries {', '.join(extra)} besides {', '.join(allowed)}: a new assembly or native library "
+                                   f"needs a THIRD-PARTY-NOTICES.md section 2.8 entry first (and an update of ALLOWED_BIN/ALLOWED_LIB)")
         if package.read("lib/libplx.so") != so.read_bytes():
             raise PackageError(f"the packaged libplx.so differs from {so}")
     print(f"package: {tpk} ({tpk.stat().st_size} bytes)")
