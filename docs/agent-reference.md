@@ -226,7 +226,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   (`HOSTSIM_SUITE`: all of `UNIT_SUITE` except `plx_net`, `plx_ui`, `plx_appkit`, `plx_screens`,
   `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
   same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
-  EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`; `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
+  EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`, which the `tizen-so` job of `.github/workflows/tizen.yml` runs (the only CI job that does, and only for a change under that workflow's path filter); `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
   which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
   configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
   default pass and cannot fail it — which is how the prime-livelock regression

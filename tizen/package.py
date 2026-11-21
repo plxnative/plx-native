@@ -55,10 +55,18 @@ PAYLOAD = (
     ("pkg/OFL.txt", "res/OFL.txt"),
     ("pkg/dev/largeIcon.png", f"shared/res/{PACKAGE_ID}.png"),
 )
+# The notices travel WITH the package, as they do in the .ipk (Makefile, APP_FILES and LICENSE_FILES): this package statically links SDL2 and
+# SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown in the documentation shipped with the product),
+# so a copy in the repository does not discharge it for someone who received only the .tpk. THIRD-PARTY-NOTICES.md names its licence texts
+# as `licenses/<name>`, so they are staged next to it: res/THIRD-PARTY-NOTICES.md and res/licenses/ (the project's own LICENSE, LICENSING.md
+# and TRADEMARKS.md and every licenses/*.txt, the set the .ipk's `licenses/` holds).
+NOTICES_FILE = "THIRD-PARTY-NOTICES.md"
+LICENSE_DOCS = ("LICENSE", "LICENSING.md", "TRADEMARKS.md")
 # The generated, gitignored files of the host project, removed before every staging.
 GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", "res/appfont.ttf", "res/appfont-bold.ttf", "res/OFL.txt",
-             f"shared/res/{PACKAGE_ID}.png")
+             f"res/{NOTICES_FILE}", "res/licenses", f"shared/res/{PACKAGE_ID}.png")
 REQUIRED_IN_TPK = ("tizen-manifest.xml", "bin/PlxHost.dll", "lib/libplx.so", "res/appfont.ttf", "res/OFL.txt",
+                   f"res/{NOTICES_FILE}", "res/licenses/LICENSE", "res/licenses/Zlib.txt", "res/licenses/FreeType.txt",
                    "author-signature.xml", "signature1.xml")
 
 
@@ -129,6 +137,18 @@ def msbuild_escape(value: str) -> str:
     return value
 
 
+def stage_notices(root: Path, host: Path) -> None:
+    """Copy the notices and every licence text into the host project's `res/` (see NOTICES_FILE)."""
+    sources = [(root / NOTICES_FILE, host / "res" / NOTICES_FILE)]
+    sources += [(root / name, host / "res/licenses" / name) for name in LICENSE_DOCS]
+    sources += [(path, host / "res/licenses" / path.name) for path in sorted((root / "licenses").glob("*.txt"))]
+    for src, target in sources:
+        if not src.is_file():
+            raise PackageError(f"{src.relative_to(root)} is missing from the checkout")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, target)
+
+
 def stage(root: Path, so: Path, mock: str | None, log: str | None) -> Path:
     """Fill the host project. Returns the project directory."""
     host = root / HOST_DIR
@@ -148,6 +168,7 @@ def stage(root: Path, so: Path, mock: str | None, log: str | None) -> Path:
             raise PackageError(f"{source} is missing from the checkout")
         (host / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, host / target)
+    stage_notices(root, host)
     if mock is not None:
         (host / "res/dev-boot.json").write_text(dev_boot_json(mock_host(mock)))
         print(f"dev boot: the mock Plex server http://{mock_host(mock)} (res/dev-boot.json; a placeholder token, never a credential)")

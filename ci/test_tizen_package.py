@@ -6,6 +6,7 @@ the part a CI machine can prove. The refusal must NAME the missing variables and
 """
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 import unittest.mock
@@ -30,6 +31,9 @@ def fake_root(tmp: Path) -> Path:
         (root / source).parent.mkdir(parents=True, exist_ok=True)
         (root / source).write_bytes(b"payload " + source.encode())
     (root / package.HOST_DIR).mkdir(parents=True)
+    for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, "licenses/Zlib.txt", "licenses/FreeType.txt"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(b"notice " + name.encode())
     return root
 
 
@@ -141,6 +145,20 @@ class DotnetBuild(unittest.TestCase):
         self.assertFalse(any("p" == a or "q" == a for a in seen["command"]), "a password is on the command line")
 
 
+class HostProject(unittest.TestCase):
+    def test_every_package_reference_is_an_exact_version(self):
+        # `8.0.*`, `[8.0,)` or a missing version would let a restore on a later day build a different host than the one the emulator ran
+        text = (HERE.parent / "tizen" / "host" / "PlxHost" / "PlxHost.csproj").read_text(encoding="utf-8")
+        refs = re.findall(r'<PackageReference\s+Include="([^"]+)"([^>]*)>', text)
+        self.assertEqual(sorted(name for name, _ in refs), ["Tizen.NET", "Tizen.NET.Sdk"])
+        for name, rest in refs:
+            version = re.search(r'Version="([^"]*)"', rest)
+            self.assertIsNotNone(version, f"{name} has no Version attribute")
+            self.assertRegex(version.group(1), r"^[0-9]+(\.[0-9]+){2,3}$", f"{name} is not an exact version")
+        pinned = dict((name, re.search(r'Version="([^"]*)"', rest).group(1)) for name, rest in refs)
+        self.assertEqual(pinned, {"Tizen.NET": "8.0.0.15631", "Tizen.NET.Sdk": "1.1.9"})
+
+
 class Staging(unittest.TestCase):
     def test_stage_writes_the_payload_and_the_asked_for_files_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,6 +176,36 @@ class Staging(unittest.TestCase):
             host = package.stage(root, so, None, None)  # a stale dev-boot of the last staging must not ride along
             self.assertFalse((host / "res/dev-boot.json").exists())
             self.assertFalse((host / "res/log-host.txt").exists())
+
+    def test_the_notices_and_licence_texts_are_staged_next_to_one_another(self):
+        # THIRD-PARTY-NOTICES.md names its texts as `licenses/<name>`; the package must hold both, the FreeType credit and zlib among them
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_root(Path(tmp))
+            so = Path(tmp) / "libplx.so"
+            so.write_bytes(b"elf")
+            host = package.stage(root, so, None, None)
+            self.assertEqual((host / "res/THIRD-PARTY-NOTICES.md").read_bytes(), b"notice THIRD-PARTY-NOTICES.md")
+            for name in ("LICENSE", "LICENSING.md", "TRADEMARKS.md", "Zlib.txt", "FreeType.txt"):
+                self.assertTrue((host / "res/licenses" / name).is_file(), name)
+            (root / "licenses/Zlib.txt").unlink()  # a text that went away must not ride along from the last staging
+            (root / "licenses/Zlib.txt").parent.joinpath("Extra.txt").write_bytes(b"x")
+            host = package.stage(root, so, None, None)
+            self.assertFalse((host / "res/licenses/Zlib.txt").exists())
+            self.assertTrue((host / "res/licenses/Extra.txt").is_file())
+
+    def test_a_checkout_without_the_notices_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_root(Path(tmp))
+            so = Path(tmp) / "libplx.so"
+            so.write_bytes(b"elf")
+            (root / package.NOTICES_FILE).unlink()
+            with self.assertRaisesRegex(package.PackageError, "THIRD-PARTY-NOTICES.md is missing"):
+                package.stage(root, so, None, None)
+
+    def test_the_real_checkout_has_every_file_the_staging_copies(self):
+        root = HERE.parent
+        for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, "licenses/Zlib.txt", "licenses/FreeType.txt"):
+            self.assertTrue((root / name).is_file(), name)
 
     def test_stage_refuses_a_missing_library(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,6 +227,13 @@ class PackageCheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK)
             package.verify_tpk(tpk, so, None, None)
+
+    def test_a_package_without_the_notices_is_refused(self):
+        for gone in ("res/THIRD-PARTY-NOTICES.md", "res/licenses/FreeType.txt", "res/licenses/Zlib.txt"):
+            with tempfile.TemporaryDirectory() as tmp:
+                tpk, so = self.make(Path(tmp), [n for n in package.REQUIRED_IN_TPK if n != gone])
+                with self.assertRaisesRegex(package.PackageError, re.escape(gone)):
+                    package.verify_tpk(tpk, so, None, None)
 
     def test_missing_member_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:

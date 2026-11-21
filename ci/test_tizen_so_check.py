@@ -5,6 +5,7 @@ The real `verify` reads a linked libplx.so with readelf/nm and needs Linux; thes
 as text, so each rule is proven RED here (a bad input names the rule) and the clean input GREEN, on any host that runs `make check`.
 """
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,7 +114,7 @@ NM = """
 
 
 def verify(**overrides):
-    args = dict(readelf_d=READELF_D, readelf_syms=READELF_SYMS, nm_local=NM, header_text=HEADER, cs_text=CSHARP, max_version="2.39")
+    args = dict(readelf_d=READELF_D, readelf_syms=READELF_SYMS, nm_local=NM, header_text=HEADER, cs_text=CSHARP, max_version=checker.DEFAULT_MAX_GLIBC)
     args.update(overrides)
     return checker.verify_object(**args)
 
@@ -261,6 +262,48 @@ class VerifyRules(unittest.TestCase):
         problems = verify(readelf_syms=syms, max_version="2.38")
         self.assertTrue(any("GLIBC_2.39 exceeds" in p for p in problems), problems)
         self.assertEqual(verify(readelf_syms=syms, max_version="2.38", allow_new_glibc=True), [])
+
+    def test_an_es3_gl_import_is_refused(self):
+        # glBindVertexArray is OpenGL ES 3.0 (the desktop simulator's path): the television's libGLESv2 may not answer it, and BIND_NOW makes
+        # one missing name the whole library's dlopen failure
+        for name in ("glBindVertexArray", "glBlitFramebuffer", "glGenVertexArrays", "glTexImage3D"):
+            syms = READELF_SYMS + f"     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND {name}\n"
+            problems = verify(readelf_syms=syms)
+            self.assertTrue(any(name in p and "allowlist" in p for p in problems), (name, problems))
+
+    def test_every_gl_function_the_renderer_calls_on_the_tizen_build_is_es2_core(self):
+        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `hostsim` are the simulator's (VAOs, the blit)
+        root = Path(__file__).resolve().parent.parent / "rust-modules"
+        declared = set()
+        for path in list(root.glob("gfx/src/*.rs")) + [root / "base/src/surface.rs"]:
+            text = path.read_text(encoding="utf-8")
+            # drop every item that follows a `#[cfg(feature = "hostsim")]` attribute: the next `extern "C" {...}` block or `fn ...}`
+            text = re.sub(r'#\[cfg\(feature = "hostsim"\)\]\s*(?:pub\s+)?(?:unsafe\s+)?(?:extern "C"\s*)?(?:fn[^{]*)?\{.*?\n\}\n', "", text, flags=re.S)
+            declared |= set(re.findall(r"\bfn (gl[A-Z][A-Za-z0-9]*)\s*\(", text))
+        self.assertIn("glClear", declared)
+        self.assertEqual(sorted(declared - checker.GLES2_CORE), [])
+
+    def test_gles2_core_names_are_plain_gl_functions(self):
+        self.assertTrue(all(re.fullmatch(r"gl[A-Z][A-Za-z0-9]*", n) for n in checker.GLES2_CORE))
+        self.assertNotIn("glBindVertexArray", checker.GLES2_CORE)
+
+    def test_glibc_private_is_refused_whatever_its_name(self):
+        syms = READELF_SYMS + "     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND __libc_enable_secure@GLIBC_PRIVATE (6)\n"
+        problems = verify(readelf_syms=syms)
+        self.assertTrue(any("__libc_enable_secure@GLIBC_PRIVATE" in p for p in problems), problems)
+
+    def test_static_tls_is_refused(self):
+        problems = verify(static_tls=True)
+        self.assertTrue(any("static TLS" in p for p in problems), problems)
+        both = verify(static_tls=True, text_relocations=True)
+        self.assertTrue(any("static TLS" in p for p in both) and any("text relocations" in p for p in both), both)
+
+    def test_the_default_ceiling_is_the_emulator_images_glibc(self):
+        self.assertEqual(checker.DEFAULT_MAX_GLIBC, "2.40")
+        at = READELF_SYMS + "     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memfd_create@GLIBC_2.40 (5)\n"
+        self.assertEqual(verify(readelf_syms=at), [])
+        over = READELF_SYMS + "     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memfd_create@GLIBC_2.41 (5)\n"
+        self.assertTrue(any("GLIBC_2.41 exceeds" in p for p in verify(readelf_syms=over)))
 
 
 if __name__ == "__main__":

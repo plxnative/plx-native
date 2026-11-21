@@ -15,8 +15,9 @@ name: Tizen library CI
 # application behind one platform crate (a new `extern` symbol anywhere in it is this link's undefined symbol), as simulators.yml's is for the
 # same reason. Markdown under rust-modules is not.
 #
-# THE RUNNER IS PINNED to ubuntu-24.04, not `-latest`: the glibc ceiling (`PLX_MAX_GLIBC`, default 2.39) is that image's, and a runner image
-# that moved on would silently raise the library's floor. The Tizen TV 10.0 emulator image carries glibc 2.40.
+# THE RUNNER IS PINNED to ubuntu-24.04 (glibc 2.39), not `-latest`: the library's glibc symbol floor is the build host's, and a runner image
+# that moved on past the ceiling (`PLX_MAX_GLIBC`, default 2.40, the Tizen TV 10.0 emulator image's glibc) would stop the check, loudly. The
+# pin keeps the link reproducible; the ceiling is what refuses a library the television's glibc could not load.
 
 on:
   push:

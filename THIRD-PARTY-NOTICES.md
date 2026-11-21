@@ -536,11 +536,31 @@ host, a request to that host starts there instead of repeating the handshake the
 redirect is a request of its own, verified against the television's own store, and is offered this
 file only if its target is itself a `*.plex.direct` name that fails the same way.
 
+### 2.8 The Tizen package: SDL2, SDL2_ttf and FreeType, statically linked into `libplx.so`
+
+This section applies to the **Tizen** package (`PlxNative-x86_64.tpk`, built by `make PLATFORM=tizen tizen-tpk`; `docs/tizen.md`), not to the
+webOS `.ipk`. A Tizen television carries no SDL, so that package links its own, statically, into its one native library
+`lib/libplx.so`, and exports none of it. Both are fetched at build time from the pins in `ci/dependencies.json` (`sdl2`, `sdl2-ttf`: the
+upstream release archives and their sha256), compiled unaltered by `tizen/build-sdl.sh`, and are not kept in this repository:
+
+| Component | Version | Licence | Note |
+|---|---|---|---|
+| SDL2 | 2.32.10 | Zlib (`licenses/Zlib.txt`) | Copyright (C) 1997-2025 Sam Lantinga and contributors (surface and dummy-video half only; SDL never opens a window in this package) |
+| SDL2_ttf | 2.24.0 | Zlib (`licenses/Zlib.txt`) | Copyright (C) 1997-2025 Sam Lantinga and contributors; built without HarfBuzz |
+| FreeType | the copy bundled inside the SDL2_ttf 2.24.0 archive (`external/freetype`); its version was not read from a build | Elected FreeType License; contributed MIT and Zlib code (`licenses/FreeType.txt`, `licenses/Zlib.txt`) | Credit required by the FreeType License, given below |
+
+Portions of this software are copyright © The FreeType Project (https://freetype.org). All rights reserved.
+
+This package carries this file as `res/THIRD-PARTY-NOTICES.md` and the licence texts it names as `res/licenses/` (the same set section 5 lists
+for the `.ipk`), and `tizen/package.py` refuses a package without them. The webOS-package sections of this file (1 to 7) do not otherwise
+describe it: it has no FFmpeg, libass, Sentry Native or bundled CA roots; the Rust crates of section 2.4 are the same code, built for
+`x86_64-unknown-linux-gnu`.
+
 ---
 
 ## 3. Dynamically linked, not redistributed
 
-The libraries below are part of your television's software. This package contains no copy of
+*This section describes the webOS package.* The libraries below are part of your television's software. This package contains no copy of
 them; PlxNative loads them at run time. Their upstream terms and the applicable GPL linking basis must be assessed separately; absence
 of a bundled copy alone does not establish that no obligation applies.
 
@@ -556,7 +576,7 @@ of a bundled copy alone does not establish that no obligation applies.
 | libwayland-client | 0.3.0 | MIT | Copyright © 2008-2012 Kristian Høgsberg; © 2010-2012 Intel Corporation; © 2011 Benjamin Franzke; © 2012 Collabora, Ltd. The licence of *this LG build specifically* was not read off the device |
 | luna-service2 | 3.21.2 | Apache-2.0 | Licence taken from the webOS OSE upstream project; not read off this LG build |
 | libgcc_s | the television's own | GPL-3.0-or-later WITH GCC-exception-3.1 | Version not determined; its exported symbol versions stop at `GCC_4.7.0`. Exact source and applicable Runtime Library Exception require audit |
-| FreeType | libtool 6.16.0, i.e. release 2.9.0 (inferred from the so-version, not read from the binary) | FTL OR GPL-2.0-or-later | **Not** linked by PlxNative — reached only inside the television's own SDL2_ttf. Credit given voluntarily: *Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.* |
+| FreeType | libtool 6.16.0, i.e. release 2.9.0 (inferred from the so-version, not read from the binary) | FTL OR GPL-2.0-or-later | **Not** linked by the webOS package of PlxNative — reached only inside the television's own SDL2_ttf (the Tizen package links its own FreeType, section 2.8). Credit given voluntarily: *Portions of this software are copyright © The FreeType Project (www.freetype.org). All rights reserved.* |
 
 ---
 
@@ -656,4 +676,5 @@ and `ci/check-packaged-elf.py`, which is what proves the old archive is absent f
 then-current MIT grant. That original grant and Gleb Linnik notice are preserved in
 `licenses/PlxNative-historical-MIT.txt`; no ownership transfer is claimed.
 
-The repository carries no copy of the SDL2, GLES2 or KHR headers; `include/` holds only the project's own `ass.h` facade.
+The repository carries no copy of the SDL2, GLES2 or KHR headers or sources; `include/` holds only the project's own `ass.h` facade. The Tizen
+package's SDL2, SDL2_ttf and FreeType (section 2.8) are fetched by pinned hash at build time, like the other pinned C sources.

@@ -17,10 +17,12 @@
     <RootNamespace>PlxHost</RootNamespace>
     <LangVersion>8.0</LangVersion>
   </PropertyGroup>
+  <!-- Exact versions, the ones every emulator run restored (obj/project.assets.json); Tizen.NET.API8 comes in transitively. Not sha256-pinned:
+       NuGet resolves them from nuget.org (docs/tizen.md, Toolchain). -->
   <ItemGroup>
-    <PackageReference Include="Tizen.NET" Version="8.0.*">
+    <PackageReference Include="Tizen.NET" Version="8.0.0.15631">
       <ExcludeAssets>Runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Tizen.NET.Sdk" Version="1.1.*" />
+    <PackageReference Include="Tizen.NET.Sdk" Version="1.1.9" />
   </ItemGroup>
 </Project>

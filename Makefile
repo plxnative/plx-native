@@ -219,7 +219,7 @@ QUERY_GOALS = print-flavor print-appid print-appdir print-rundir print-eventlog 
               print-simbin print-app-files print-deploy-files print-sentry-handler print-ffmpeg-staged \
               print-sentry-project print-bench-config print-disk-entries \
               print-subs-font-files print-rust-toolchain print-rust-codegen print-cargo-env \
-              print-platform print-rust-target
+              print-platform print-rust-target print-tizen-config
 print-flavor:   ; @echo '$(FLAVOR)'
 print-appid:    ; @echo '$(APPID)'
 print-appdir:   ; @echo '$(APPDIR)'
@@ -865,6 +865,9 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 #     deleted `pkg/plxnative` and rewrote the stamp to `+profile:tvdev` (2026-10-24): it had been missed
 #     when `test-hostsim` and `check-nodef` were listed. Each such goal builds a cargo tree under
 #     `rust-modules/` or runs a script, and none of them reads what the stamp guards.
+#   * The TIZEN goals (`tizen-*`, `print-tizen-config`; mk/platform-tizen.mk, read only under PLATFORM=tizen) build a host library under
+#     `tizen/` and `rust-modules/target-tizen` and read `pkg/` fonts only. `make PLATFORM=tizen tizen-abi` after a
+#     `make ARM_PROFILE=release deploy` deleted the release-built binary (a reviewer's find on the Tizen PR): ci/test_arm_profile.py pins them.
 #   * TV-CONTROL goals: `kill`, `run`, `run-stream`, `verify-deploy`, `uninstall`, `fetch-profile` and
 #     `softfloat-probe` each have `tv-lock-require` as their one prerequisite and an ssh/scp recipe, and
 #     `tv-lock-require` itself is a shell call, so they build and ship nothing. `tools/tv-session.sh`
@@ -882,7 +885,7 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk
 PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
 # `PLAYBACK_BACKENDS=none` builds no television package. It is refused HERE, at parse time and before
 # the stamp reset below: a recipe-level refusal ran after that reset, so a mistyped

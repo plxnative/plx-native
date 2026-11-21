@@ -88,6 +88,8 @@ tizen/host/PlxHost/lib/
 tizen/host/PlxHost/res/appfont.ttf
 tizen/host/PlxHost/res/appfont-bold.ttf
 tizen/host/PlxHost/res/OFL.txt
+tizen/host/PlxHost/res/THIRD-PARTY-NOTICES.md
+tizen/host/PlxHost/res/licenses/
 tizen/host/PlxHost/res/dev-boot.json
 tizen/host/PlxHost/res/log-host.txt
 tizen/host/PlxHost/shared/res/plxntizen0.png

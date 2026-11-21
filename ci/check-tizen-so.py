@@ -17,14 +17,16 @@ with the build host's binutils (`readelf`, `nm`) and needs Linux:
   * DT_NEEDED is an allowlist, not a deny-list: the C runtime, libgcc_s, and libGLESv2.so.2 (which must be there: the renderer's GL imports
     are bound at link time, decision D3 of the Tizen plan). A libSDL2, libwayland-*, libudev ... would mean the static SDL link did not
     happen or the configure picked a library up from the build machine that the television may not have;
-  * SONAME is libplx.so, and no text relocation (a non-PIC object was linked in);
-  * every undefined dynamic symbol is the loader's (a versioned glibc/libgcc symbol), an unversioned `gl*` (libGLESv2 has no symbol
-    versions), or one of the weak toolchain hooks; anything else (`SDL_*`, `TTF_*`, `ecore_*`, `egl*`, `wl_*`) fails: the library is loaded
+  * SONAME is libplx.so, and neither a text relocation (TEXTREL) nor a static TLS flag (STATIC_TLS): a non-PIC object was linked in;
+  * every undefined dynamic symbol is the loader's (a versioned glibc/libgcc symbol, never GLIBC_PRIVATE), an unversioned OpenGL ES 2.0
+    core function (GLES2_CORE; libGLESv2 has no symbol versions; an ES 3.0 name such as glBindVertexArray is refused), or one of the weak
+    toolchain hooks; anything else (`SDL_*`, `TTF_*`, `ecore_*`, `egl*`, `wl_*`) fails: the library is loaded
     BIND_NOW and one missing symbol stops `dlopen` of the whole library;
   * the exported (defined, global) symbols equal the header's `plx_host_*` names and the host's DllImport names, no more and no fewer;
   * the SDL, SDL_ttf and FreeType code the text path calls is INSIDE the object (a local symbol) and none of it is exported;
-  * the highest `GLIBC_x.y` symbol version needed is at most PLX_MAX_GLIBC (default 2.39: the emulator image's glibc is 2.40, the CI
-    runner's 2.39). PLX_ALLOW_NEW_GLIBC=1 reports instead of failing.
+  * the highest `GLIBC_x.y` symbol version needed is at most PLX_MAX_GLIBC (default 2.40, the emulator image's glibc, the newest
+    target we know; the CI runner's is 2.39, so a library linked there is below the ceiling with room to spare and the ceiling only
+    catches a host newer than the image). PLX_ALLOW_NEW_GLIBC=1 reports instead of failing.
 
 Standard library only; Python 3.10 or newer.
 """
@@ -39,13 +41,36 @@ from pathlib import Path
 
 PREFIX = "plx_host_"
 SONAME = "libplx.so"
-DEFAULT_MAX_GLIBC = "2.39"
+DEFAULT_MAX_GLIBC = "2.40"  # the emulator image's glibc; the CI runner (ubuntu-24.04) links against 2.39, below it
 
 NEEDED_ALLOWED = (
     "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "libutil.so.1", "libgcc_s.so.1",
     "libGLESv2.so.2", "ld-linux-x86-64.so.2",
 )
 NEEDED_REQUIRED = ("libGLESv2.so.2", "libc.so.6")
+# The OpenGL ES 2.0 core entry points (Khronos gl2.h): the whole set libGLESv2 answers unversioned on every Tizen image. A `gl*` outside it
+# (glBindVertexArray, glGenVertexArrays, glBlitFramebuffer, glTexImage3D ... are ES 3.0) may be absent from the television's driver, and
+# the loader binds every import at dlopen (BIND_NOW), so one missing name stops the whole library.
+GLES2_CORE = frozenset("""
+glActiveTexture glAttachShader glBindAttribLocation glBindBuffer glBindFramebuffer glBindRenderbuffer glBindTexture glBlendColor
+glBlendEquation glBlendEquationSeparate glBlendFunc glBlendFuncSeparate glBufferData glBufferSubData glCheckFramebufferStatus glClear
+glClearColor glClearDepthf glClearStencil glColorMask glCompileShader glCompressedTexImage2D glCompressedTexSubImage2D glCopyTexImage2D
+glCopyTexSubImage2D glCreateProgram glCreateShader glCullFace glDeleteBuffers glDeleteFramebuffers glDeleteProgram glDeleteRenderbuffers
+glDeleteShader glDeleteTextures glDepthFunc glDepthMask glDepthRangef glDetachShader glDisable glDisableVertexAttribArray glDrawArrays
+glDrawElements glEnable glEnableVertexAttribArray glFinish glFlush glFramebufferRenderbuffer glFramebufferTexture2D glFrontFace
+glGenBuffers glGenerateMipmap glGenFramebuffers glGenRenderbuffers glGenTextures glGetActiveAttrib glGetActiveUniform glGetAttachedShaders
+glGetAttribLocation glGetBooleanv glGetBufferParameteriv glGetError glGetFloatv glGetFramebufferAttachmentParameteriv glGetIntegerv
+glGetProgramInfoLog glGetProgramiv glGetRenderbufferParameteriv glGetShaderInfoLog glGetShaderPrecisionFormat glGetShaderSource
+glGetShaderiv glGetString glGetTexParameterfv glGetTexParameteriv glGetUniformLocation glGetUniformfv glGetUniformiv glGetVertexAttribPointerv
+glGetVertexAttribfv glGetVertexAttribiv glHint glIsBuffer glIsEnabled glIsFramebuffer glIsProgram glIsRenderbuffer glIsShader glIsTexture
+glLineWidth glLinkProgram glPixelStorei glPolygonOffset glReadPixels glReleaseShaderCompiler glRenderbufferStorage glSampleCoverage
+glScissor glShaderBinary glShaderSource glStencilFunc glStencilFuncSeparate glStencilMask glStencilMaskSeparate glStencilOp
+glStencilOpSeparate glTexImage2D glTexParameterf glTexParameterfv glTexParameteri glTexParameteriv glTexSubImage2D
+glUniform1f glUniform1fv glUniform1i glUniform1iv glUniform2f glUniform2fv glUniform2i glUniform2iv glUniform3f glUniform3fv glUniform3i
+glUniform3iv glUniform4f glUniform4fv glUniform4i glUniform4iv glUniformMatrix2fv glUniformMatrix3fv glUniformMatrix4fv glUseProgram
+glValidateProgram glVertexAttrib1f glVertexAttrib1fv glVertexAttrib2f glVertexAttrib2fv glVertexAttrib3f glVertexAttrib3fv
+glVertexAttrib4f glVertexAttrib4fv glVertexAttribPointer glViewport
+""".split())
 # Weak references every toolchain emits and every loader answers.
 UNDEFINED_WEAK_OK = {"__gmon_start__", "_ITM_deregisterTMCloneTable", "_ITM_registerTMCloneTable", "__cxa_finalize"}
 # The entry points of the text path that must be inside the object: SDL_ttf, its FreeType, SDL's surface.
@@ -261,7 +286,7 @@ def version_key(text: str) -> tuple[int, ...]:
 
 
 def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_text: str, cs_text: str, max_version: str,
-                  allow_new_glibc: bool = False, text_relocations: bool = False) -> list[str]:
+                  allow_new_glibc: bool = False, text_relocations: bool = False, static_tls: bool = False) -> list[str]:
     """Every rule `verify` states, over already-captured tool output (so a test can feed it canned text)."""
     problems: list[str] = []
     needed, soname = needed_and_soname(readelf_d)
@@ -275,17 +300,24 @@ def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_te
         problems.append(f"SONAME is {soname!r}, not {SONAME!r}")
     if text_relocations:
         problems.append("the library has text relocations (a non-PIC object was linked in)")
+    if static_tls:
+        problems.append("the library asks for static TLS (DF_STATIC_TLS: a dlopen'ed library cannot be given a static TLS block once the "
+                        "process has started; with a text relocation it is the signature of a non-PIC object)")
 
     symbols = dynsyms(readelf_syms)
     undefined = [row for row in symbols if row["ndx"] == "UND" and row["name"]]
     outside = []
     for row in undefined:
         name = row["name"]
-        if row["version"].startswith(("GLIBC_", "GCC_", "GLIBC_PRIVATE")):
+        if row["version"] == "GLIBC_PRIVATE":
+            # glibc's internal interface: no promise it exists in the television's glibc, whatever the version number says
+            outside.append(name + "@GLIBC_PRIVATE")
+            continue
+        if row["version"].startswith(("GLIBC_", "GCC_")):
             continue
         if row["bind"] == "WEAK" and name in UNDEFINED_WEAK_OK:
             continue
-        if not row["version"] and re.fullmatch(r"gl[A-Z][A-Za-z0-9]*", name):
+        if not row["version"] and name in GLES2_CORE:
             continue  # libGLESv2 has no symbol versions
         outside.append(name + (f"@{row['version']}" if row["version"] else ""))
     if outside:
@@ -335,7 +367,7 @@ def verify_file(so: Path, header_text: str, cs_text: str) -> list[str]:
     max_version = os.environ.get("PLX_MAX_GLIBC") or DEFAULT_MAX_GLIBC
     problems = verify_object(readelf_d=readelf_d, readelf_syms=readelf_syms, nm_local=nm_local, header_text=header_text, cs_text=cs_text,
                              max_version=max_version, allow_new_glibc=os.environ.get("PLX_ALLOW_NEW_GLIBC") == "1",
-                             text_relocations="TEXTREL" in readelf_d)
+                             text_relocations="TEXTREL" in readelf_d, static_tls="STATIC_TLS" in readelf_d)
     needed, _ = needed_and_soname(readelf_d)
     print(f"{so}: {so.stat().st_size} bytes")
     print("DT_NEEDED: " + " ".join(needed))

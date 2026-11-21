@@ -43,8 +43,9 @@ TIZEN_PROFILE     ?= $(if $(RELEASE),release,tvdev)
 $(if $(filter release tvdev,$(TIZEN_PROFILE)),,$(error unknown TIZEN_PROFILE "$(TIZEN_PROFILE)" -- one of: release tvdev))
 TIZEN_PROFILE_FLAG = $(if $(filter release,$(TIZEN_PROFILE)),--release,--profile $(TIZEN_PROFILE))
 # The crate's feature set. `tizen` is the crate's own gate (its library is empty without it); `devtriggers` is the compile-time seam the dev
-# boot's preset reads (a release build cannot arm it). Neither playback backend (`play-uri`, `play-feed`): the platform composes no media.
-TIZEN_FEATURES    ?= tizen,devtriggers
+# boot's preset reads, and a `RELEASE=1` library does not carry it (the webOS rule: a shipped build cannot arm a dev boot). Neither playback backend (`play-uri`, `play-feed`): the platform composes no media.
+TIZEN_COMMA        = ,
+TIZEN_FEATURES    ?= $(if $(RELEASE),tizen,tizen$(TIZEN_COMMA)devtriggers)
 
 # Derived output. The cargo tree has its own directory (the `target*` glob of tools/build-gc.sh sweeps it); everything else this file
 # writes is under tizen/out and tizen/sdl-build (.gitignore).
@@ -121,9 +122,14 @@ tizen-so: tizen-sdl $(TIZEN_BUILD)/svg.o $(TIZEN_MAP)
 # What the linked library may need and export (ci/check-tizen-so.py verify): the DT_NEEDED allowlist, no undefined symbol outside the
 # loader's own, the exports equal to the header's and to the C# DllImport list, no text relocation, SDL/FreeType present and not exported, and
 # the glibc ceiling PLX_MAX_GLIBC. Needs the binutils of the build host.
+TIZEN_VERIFY = test -f $(TIZEN_SO) || { echo "tizen-verify: $(TIZEN_SO) is missing; run: make PLATFORM=tizen tizen-so" >&2; exit 1; }; \
+	  python3 ci/check-tizen-so.py verify $(TIZEN_SO) --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS)
 tizen-verify:
-	@test -f $(TIZEN_SO) || { echo "tizen-verify: $(TIZEN_SO) is missing; run: make PLATFORM=tizen tizen-so" >&2; exit 1; }
-	python3 ci/check-tizen-so.py verify $(TIZEN_SO) --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS)
+	@$(TIZEN_VERIFY)
+# `make -j tizen-so tizen-verify` must not read the old library while the new one links: when both are goals, verify waits for the link.
+ifneq ($(filter tizen-so,$(MAKECMDGOALS)),)
+tizen-verify: | tizen-so
+endif
 
 # Stages the package's payload into the host project (tizen/package.py): lib/libplx.so, res/appfont.ttf and OFL.txt, the icon, and the two
 # dev-boot inputs. TIZEN_MOCK_HOST=HOST:PORT writes res/dev-boot.json (the mock Plex server the emulator reaches as 10.0.2.2; tests/mock_pms.py)
@@ -138,7 +144,9 @@ tizen-stage:
 tizen-signing:
 	python3 tizen/package.py check-signing
 
-tizen-tpk: tizen-signing tizen-so tizen-verify
+# The verification is a RECIPE line, after the link: as a prerequisite of its own it could run beside `tizen-so` under -j and read the old library.
+tizen-tpk: tizen-signing tizen-so
+	@$(TIZEN_VERIFY)
 	python3 tizen/package.py tpk --so $(TIZEN_SO) $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
 
 # The configuration, for the CI job's log and a PR body (docs/platform-ports.md: "their variables are printed by the CI job").

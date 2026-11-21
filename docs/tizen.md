@@ -32,7 +32,7 @@
 
 Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tizen/out/`, `tizen/sdl-build/`, and under
 `tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/OFL.txt`, `res/dev-boot.json`,
-`res/log-host.txt` and the icon.
+`res/log-host.txt`, `res/THIRD-PARTY-NOTICES.md`, `res/licenses/` and the icon.
 
 ## The targets
 
@@ -44,7 +44,7 @@ builds the webOS package; this platform has none).
 | `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), and every `PLX_HOST_*` constant the host spells equal the header's |
 | `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for `x86_64-unknown-linux-gnu`: compile-only, no link, no SDL |
 | `tizen-sdl` | Linux x86_64, `cc`, `make`, `curl` | the static SDL2 + SDL2_ttf under `tizen/sdl-build/x86_64` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
-| `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,devtriggers`, profile `tvdev`, `RELEASE=1` for `release`), then the link into `tizen/out/x86_64/libplx.so` |
+| `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/x86_64/libplx.so` |
 | `tizen-verify` | Linux, binutils | `ci/check-tizen-so.py verify` on the linked library (below) |
 | `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
 | `tizen-tpk` | the above, .NET 8 SDK, a Samsung certificate profile | the signed `tizen/out/PlxNative-x86_64.tpk`; refuses at once, naming the missing variables, without the profile |
@@ -64,6 +64,12 @@ script generated from the header** that makes the three `plx_host_*` names globa
 symbol is exported. The link is written to `libplx.so.part` and renamed, so a failed link never leaves a half-written library for
 `tizen-verify` to read.
 
+**Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
+in the documentation shipped with the product), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
+`LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`, the set the `.ipk` ships); `tizen/package.py` stages them and
+`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 3 lists them for the webOS
+package as the television's own libraries and, for this package, says they are linked in.
+
 ### What `tizen-verify` checks
 
 `DT_NEEDED` is an allowlist, not a deny-list:
@@ -74,12 +80,14 @@ symbol is exported. The link is written to `libplx.so.part` and renamed, so a fa
 - anything else (`libSDL2`, `libwayland-*`, `libudev`, `libX11`) fails: the static SDL link did not happen, or a configure picked up a
   library from the build machine that the television may not have.
 
-Beyond that: the soname is `libplx.so` and the library has no text relocation; every undefined dynamic symbol is the loader's (a versioned
-`GLIBC_*`/`GCC_*` symbol), an unversioned `gl*` (libGLESv2 has no symbol versions) or one of the weak toolchain hooks; the **exported**
+Beyond that: the soname is `libplx.so` and the library has neither a text relocation nor a static-TLS flag; every undefined dynamic symbol is the
+loader's (a versioned `GLIBC_*`/`GCC_*` symbol, never `GLIBC_PRIVATE`), an unversioned OpenGL ES 2.0 core function (the fixed `GLES2_CORE` list
+in the script; libGLESv2 has no symbol versions, and an ES 3.0 name such as `glBindVertexArray` or `glBlitFramebuffer` is refused) or one of
+the weak toolchain hooks; the **exported**
 symbols are exactly `plx_host_start`, `plx_host_post` and `plx_host_stop`, equal to the header's functions and to the C# `DllImport` names;
 `TTF_Init`, `TTF_OpenFont`, `TTF_RenderUTF8_Blended`, `FT_Init_FreeType` and `SDL_FreeSurface` are code symbols of the library and none of
-`SDL_*`/`TTF_*`/`FT_*` is exported; and the highest `GLIBC_x.y` version needed is at most `PLX_MAX_GLIBC` (default 2.39: the emulator image
-carries 2.40 and the CI runner 2.39). A newer build host is a failure that names the ceiling: link on an older host, raise `PLX_MAX_GLIBC`
+`SDL_*`/`TTF_*`/`FT_*` is exported; and the highest `GLIBC_x.y` version needed is at most `PLX_MAX_GLIBC` (default 2.40, the emulator image's
+glibc; the CI runner, ubuntu-24.04, links against 2.39). A newer build host is a failure that names the ceiling: link on an older host, raise `PLX_MAX_GLIBC`
 if you know the target's glibc, or `PLX_ALLOW_NEW_GLIBC=1` to report and continue. The parsers and every rule are unit-tested on canned
 `readelf`/`nm` text (`ci/test_tizen_so_check.py`), so the Linux-only check is exercised on any host that runs `make check`.
 
@@ -117,10 +125,12 @@ WSL2 Ubuntu 22.04 or newer is enough. Versions come from the repository's pins; 
   only builds the library (the host unit tests link them, CI installs them); the library links its own static SDL by path and
   `tizen-verify` fails on a `libSDL2` in `DT_NEEDED` either way;
 - a checkout path without spaces (SDL's autoconf cannot build there; under WSL use a path in the Linux filesystem, not `/mnt/c/...`);
-- network to `raw.githubusercontent.com` (the nanosvg headers) and the SDL release hosts: every download is pinned and
+- network to `raw.githubusercontent.com` (the nanosvg headers) and the SDL release hosts: every one of those downloads is pinned and
   sha256-verified by `ci/deps.py` and cached machine-wide;
-- for the `.tpk`: a user-local .NET 8 SDK (`dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet`, with `DOTNET_ROOT` if elsewhere;
-  `Tizen.NET.Sdk` restores from NuGet), `sdb`, and the Samsung certificate profile below;
+- for the `.tpk`: a user-local .NET 8 SDK (`dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet`, with `DOTNET_ROOT` if elsewhere),
+  `sdb`, network to nuget.org and the Samsung certificate profile below. The NuGet packages are exact-version pins in `PlxHost.csproj`
+  (`Tizen.NET` 8.0.0.15631, `Tizen.NET.Sdk` 1.1.9; `Tizen.NET.API8` comes in transitively), resolved from nuget.org: they are NOT
+  sha256-verified by this repository (NuGet checks its own package signatures and hashes, nothing here pins them);
 - the emulator: Tizen SDK 10.0 CLI with TV Extension 10.0 (Tizen Studio, the IDE, is deprecated), the TV 10.0 x86_64 image under KVM,
   started with `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`.
 
@@ -189,7 +199,7 @@ State plainly what was not seen. The log is the evidence. A host-side window cap
 - The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line.
 - `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`; it affects only frames over a video plane, which this build has none of.
 - webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, `surface: webOS major 0`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
-- Closing the app logs `surface: the host did not take the window teardown; it lives until the process ends`.
+- Closing the app logs `surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends`.
 - The image cache's candidate directories (`plx_base::paths::image_cache_candidates`) are webOS paths, so the log reads `imgcache: no writable directory; disk cache unavailable` and the disk cache is off: a shared-path follow-up.
 
 ## CI

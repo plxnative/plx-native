@@ -165,6 +165,13 @@ namespace PlxHost
         // True from a plx_host_start that returned OK until OnTerminate.
         private static volatile bool running;
 
+        // True once OnTerminate asked the library to stop: an on_stopped after that answers OUR request, any earlier one is the library ending
+        // by itself (the remote's exit key, a start it refused after plx_host_start returned OK) and the application must end with it.
+        private static volatile bool stopRequested;
+
+        // The one application instance, for the exit request on_stopped makes from a library thread.
+        private static PlxApp current;
+
         private static readonly object LogGate = new object();
         private static string logPath;
 
@@ -191,6 +198,7 @@ namespace PlxHost
             string data = this.DirectoryInfo.Data;
             string res = this.DirectoryInfo.Resource;
             hostContext = SynchronizationContext.Current;
+            current = this;
             lock (LogGate) { logPath = Path.Combine(data, "plx-host.log"); }
             string logUdp = StartNetLog(res, out string netNote);
             Log("host started: OnCreate on the main thread; data dir " + data + "; res dir " + res);
@@ -214,6 +222,12 @@ namespace PlxHost
             }
             running = true;
             Log("plx_host_start OK; the library's loop is running");
+            if (Stopped.IsSet && ShouldExitHost(stopRequested, running))
+            {
+                // The loop ended before this line ran (on_stopped found `running` still false): nothing else will end the process.
+                Log("the library stopped by itself during start: exiting");
+                Exit();
+            }
         }
 
         protected override void OnPause()
@@ -236,6 +250,7 @@ namespace PlxHost
             Log("OnTerminate");
             if (running)
             {
+                stopRequested = true;
                 running = false;
                 StopLibrary();
             }
@@ -344,6 +359,15 @@ namespace PlxHost
             }
         }
 
+        // Whether an on_stopped means the application must end: the library was running and the host did not ask it to stop. A library that
+        // ends by itself has torn its window down, and a .NET process left behind with no window answers the next launch (launch_mode
+        // "single") with that dead instance. NOT unit-tested (no C# runner in this repository's gates): the emulator run exercises it, by the
+        // remote's exit key.
+        internal static bool ShouldExitHost(bool stopWasRequested, bool isRunning)
+        {
+            return isRunning && !stopWasRequested;
+        }
+
         // PlxOnStopped. Called by the library on the loop thread, its deadline thread or (for a refused start) this one: it returns promptly
         // and calls nothing in the library. An exception must never cross back into native code.
         private static void OnStoppedNative(int code, int clean)
@@ -353,8 +377,34 @@ namespace PlxHost
                 stoppedClean = clean;
                 Stopped.Set();
                 Log("on_stopped code=" + code + " clean=" + clean);
+                if (ShouldExitHost(stopRequested, running)) RequestHostExit();
             }
             catch (Exception) { }
+        }
+
+        // End the application from the main thread. The request is queued behind the window teardown the library posted with run_on_host
+        // (same context, in order), so the library's task runs before the runtime shuts EFL down.
+        private static void RequestHostExit()
+        {
+            SynchronizationContext context = hostContext;
+            PlxApp app = current;
+            if (context == null || app == null)
+            {
+                Log("the library stopped by itself and there is no main-thread context to end the application with");
+                return;
+            }
+            context.Post(state =>
+            {
+                try
+                {
+                    Log("the library stopped by itself: exiting the application");
+                    app.Exit();
+                }
+                catch (Exception e)
+                {
+                    Log("exception ending the application: " + e.GetType().Name + ": " + e.Message);
+                }
+            }, null);
         }
 
         // PlxRunOnHost: queue task(arg) for the main thread and return 0, or refuse (non-zero) and the library drops it.
