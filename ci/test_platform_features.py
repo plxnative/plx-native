@@ -200,7 +200,11 @@ class ForwardedFeatures(unittest.TestCase):
         # the package would compile all of them for nothing. So every dependency of the desktop and Tizen crates is
         # optional, their one feature (`hostsim`, `tizen`) alone enables them, and the default features reach none
         # (the weak forwards: `plxnative-modules?/<feature>` adds the edge in no build).
-        expected = {"platform-desktop": ["plx_base", "plx_os", APP_NAME], "platform-tizen": [APP_NAME]}
+        # Tizen's `serde_json` is the launch string's parser: already in the lock for the application, not a new package.
+        expected = {
+            "platform-desktop": ["plx_base", "plx_os", APP_NAME],
+            "platform-tizen": ["plx_base", "plx_os", APP_NAME, "serde_json"],
+        }
         for directory, own in OPTIONAL_EDGE.items():
             with self.subTest(directory):
                 doc = load(MODULES / directory / "Cargo.toml")
