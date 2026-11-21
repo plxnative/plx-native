@@ -12,5 +12,17 @@
 //! library and no build of the television's or the desktop's ever contains it.
 #![cfg(feature = "tizen")]
 
-#[allow(dead_code)] // WIP: read by the lifecycle module that follows
+#![allow(dead_code)] // WIP
+mod devboot;
+mod ecore;
+mod egl;
 mod host_abi;
+mod hosted;
+mod identity;
+mod keys;
+mod launch;
+mod layout;
+mod log_udp;
+mod surface;
+
+pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
