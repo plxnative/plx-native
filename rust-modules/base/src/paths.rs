@@ -150,11 +150,13 @@ pub fn install_kind() -> &'static str {
     }
 }
 
-/// The directory the running executable sits in — i.e. where the ipk's payload was installed.
+/// The directory the package's read-only payload was installed in.
 ///
-/// `std::env::current_exe` IS the `/proc/self/exe` read on Linux, so this is the same syscall the
-/// reasoning above is about — it just also answers on a host build, where the simulator's fonts sit
-/// next to the simulator binary rather than under a webOS install prefix.
+/// A platform that published a [`Layout`] ([`publish`]) names it. Otherwise it is derived: on webOS
+/// the executable's own directory (`std::env::current_exe` IS the `/proc/self/exe` read on Linux, the
+/// syscall the reasoning above is about), in a macOS application bundle `Contents/Resources`, and in
+/// the simulator `PLXNATIVE_APP_DIR`, which is why its fonts need not sit next to its binary. A hosted
+/// platform runs under its host's executable, so it states this directory in its `Layout`.
 pub fn app_dir() -> &'static Path {
     &app_dir_resolved().0
 }
@@ -188,12 +190,26 @@ pub fn app_dir_line() -> String {
     }
 }
 
+/// The ONE choice between a platform's [`Layout`] and the derivation, made once: [`publish`] sets
+/// `Some(layout)`, and the first read of either directory sets `None` ([`choice`]). Whichever comes
+/// first stands, so a publish that loses changes nothing and a read never sees a layout that
+/// `publish` reported as refused.
+static CHOICE: OnceLock<Option<Layout>> = OnceLock::new();
+
+fn choice() -> Option<&'static Layout> {
+    choice_in(&CHOICE)
+}
+
+fn choice_in(cell: &OnceLock<Option<Layout>>) -> Option<&Layout> {
+    cell.get_or_init(|| None).as_ref()
+}
+
 /// The payload directory, resolved once: the platform's published [`Layout`] first, then the
-/// derivation ([`derive_app_dir`]).
+/// derivation ([`derive_app_dir`]). It memoises the path; the choice itself is [`CHOICE`]'s.
 static APP_DIR: OnceLock<(PathBuf, AppDirSource)> = OnceLock::new();
 
 fn app_dir_resolved() -> &'static (PathBuf, AppDirSource) {
-    APP_DIR.get_or_init(|| resolve_app_dir(PUBLISHED.get()))
+    APP_DIR.get_or_init(|| resolve_app_dir(choice()))
 }
 
 /// What [`app_dir`] answers for `published`. A layout whose directory IS the derived one reports the
@@ -251,9 +267,11 @@ fn derive_app_dir() -> (PathBuf, AppDirSource) {
 /// [`persistent_state_root`] ([`publish`]).
 ///
 /// Two directories, as hooks rather than values: a hosted platform learns its directories at run
-/// time, from its host, and answers from what it stored then. **A hook must not log, and must not
-/// call [`app_dir`] or [`persistent_state_root`]**: it runs inside the first read of the directory
-/// it names, and the event log resolves its own path through this module (see [`app_id`]).
+/// time, from its host, and answers from what it stored then. **Neither hook may log**: this module
+/// never logs, because the event log resolves its own path through it (see [`app_id`]).
+/// `payload_dir` must not call [`app_dir`]: it runs inside `app_dir`'s one-time initialiser and
+/// would re-enter it. `state_root` must not call [`persistent_state_root`], which calls it on every
+/// read; it may read [`app_dir`], as [`Layout::DERIVED`]'s does on a device build.
 ///
 /// The runtime root and the app id are NOT here: the television's C shim freezes both before any
 /// Rust runs, so a platform's word on them would be ignored.
@@ -280,7 +298,8 @@ impl Layout {
 pub enum PublishError {
     /// A layout was published already; the first one stands.
     AlreadyPublished,
-    /// [`app_dir`] was read before the layout arrived, so the derivation is what the process uses.
+    /// [`app_dir`] or [`persistent_state_root`] was read before the layout arrived, so the derivation
+    /// is what the process uses.
     AlreadyRead,
 }
 
@@ -288,35 +307,28 @@ impl std::fmt::Display for PublishError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::AlreadyPublished => "a layout was already published; the first one stands",
-            Self::AlreadyRead => "the app directory was read before the layout was published; the derivation stands",
+            Self::AlreadyRead => "a directory was read before the layout was published; the derivation stands",
         })
     }
 }
 
-static PUBLISHED: OnceLock<Layout> = OnceLock::new();
-
-/// Publish the platform's [`Layout`], once, before anything reads it. A second publish and a publish
-/// after the payload directory was resolved are refused and change nothing. **Never logs**: this is
-/// the path the event log's own location resolves through (see [`app_id`]), so the caller reports a
-/// refusal.
+/// Publish the platform's [`Layout`], once, before anything reads either directory. A second publish
+/// and a publish after the first read of either directory are refused and change nothing: the choice
+/// is one cell ([`CHOICE`]) that whoever arrives first fills. **Never logs**: this is the path the
+/// event log's own location resolves through (see [`app_id`]), so the caller reports a refusal.
 pub fn publish(layout: Layout) -> Result<(), PublishError> {
-    publish_into(&PUBLISHED, &APP_DIR, layout)
+    publish_into(&CHOICE, layout)
 }
 
-fn publish_into(
-    slot: &OnceLock<Layout>,
-    resolved: &OnceLock<(PathBuf, AppDirSource)>,
-    layout: Layout,
-) -> Result<(), PublishError> {
-    if resolved.get().is_some() {
-        return Err(PublishError::AlreadyRead);
+fn publish_into(cell: &OnceLock<Option<Layout>>, layout: Layout) -> Result<(), PublishError> {
+    if cell.set(Some(layout)).is_ok() {
+        return Ok(());
     }
-    slot.set(layout).map_err(|_| PublishError::AlreadyPublished)?;
-    // A reader that resolved between the check and the set used the derivation.
-    if resolved.get().is_some() {
-        return Err(PublishError::AlreadyRead);
+    // Lost: `wait` returns once whoever won has finished filling the cell.
+    match cell.wait() {
+        Some(_) => Err(PublishError::AlreadyPublished),
+        None => Err(PublishError::AlreadyRead),
     }
-    Ok(())
 }
 
 /// A file shipped inside the ipk, addressed by name.
@@ -1474,31 +1486,44 @@ mod tests {
         assert_eq!(super::persistent_state_root(), super::derive_state_root());
     }
 
-    /// A publish after the payload directory was resolved is an error and changes nothing, and so is
-    /// a second publish; the first one stands. Checked on private cells, because a successful publish
-    /// into the process-wide slot would steer every other test's directories.
+    /// A second publish is an error and the first layout stands; a publish after the first read of
+    /// EITHER directory is an error and leaves both directories derived (the state root is not
+    /// memoised, so only the choice cell can tell that it was read). Checked on private cells,
+    /// because a successful publish into the process-wide cell would steer every other test's
+    /// directories.
     #[test]
     fn a_late_or_second_publish_is_an_error_and_changes_nothing() {
         use std::sync::OnceLock;
-        let slot = OnceLock::new();
-        let resolved = OnceLock::new();
-        assert_eq!(super::publish_into(&slot, &resolved, STATED), Ok(()));
+        let cell = OnceLock::new();
+        assert_eq!(super::publish_into(&cell, STATED), Ok(()));
         assert_eq!(
-            super::publish_into(&slot, &resolved, super::Layout::DERIVED),
+            super::publish_into(&cell, super::Layout::DERIVED),
             Err(super::PublishError::AlreadyPublished)
         );
-        assert_eq!((slot.get().expect("the first layout stands").payload_dir)(), pkg_res());
+        assert_eq!(super::state_root_of(super::choice_in(&cell)), pkg_data(), "the first layout stands");
 
-        let slot = OnceLock::new();
-        let resolved = OnceLock::new();
-        resolved.set((pkg_res(), super::AppDirSource::CurrentExe)).expect("an empty cell");
-        assert_eq!(super::publish_into(&slot, &resolved, STATED), Err(super::PublishError::AlreadyRead));
-        assert!(slot.get().is_none(), "a late publish leaves the slot empty");
+        // A payload-directory read first.
+        let cell = OnceLock::new();
+        assert_eq!(super::resolve_app_dir(super::choice_in(&cell)), super::derive_app_dir());
+        assert_eq!(super::publish_into(&cell, STATED), Err(super::PublishError::AlreadyRead));
+        assert!(super::choice_in(&cell).is_none(), "a late publish leaves no layout behind");
 
-        // The process-wide slot: once `app_dir()` has been read, the real `publish` refuses too.
+        // The process-wide cell: once `app_dir()` has been read, the real `publish` refuses too.
         let _ = super::app_dir();
         assert_eq!(super::publish(STATED), Err(super::PublishError::AlreadyRead));
         assert_eq!(super::app_dir(), super::derive_app_dir().0, "the refused layout changed nothing");
+    }
+
+    /// The state root is not memoised, so a read of it before `publish` freezes nothing by itself:
+    /// the choice cell must still make that publish `AlreadyRead` and leave BOTH directories derived.
+    #[test]
+    fn a_state_root_read_before_publish_refuses_it_and_leaves_both_directories_derived() {
+        let _serial = crate::testlock::serial();
+        let cell = std::sync::OnceLock::new();
+        assert_eq!(super::state_root_of(super::choice_in(&cell)), super::derive_state_root());
+        assert_eq!(super::publish_into(&cell, STATED), Err(super::PublishError::AlreadyRead));
+        assert_eq!(super::state_root_of(super::choice_in(&cell)), super::derive_state_root());
+        assert_eq!(super::resolve_app_dir(super::choice_in(&cell)), super::derive_app_dir());
     }
 }
 
@@ -1523,7 +1548,7 @@ mod tests {
 /// neither test, nor anything in this module, was wrong.
 #[allow(dead_code)] // Stage A storage root; connected by Session/Consent integration.
 pub fn persistent_state_root() -> PathBuf {
-    state_root_of(PUBLISHED.get())
+    state_root_of(choice())
 }
 
 /// What [`persistent_state_root`] answers for `published`: the platform's state root, else the derivation.
