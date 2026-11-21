@@ -169,8 +169,14 @@ mod preset {
         TABLE.get()?.iter().find(|(n, _)| *n == name).map(|(_, v)| v.trim())
     }
 
+    /// The first name of `table` a preset may never arm (see `NEVER_PRESET`), or `None` for an admissible table. Pure: it
+    /// reads no slot, so a test states a table and gets the answer whatever else set the slot first.
+    pub(super) fn refused_name(table: &[(&'static str, String)]) -> Option<&'static str> {
+        table.iter().map(|(name, _)| *name).find(|name| super::NEVER_PRESET.contains(name))
+    }
+
     pub(super) fn set(table: &[(&'static str, String)]) -> Result<(), super::PresetRefused> {
-        if table.iter().any(|(name, _)| super::NEVER_PRESET.contains(name)) {
+        if refused_name(table).is_some() {
             return Err(super::PresetRefused);
         }
         TABLE.set(table.to_vec()).map_err(|_| super::PresetRefused)
@@ -482,25 +488,25 @@ mod preset_tests {
     }
 }
 
-/// The owner's live switch cannot be armed from a table. The refused call changes nothing: it leaves the slot unset.
-/// A separate test from the once-set one above would race it for the slot, so it only asserts what holds either way:
-/// the refusal itself, and that the name never answers.
+/// The owner's live switch cannot be armed from a table. The check is the pure `preset::refused_name`, tested directly:
+/// `set_preset` shares a once-set slot with the test above, so a refusal observed through it could be the full slot's and
+/// would pass with this check deleted.
 #[cfg(all(test, feature = "devtriggers"))]
 mod preset_refusal_tests {
-    use super::{flag, preset_names, read, set_preset, PresetRefused, NEVER_PRESET};
+    use super::{preset, NEVER_PRESET};
 
     #[test]
-    fn a_table_naming_a_real_account_write_switch_is_refused() {
-        for name in NEVER_PRESET {
-            assert_eq!(set_preset(&[(name, String::new())]), Err(PresetRefused), "{name}");
-            assert_eq!(set_preset(&[("devtest-ok", "x".to_string()), (name, String::new())]), Err(PresetRefused), "{name} among others");
-            super::with_private_triggers(|| {
-                assert!(!flag(name), "{name} never answers from a table");
-                assert_eq!(read(name), None);
-            });
-            assert!(!preset_names().contains(&name));
-        }
+    fn a_table_naming_a_real_account_write_switch_is_not_admissible() {
         assert_eq!(NEVER_PRESET, ["watchlist-live"]);
+        let none = String::new;
+        assert_eq!(preset::refused_name(&[("watchlist-live", none())]), Some("watchlist-live"), "alone");
+        assert_eq!(
+            preset::refused_name(&[("token", "t".to_string()), ("watchlist-live", none()), ("url", "u".to_string())]),
+            Some("watchlist-live"),
+            "among others"
+        );
+        assert_eq!(preset::refused_name(&[("token", "t".to_string()), ("url", "u".to_string())]), None, "a clean table is admitted");
+        assert_eq!(preset::refused_name(&[]), None, "and an empty one");
     }
 }
 

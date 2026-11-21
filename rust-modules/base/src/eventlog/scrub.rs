@@ -4,8 +4,9 @@
 //! written down.
 //!
 //! **It is no longer lab-only.** `crate::eventlog::log` applies [`scrub_local`] to every line before the file
-//! write, and the telemetry client applies the full [`scrub`] to everything that leaves. Both live
-//! in a build that has no `lab-diagnostics` feature, so this module is UNGATED, the refuse half included (the platform's log tap needs it) — which also means
+//! write, and the full [`scrub`] is applied by the two consumers that send a line off the device: the Cloud Lab snapshot
+//! (`lab/snapshot.rs`) and the platform's log tap (`eventlog::set_tap`, through [`still_looks_secret`]). The log lives
+//! in a build that has no `lab-diagnostics` feature, and so does the tap, so this module is UNGATED, the refuse half included — which also means
 //! its tests finally run in `make check`. They did not before: everything under `lab/` is
 //! `#[cfg(feature = "lab-diagnostics")]`, so the 31 assertions guarding the one function the whole
 //! privacy argument rests on were skipped by the default gate entirely.
