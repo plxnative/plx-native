@@ -14,9 +14,11 @@
 //! is all-or-nothing, so the optional symbols live in tables of their own: the embedder's EGL-window path
 //! ([`ecore_wl2_egl`]) with `libwayland-egl` ([`wayland_egl`]) as the logged fallback, and the window
 //! options ([`ecore_wl2_opts`]). The Ecore event ids are DATA symbols, which `dynlib!` does not bind: they
-//! are read through `Handle::sym` ([`event_ids`]). Whether `libecore.so.1` resolves `ecore_event_handler_add`
-//! by name on a retail image is UNVERIFIED (the emulator image has it, E11): the table's second candidate,
-//! `libecore_wl2`, reaches the same function through its own dependency.
+//! are read through `Handle::sym` ([`event_ids`]). The handler functions are bound from `libecore_wl2.so.1`
+//! first: that is the handle the emulator run resolved them from (E6), and it reaches `libecore`'s definition
+//! through its own dependency. `libecore.so.1` is only the candidate for an image where `libecore_wl2` does
+//! not open (`dynlib!` takes the first candidate that opens and does not try the next on a missing symbol);
+//! whether it resolves them by name is UNVERIFIED.
 //!
 //! **UNVERIFIED on a retail set: the layout of `Ecore_Event_Key`.** Only its first two pointers (`keyname`,
 //! `key`, first in every EFL version) and `keycode` are read, as the emulator run did; a wrong offset reads
@@ -72,12 +74,20 @@ plx_base::dynlib! {
 }
 
 plx_base::dynlib! {
-    /// The window options the embedder sets after creation (TV profile: landscape, opaque, positioned).
+    /// The window options the emulator run applied (E6): the toplevel type and the alpha.
     ecore_wl2_opts: ["libecore_wl2.so.1"] {
         fn ecore_wl2_window_type_set(window: *mut c_void, kind: c_int);
+        fn ecore_wl2_window_alpha_set(window: *mut c_void, alpha: u8);
+    }
+}
+
+plx_base::dynlib! {
+    /// The options only the embedder sets (position, the geometry aux hint, the rotations): their presence
+    /// on the emulator image is unrecorded, so they are a table of their own and a missing one costs only
+    /// these three, not the two above.
+    ecore_wl2_opts_extra: ["libecore_wl2.so.1"] {
         fn ecore_wl2_window_position_set(window: *mut c_void, x: c_int, y: c_int);
         fn ecore_wl2_window_aux_hint_add(window: *mut c_void, id: c_int, hint: *const c_char, val: *const c_char);
-        fn ecore_wl2_window_alpha_set(window: *mut c_void, alpha: u8);
         fn ecore_wl2_window_available_rotations_set(window: *mut c_void, rotations: *const c_int, count: u32);
     }
 }
@@ -92,9 +102,8 @@ plx_base::dynlib! {
 }
 
 plx_base::dynlib! {
-    /// The event handlers. `libecore_wl2` is the second candidate: it depends on `libecore`, so a handle to
-    /// it resolves the same functions.
-    ecore_events: ["libecore.so.1", "libecore_wl2.so.1"] {
+    /// The event handlers, from the handle the emulator run resolved them from; see the module note.
+    ecore_events: ["libecore_wl2.so.1", "libecore.so.1"] {
         fn ecore_event_handler_add(kind: c_int, cb: EventCb, data: *const c_void) -> *mut c_void;
         fn ecore_event_handler_del(handler: *mut c_void) -> *mut c_void;
     }
@@ -274,19 +283,20 @@ impl Window {
     /// The embedder's `SetWindowOptions()` minus the phone-only indicator calls. A missing table is one
     /// logged line: the window works without the options.
     fn set_options(&self) {
-        if !loaded("ecore_wl2_opts", ecore_wl2_opts::load(None)) {
-            return;
-        }
-        let hint = CString::new("wm.policy.win.user.geometry").unwrap_or_default();
-        let value = CString::new("1").unwrap_or_default();
-        let rotations: [c_int; 1] = [0];
-        // SAFETY: a live window and the live options table; the strings outlive the calls.
+        // SAFETY: a live window and the live tables; the strings outlive the calls.
         unsafe {
-            ecore_wl2_window_type_set(self.window, WINDOW_TYPE_TOPLEVEL);
-            ecore_wl2_window_position_set(self.window, 0, 0);
-            ecore_wl2_window_aux_hint_add(self.window, 0, hint.as_ptr(), value.as_ptr());
-            ecore_wl2_window_alpha_set(self.window, 0);
-            ecore_wl2_window_available_rotations_set(self.window, rotations.as_ptr(), 1);
+            if loaded("ecore_wl2_opts", ecore_wl2_opts::load(None)) {
+                ecore_wl2_window_type_set(self.window, WINDOW_TYPE_TOPLEVEL);
+                ecore_wl2_window_alpha_set(self.window, 0);
+            }
+            if loaded("ecore_wl2_opts_extra", ecore_wl2_opts_extra::load(None)) {
+                let hint = CString::new("wm.policy.win.user.geometry").unwrap_or_default();
+                let value = CString::new("1").unwrap_or_default();
+                let rotations: [c_int; 1] = [0];
+                ecore_wl2_window_position_set(self.window, 0, 0);
+                ecore_wl2_window_aux_hint_add(self.window, 0, hint.as_ptr(), value.as_ptr());
+                ecore_wl2_window_available_rotations_set(self.window, rotations.as_ptr(), 1);
+            }
         }
     }
 
@@ -373,8 +383,14 @@ fn id_of(handles: &[Handle], name: &str) -> Option<c_int> {
 /// The ids, as `libecore_input` and `libecore_wl2` allocated them. `ecore_wl2_init` normally initialises
 /// the input library; if an id still reads 0, `ecore_event_init` is called once and the ids are read again.
 fn event_ids() -> Option<EventIds> {
-    let (input, _) = Handle::open(&["libecore_input.so.1"])?;
-    let (wl2, _) = Handle::open(&["libecore_wl2.so.1"])?;
+    let Some((input, _)) = Handle::open(&["libecore_input.so.1"]) else {
+        log("ecore: libecore_input.so.1 did not open");
+        return None;
+    };
+    let Some((wl2, _)) = Handle::open(&["libecore_wl2.so.1"]) else {
+        log("ecore: libecore_wl2.so.1 did not open (event ids)");
+        return None;
+    };
     let read = || {
         Some(EventIds {
             key_down: id_of(&[input], "ECORE_EVENT_KEY_DOWN")?,
