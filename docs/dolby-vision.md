@@ -171,13 +171,17 @@ stream's transfer since there is no record to read it from. An RPU that maps an 
 Profile 7, whose conversion keys on the record), an enhancement-layer NAL in the packet, an RPU that does
 not parse and a Profile 8 over any other transfer report nothing. Once the Load has returned and no
 flight is out, the pump asks the route to declare it (`route::declare_rpu_dovi`): the decision the
-record would have frozen, through `frozen_dv_decision` with the seated profile's Dolby Vision setting
-and the capability the route froze, so Off, a set without confirmed support and a server re-encode
-(whose frozen capability is `Unknown`) change nothing. A declaration rewrites the installed route, the
-file's own declaration and the stored Auto Original candidate, and the play reloads once at the newest
-tap, else where the Engine was aimed. The reloaded Load carries the node and the landing guard
-(#1166) arms as for any declared direct play; a withdrawal later in the play is not undone, because the
-route declares a stream's RPUs once.
+record would have frozen, through `frozen_dv_decision` with the Dolby Vision setting frozen at the
+resolve (`RpuDv::Open`, set for a file with no record) and the capability the route froze. Only a
+direct play declares, and not during an Original trial that has not shown a picture yet (the plain
+seek waits for it too): a server remux's `start.mkv` begins at its offset, so the reload's seek would
+land wrong, and its report leaves the play open. Off and a set without confirmed support decline and
+close it. A declaration rewrites the installed route, the file's own declaration and the stored Auto
+Original candidate; a Profile 5 also forbids a video copy from then on (`no_video_copy`, as the plan
+sets when it sends a Profile 5 with a record to the server), so a later re-encode never hands the set its base layer. The play
+reloads once at the newest tap, else where the Engine was aimed. The reloaded Load carries the node and
+the landing guard (#1166) arms as for any declared direct play; a withdrawal later in the play closes
+it, so it is not undone.
 
 **Limits.** Every play of such a file pays one extra Load (nothing remembers the finding), a remux the
 server makes of it is not declared, and the URI engine is not covered. Not yet compared on a set

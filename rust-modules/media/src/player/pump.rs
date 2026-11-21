@@ -1205,17 +1205,19 @@ fn pump_frame(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter::P
         return;
     }
     // ---------- Dolby Vision the server did not report: the demuxer found RPUs in a stream whose
-    // container has no configuration record (a remux that dropped it), so the Load declared none
-    // and the panel shows the base layer. Once the Load has returned (a teardown never waits on one
-    // in flight), the route declares what the RPUs say and the play reloads once with the node, at
-    // the newest tap else where this Engine was aimed. The report repeats on every Load of the
-    // stream and the route declares at most once (`route::declare_rpu_dovi`), so this cannot loop.
+    // container has no configuration record, so the Load declared none and the panel shows the base
+    // layer. Once the Load has returned (a teardown never waits on one in flight), and outside an
+    // Original trial not yet confirmed (as the plain seek waits for it), the route may declare them
+    // (`route::declare_rpu_dovi`, at most once a play, so this cannot loop) and the play reloads once
+    // with the node, at the newest tap else where this Engine was aimed.
     let raw = ps.readout().raw();
     let rpu = if raw.load.load_thread_finished { raw.rpu_dovi } else { None };
     if let Some(rpu) = rpu {
-        if !crate::route::flight_outstanding()
+        if crate::route::rpu_dovi_open(ps)
+            && !crate::route::flight_outstanding()
+            && !crate::route::original_recovery_pending()
             && !crate::route::preview_request(ps)
-            && crate::route::declare_rpu_dovi(ps, rpu, crate::route::dolby_vision_mode())
+            && crate::route::declare_rpu_dovi(ps, rpu)
         {
             let target = take_tap_target(ps, pa)
                 .unwrap_or_else(|| {

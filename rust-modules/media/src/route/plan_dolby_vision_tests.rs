@@ -1046,15 +1046,15 @@ fn undeclared_route(vcodec: &str, probed: DvCapability) -> crate::route::Playbac
         Dovi::NONE,
         frozen_dv_decision(DolbyVisionMode::Auto, probed, Dovi::NONE, vcodec),
     );
+    crate::route::open_rpu_dovi_for_test(&mut ps, DolbyVisionMode::Auto);
     ps
 }
 
 #[test]
 fn rpu_dovi_declares_a_profile_81_the_server_did_not_report() {
-    use plx_plex::plex::session::DolbyVisionMode;
     let mut ps = undeclared_route("hevc", DvCapability::Supported);
     assert_eq!(crate::route::stream_dv_presentation(&ps), DvPresentation::NotDv, "the premise: nothing declared");
-    assert!(crate::route::declare_rpu_dovi(&mut ps, RPU_P81, DolbyVisionMode::Auto));
+    assert!(crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
     let node = crate::route::stream_dv_presentation(&ps).declared().expect("the node is declared");
     assert_eq!((node.profile_id, node.track_type), (8, "single"));
     assert_eq!(crate::route::stream_dv_decision(&ps).capability, DvCapability::Supported);
@@ -1063,39 +1063,57 @@ fn rpu_dovi_declares_a_profile_81_the_server_did_not_report() {
     assert_eq!((src_dovi.profile, src_dovi.bl_compat), (8, 1));
     assert!(src.presentation.declared().is_some(), "{src:?}");
     // Every later Load repeats the demuxer's report: it is declared once.
-    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81, DolbyVisionMode::Auto));
+    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
     // And a withdrawal (#1166) is not undone by the next report.
     assert!(crate::route::withdraw_dv_presentation(&mut ps, "test"));
-    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81, DolbyVisionMode::Auto));
+    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
     assert_eq!(crate::route::stream_dv_presentation(&ps), DvPresentation::NotDv);
 }
 
 #[test]
 fn rpu_dovi_declares_only_what_the_record_would_have_declared() {
     use plx_plex::plex::session::DolbyVisionMode;
-    // Dolby Vision Off, a set without confirmed support, and a stream whose route froze no capability
-    // (a re-encode) plan the base layer for the record too: nothing changes.
+    // Dolby Vision Off frozen at the resolve, a set without confirmed support, and a stream whose route
+    // froze no capability plan the base layer for the record too: nothing changes, and the play closes.
     for (probed, mode) in [
         (DvCapability::Supported, DolbyVisionMode::Off),
         (DvCapability::Unsupported, DolbyVisionMode::Auto),
         (DvCapability::Unknown, DolbyVisionMode::Auto),
     ] {
         let mut ps = undeclared_route("hevc", probed);
+        crate::route::open_rpu_dovi_for_test(&mut ps, mode);
         let before = crate::route::stream_dv_decision(&ps);
-        assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81, mode), "{probed:?} {mode:?}");
+        assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81), "{probed:?} {mode:?}");
         assert_eq!(crate::route::stream_dv_decision(&ps), before);
         assert!(!crate::route::source_dv_for_test(&ps).0.present, "the source keeps no record either");
+        assert!(!crate::route::rpu_dovi_open(&ps), "a decline closes the play: {probed:?} {mode:?}");
     }
     // A route that already declares the server's record is left as it is.
     let mut ps = declared_route(p8());
     let before = crate::route::stream_dv_decision(&ps);
-    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81, DolbyVisionMode::Auto));
+    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
     assert_eq!(crate::route::stream_dv_decision(&ps), before);
     // A Profile 5 found in the RPUs is declared as one: undeclared it shows wrong colours.
     let mut ps = undeclared_route("hevc", DvCapability::Supported);
     let p5 = plx_playback_contract::feed::RpuDovi { profile: 5, bl_compat: 0 };
-    assert!(crate::route::declare_rpu_dovi(&mut ps, p5, DolbyVisionMode::Auto));
+    assert!(!super::super::decision::is_no_video_copy(&ps), "the premise: a plain direct play allows a copy");
+    assert!(crate::route::declare_rpu_dovi(&mut ps, p5));
     assert_eq!(crate::route::stream_dv_presentation(&ps).declared().map(|n| n.profile_id), Some(5));
+    // A later re-encode must not copy a base layer it cannot declare, as for a Profile 5 with a record.
+    assert!(super::super::decision::is_no_video_copy(&ps));
+}
+
+#[test]
+fn rpu_dovi_is_not_declared_on_a_server_remux() {
+    // A remux's stream begins at its offset and every rebuild re-derives its declaration from the
+    // copy, so only a direct play declares. The play stays open: a return to direct play declares.
+    let mut ps = undeclared_route("hevc", DvCapability::Supported);
+    crate::route::install_transcode_for_test(&mut ps, true, false);
+    let before = crate::route::stream_dv_decision(&ps);
+    assert!(!crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
+    assert_eq!(crate::route::stream_dv_decision(&ps), before);
+    assert!(!crate::route::source_dv_for_test(&ps).0.present);
+    assert!(crate::route::rpu_dovi_open(&ps));
 }
 
 #[test]
@@ -1104,7 +1122,7 @@ fn rpu_dovi_follows_into_the_stored_original_candidate() {
     let mut ps = undeclared_route("hevc", DvCapability::Supported);
     let plain = frozen_dv_decision(DolbyVisionMode::Auto, DvCapability::Supported, Dovi::NONE, "hevc");
     crate::route::set_auto_original_dv_for_test(&mut ps, Dovi::NONE, plain);
-    assert!(crate::route::declare_rpu_dovi(&mut ps, RPU_P81, DolbyVisionMode::Auto));
+    assert!(crate::route::declare_rpu_dovi(&mut ps, RPU_P81));
     let (dovi, decision) = crate::route::auto_original_dv_for_test(&ps).expect("the candidate is kept");
     assert_eq!((dovi.profile, dovi.bl_compat), (8, 1));
     assert!(decision.presentation.declared().is_some(), "the way back to Original declares the node: {decision:?}");

@@ -1401,6 +1401,11 @@ impl BitsOut {
 /// reference picture set, long-term pictures and an extended sample aspect ratio. `vui` is
 /// `Some(trc)` for a VUI with a colour description, `None` for none at all.
 fn sps(vui: Option<u8>) -> Vec<u8> {
+    sps_with(vui, 4)
+}
+
+/// [`sps`] with `log2_max_pic_order_cnt_lsb_minus4` given.
+fn sps_with(vui: Option<u8>, log2_max_poc_lsb_minus4: u32) -> Vec<u8> {
     let mut w = BitsOut::default();
     w.u(4, 0).u(3, 1).u(1, 1); // vps id, max_sub_layers_minus1 = 1, nesting
     w.u(2, 0).u(1, 0).u(5, 2).u(32, 0x2000_0000).u(4, 0b1001).u(43, 0).u(1, 0).u(8, 153); // general PTL
@@ -1409,7 +1414,7 @@ fn sps(vui: Option<u8>) -> Vec<u8> {
     w.u(88, 0).u(8, 120); // sub-layer 0's profile, level
     w.ue(0).ue(1).ue(3840).ue(2160); // sps id, 4:2:0, size
     w.u(1, 1).ue(0).ue(0).ue(0).ue(40); // conformance window
-    w.ue(2).ue(2).ue(4); // 10-bit, log2_max_poc_lsb_minus4 = 4
+    w.ue(2).ue(2).ue(log2_max_poc_lsb_minus4); // 10-bit, log2_max_poc_lsb_minus4
     w.u(1, 1); // sub_layer_ordering_info_present: both sub-layers
     for _ in 0..2 {
         w.ue(4).ue(2).ue(0);
@@ -1444,7 +1449,8 @@ fn sps(vui: Option<u8>) -> Vec<u8> {
             w.u(1, 0).u(1, 1);
         }
     }
-    w.u(1, 1).ue(2).u(8, 0x55).u(1, 1).u(8, 0xAA).u(1, 0); // two long-term pictures of 8-bit lsb
+    let lsb = log2_max_poc_lsb_minus4 + 4;
+    w.u(1, 1).ue(2).u(lsb, 0x55).u(1, 1).u(lsb, 0xAA).u(1, 0); // two long-term pictures, each lsb that long
     w.u(1, 1).u(1, 1); // temporal mvp, strong intra smoothing
     match vui {
         None => {
@@ -1471,6 +1477,9 @@ fn the_sps_vui_says_the_transfer() {
     assert_eq!(hevc_sps_transfer(&sps(None)), None, "no VUI");
     assert_eq!(hevc_sps_transfer(&[0x02, 0x01, 0xAA]), None, "not an SPS");
     assert_eq!(hevc_sps_transfer(&pq[..pq.len() / 2]), None, "a truncated SPS");
+    // H.265 bounds log2_max_pic_order_cnt_lsb_minus4 to 0..=12: past it the SPS is corrupt.
+    assert_eq!(hevc_sps_transfer(&sps_with(Some(16), 12)), Some(TRC_PQ));
+    assert_eq!(hevc_sps_transfer(&sps_with(Some(16), 13)), None, "an out-of-range POC length");
 }
 
 #[test]

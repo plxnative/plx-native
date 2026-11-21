@@ -246,8 +246,9 @@ something.
   configuration record but whose RPUs say Profile 5 or Profile 8 over PQ/HLG (a remux that dropped
   the record; the server then reports no Dolby Vision) is reported by the demuxer
   (`ff::RpuOnlyScan`, `FeedRaw::rpu_dovi`), and once the Load has returned the pump has the route
-  declare it (`route::declare_rpu_dovi`, the decision the record would have frozen, so DV Off, a set
-  without confirmed support and a re-encode change nothing) and reloads once with the node.
+  declare it (`route::declare_rpu_dovi`: direct play only, outside an unconfirmed Original trial,
+  with the Dolby Vision setting frozen at the resolve, so DV Off and a set without confirmed support
+  change nothing) and reloads once with the node.
   Atmos routing and ACB forwarding are independent and unchanged. The payload evidence,
   Profile 5 one-tick fix and instrument traps live in that document.
 - **The Load's `adaptiveStreaming` ceiling is derived per session (`plx_play_feed::sink_envelope`), and

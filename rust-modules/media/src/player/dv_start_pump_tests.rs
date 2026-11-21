@@ -318,6 +318,7 @@ const RPU_P81: plx_playback_contract::feed::RpuDovi = plx_playback_contract::fee
 fn undeclared(probed: DvCapability) -> Rig {
     let mut rig = Rig::new(None);
     assert!(crate::route::set_stream_declaration_for_test(&mut rig.ps, "hevc", "eac3", 23.976, Dovi::NONE, false, probed));
+    crate::route::open_rpu_dovi_for_test(&mut rig.ps, plx_plex::plex::session::DolbyVisionMode::Auto);
     arm_guard(&mut rig, None);
     rig
 }
@@ -363,6 +364,18 @@ fn rpus_wait_for_the_load_to_return() {
     frames(&mut rig, 6);
     assert_eq!(reloads().len(), 1, "the Load returned: one reload");
     assert!(is_declared(&rig));
+}
+
+#[test]
+fn rpus_on_a_server_remux_do_not_reload() {
+    // A remux's `start.mkv` begins at its offset: a reload's seek there would land past the picture.
+    let _serial = plx_base::testlock::serial();
+    let mut rig = undeclared(DvCapability::Supported);
+    crate::route::install_transcode_for_test(&mut rig.ps, true, false);
+    FEED_SHARED.note_rpu_dovi(RPU_P81);
+    frames(&mut rig, 6);
+    assert!(reloads().is_empty());
+    assert!(!is_declared(&rig));
 }
 
 #[test]

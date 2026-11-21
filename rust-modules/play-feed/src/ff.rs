@@ -2661,7 +2661,11 @@ fn hevc_sps_transfer(nal: &[u8]) -> Option<c_int> {
     }
     r.ue()?; // bit_depth_luma_minus8
     r.ue()?; // bit_depth_chroma_minus8
-    let log2_max_poc_lsb = r.ue()? + 4;
+    let log2_max_poc_lsb_minus4 = r.ue()?;
+    if log2_max_poc_lsb_minus4 > 12 {
+        return None; // H.265 limits it to 0..=12
+    }
+    let log2_max_poc_lsb = log2_max_poc_lsb_minus4 + 4;
     let ordering_all = r.bit()? == 1;
     let first = if ordering_all { 0 } else { max_sub_layers_minus1 };
     for _ in first..=max_sub_layers_minus1 {
