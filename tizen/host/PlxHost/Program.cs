@@ -302,7 +302,7 @@ namespace PlxHost
         protected override void OnLocaleChanged(LocaleChangedEventArgs e)
         {
             base.OnLocaleChanged(e);
-            // The ABI has no locale event (plx_host.h: PLX_HOST_EVENT_PAUSE and _RESUME only): the locale the library knows is the one at start.
+            // The ABI has no locale event (plx_host.h: the host's events are PAUSE and RESUME, and the player's): the locale the library knows is the one at start.
             Log("OnLocaleChanged " + e.Locale + " (not forwarded: the library reads the locale at start only)");
         }
 

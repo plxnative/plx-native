@@ -1288,7 +1288,7 @@ Ecore names to `remote_token_key` pairs".
 | lifecycle | SDL app events | SDL app events | C# OnPause/OnResume/OnTerminate through `plx_host_post`; stop request and completion |
 | key store | keymanager3 / palm, `Durable` | `HostFile` (later Keychain) | `MemoryOnly` first (client id, language, resolution kept; Decision 7, B), then the Tizen store |
 | identity, caps | `webos::probe`, codec table, jail verdict | host values, `NotApplicable` | `Tizen` + version, player codec set, `NotApplicable` |
-| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over `Tizen.Multimedia.Player` (W10), Feed later (W12) |
+| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over the device's native media player, `libcapi-media-player`, called from the C# host (W10), Feed later (W12) |
 | display evidence | the LG driver's (ACB, exported window) | n/a | the Tizen driver's own |
 | storage helper | LS2/DB8 service (`rust-modules/storage`) | none | none |
 | diagnostics | event, crash and stderr descriptors (`main.c`, F19) | unchanged | in-app UDP log sink, required (Target shape 7, E5) |
@@ -1909,10 +1909,10 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   proves the emulator only: a retail set may still fail H1 or H2.
 
 ### W10 (H). The Tizen URI playback driver
-- Prerequisites: W9, W6c, and H6: `Tizen.Multimedia.Player` shows a mock title beneath our window with
+- Prerequisites: W9, W6c, and H6 (restated below): the native player shows a mock title beneath our window with
   the alpha model that works (report 2e, open conflict). It also survives a TV-menu round trip (review
   M9). The hello-world plays no media (F28, F37), so H6 needs a step-3 probe and a retail set: the
-  emulator cannot test `Tizen.Multimedia` (F37) and the runs did not probe it (E9, E11). The Home round trip of E11
+  emulator could not be assumed to run `Tizen.Multimedia` (F37, E9, E11); the 2026-11-22 probe then measured the native player chain on it (below), which still shows no picture and says nothing of a retail set. The Home round trip of E11
   covers the window and the EGL surface on the emulator only, with no player, so it is not H6. The tester request
   for H6 (with H1 and H2) is posted only with the owner's approval (Decision 5).
 - Goal: a `UriDriver` in `plx_platform_tizen` over `PlxHostApi` player calls (T6): capabilities (no

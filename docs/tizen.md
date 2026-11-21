@@ -140,8 +140,8 @@ thread per player instance, so they only post events. `EnableExportingVideoFrame
 was enough. With the window's alpha on the UI draws unchanged; no picture shows yet because the UI is opaque everywhere (the hole is part B).
 
 Not verified: anything on a retail set (the library's thread, the overlay beneath an alpha window, privileges, firmware differences), and the C# is
-not compiled by any gate in this repository (`which dotnet` finds none on the Mac that wrote it; the Windows session's `tizen-so`/`tizen-tpk` build
-is the first compile). This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
+compiled by any CI job (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`) and was not
+compiled where it was written (`which dotnet` finds none on that Mac): the first compile is a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
 no backend.
 
 The application and package id is `plxntizen0` (ten alphanumerics): a neutral name for the emulator package. A retail package id is
