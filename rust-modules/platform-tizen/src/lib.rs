@@ -11,3 +11,6 @@
 //! own feature, in no default set), so a default-feature pass that lists this package builds an empty
 //! library and no build of the television's or the desktop's ever contains it.
 #![cfg(feature = "tizen")]
+
+#[allow(dead_code)] // WIP: read by the lifecycle module that follows
+mod host_abi;
