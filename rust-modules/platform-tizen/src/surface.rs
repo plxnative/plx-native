@@ -242,7 +242,9 @@ mod tests {
         finish(&w, release);
     }
 
-    /// The shell's hooks are the stated no-ops: nothing is released, nothing is a cursor swap.
+    /// The shell's hooks are the stated no-ops: nothing is released, nothing is a cursor swap. (The three the
+    /// frame gate pins to `app/run.rs`, `pump_bus` and the two opaque-region calls, are empty bodies and are not
+    /// called from here.)
     #[test]
     fn the_sdl_shaped_hooks_are_stated_no_ops() {
         let w = World::new();
@@ -254,9 +256,6 @@ mod tests {
         shell.grab_surface(null_mut());
         assert!(!shell.release_surface());
         shell.arm_opaque_region();
-        shell.opaque_route(true);
-        shell.clear_opaque_region();
-        shell.pump_bus();
         shell.hide_pointer();
         shell.show_pointer_after_motion();
         assert!(!shell.hide_is_cursor_swap());
