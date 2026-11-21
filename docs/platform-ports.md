@@ -1156,7 +1156,7 @@ Ecore names to `remote_token_key` pairs".
     push and a wake, never a block. `plx_host_stop` runs on the host main thread, sets `stopping` and returns.
   - The loop thread runs `run_application` and mints `MainThread` (F32). There the token means "the loop thread":
     it authorises the player adapter and EGL, NOT Ecore window calls, and `MainThread::assume`'s safety text
-    (`base/src/task.rs:138`, "the SDL main thread") is updated in W9 before it is minted there. Work that must run
+    (`base/src/task.rs:138`, "the SDL main thread") is updated in W9 (landed): it names the loop thread of a hosted platform. Work that must run
     on the host thread leaves as a queued request through the callback table and comes back as an addressed
     completion event; the loop never waits on the host thread.
   - Ownership: a string passed into the library is copied before the call returns; a string passed to the host

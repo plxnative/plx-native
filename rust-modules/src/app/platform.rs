@@ -761,13 +761,27 @@ mod tests {
             .split_once(concat!("plx_platform_desktop::", "run("))
             .expect("the simulator's call to the desktop entry")
             .0;
-        for (what, text) in [
+        // The Tizen entry runs on the host's thread before the loop thread calls `host::run`: its exports and
+        // everything `plx_host_start` calls (the launch string, the UDP log, the dev preset, the window), plus
+        // the two layout hooks, which run after the publish and may not call back into what they answer.
+        let tizen = [
+            ("exports.rs", include_str!("../../platform-tizen/src/exports.rs")),
+            ("hosted.rs", include_str!("../../platform-tizen/src/hosted.rs")),
+            ("launch.rs", include_str!("../../platform-tizen/src/launch.rs")),
+            ("devboot.rs", include_str!("../../platform-tizen/src/devboot.rs")),
+            ("log_udp.rs", include_str!("../../platform-tizen/src/log_udp.rs")),
+            ("ecore.rs", include_str!("../../platform-tizen/src/ecore.rs")),
+            ("layout.rs", include_str!("../../platform-tizen/src/layout.rs")),
+        ];
+        let mut texts = vec![
             ("run_application", before),
             ("host.rs", host),
             ("platform-webos port.rs", port),
             ("platform-desktop lib.rs", desktop),
             ("platform-desktop bin/sim.rs (main, up to the run call)", sim),
-        ] {
+        ];
+        texts.extend(tizen);
+        for (what, text) in texts {
             for read in reads {
                 assert!(!text.contains(read), "{what} must not read `{read}` before the layout is published");
             }

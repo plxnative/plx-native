@@ -80,7 +80,7 @@ pub fn lookup(name: &str) -> Option<Option<Action>> {
 
 /// How many keys can be held at once before the oldest is forgotten (a remote has one key down; a wedged
 /// handler must not grow this without bound).
-const HELD_MAX: usize = 16;
+const HELD_LIMIT: usize = 16;
 
 /// Turns Ecore's down and up events into the application's press edges. The first down of a key is
 /// [`Edge::Down`], a down of a key that is still held is the auto-repeat ([`Edge::Repeat`]: Ecore has no
@@ -96,13 +96,22 @@ impl Decoder {
         Self { held: Vec::new() }
     }
 
+    /// Every held key released at once (the window lost focus): the up of each key that has an action, in the
+    /// order they went down. The held set is empty afterwards.
+    pub fn release_all(&mut self) -> Vec<(Action, Edge)> {
+        std::mem::take(&mut self.held)
+            .iter()
+            .filter_map(|name| lookup(name).flatten().map(|action| (action, Edge::Up)))
+            .collect()
+    }
+
     /// The press `name` makes, or `None` for a key with no action or a name the table does not list.
     pub fn decode(&mut self, name: &str, down: bool) -> Option<(Action, Edge)> {
         let edge = if down {
             if self.held.iter().any(|h| h == name) {
                 Edge::Repeat
             } else {
-                if self.held.len() >= HELD_MAX {
+                if self.held.len() >= HELD_LIMIT {
                     self.held.remove(0);
                 }
                 self.held.push(name.to_string());
@@ -268,12 +277,26 @@ mod tests {
         assert_eq!(d.decode("XF86Mystery", false), None);
     }
 
+    /// **Losing focus releases every held key**: the key-up goes to whatever took the focus, so without this the
+    /// first press after the focus returns would be a repeat with no down (SDL, the shared path, sends a release
+    /// for every held key when its window loses focus). Keys with no action have nothing to release.
+    #[test]
+    fn losing_focus_releases_every_held_key_once() {
+        let mut d = Decoder::new();
+        d.decode("Right", true);
+        d.decode("XF86Color", true);
+        d.decode("Return", true);
+        assert_eq!(d.release_all(), [(Action::Right, Edge::Up), (Action::Ok, Edge::Up)]);
+        assert_eq!(d.release_all(), [], "nothing is held any more");
+        assert_eq!(d.decode("Right", true), Some((Action::Right, Edge::Down)), "the next press is a fresh one");
+    }
+
     #[test]
     fn a_wedged_handler_cannot_grow_the_held_set_without_bound() {
         let mut d = Decoder::new();
-        for i in 0..(HELD_MAX * 4) {
+        for i in 0..(HELD_LIMIT * 4) {
             let _ = d.decode(&format!("k{i}"), true);
         }
-        assert_eq!(d.held.len(), HELD_MAX);
+        assert_eq!(d.held.len(), HELD_LIMIT);
     }
 }

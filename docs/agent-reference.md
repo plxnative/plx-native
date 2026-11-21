@@ -1309,9 +1309,10 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   Each has its own `build.rs` (the nanosvg link line reaches only the package that prints it), and each forwards the
   application's features with its defaults (the webOS crate omits `placeholder-sentinel`, which only the simulator's dump build names; `ci/test_platform_features.py`); the desktop's dependencies are `optional` and only its
   `hostsim` enables them, so a default-feature pass lists it and builds nothing of it.
-  `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate, **empty so far**: its library is
-  `#![cfg(feature = "tizen")]` (its own feature, in no default set), its one dependency (the application) is `optional` and only
-  `tizen` enables it, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
+  `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate: a hosted `.so` entry, an Ecore window, an EGL
+  context, the remote's keys and a UDP log tap, emulator only, with `host::NO_MEDIA` and no playback. Its library is
+  `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency (the application, `plx_base`, `plx_os`, and
+  `serde_json` for the launch string) is `optional` and only `tizen` enables them, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
   Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),

@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 
 /// Largest datagram: under a 1500-byte Ethernet MTU less the IP and UDP headers. A longer line is cut
 /// (marked `...`) in the datagram only; the file keeps it whole.
-const MAX_DATAGRAM: usize = 1400;
+const DATAGRAM_LIMIT: usize = 1400;
 
 /// One UDP sender: a non-blocking socket, its target and its sequence counter.
 pub struct UdpLog {
@@ -43,13 +43,13 @@ impl UdpLog {
     }
 }
 
-/// `"<seq:06> <line>\n"`, the line's own line breaks flattened to spaces, cut to [`MAX_DATAGRAM`] bytes on
+/// `"<seq:06> <line>\n"`, the line's own line breaks flattened to spaces, cut to [`DATAGRAM_LIMIT`] bytes on
 /// a character boundary and ended `...\n` when it was cut.
 fn datagram(seq: u64, line: &str) -> String {
     let flat: String = line.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
     let mut s = format!("{seq:06} {flat}\n");
-    if s.len() > MAX_DATAGRAM {
-        let mut cut = MAX_DATAGRAM - 4;
+    if s.len() > DATAGRAM_LIMIT {
+        let mut cut = DATAGRAM_LIMIT - 4;
         while !s.is_char_boundary(cut) {
             cut -= 1;
         }
@@ -158,7 +158,7 @@ mod tests {
     fn a_long_line_is_cut_on_a_character_boundary_and_stays_one_datagram() {
         let long = "é".repeat(1000);
         let d = datagram(7, &long);
-        assert!(d.len() <= MAX_DATAGRAM, "{} bytes", d.len());
+        assert!(d.len() <= DATAGRAM_LIMIT, "{} bytes", d.len());
         assert!(d.starts_with("000007 é") && d.ends_with("...\n"));
         assert_eq!(datagram(8, "short"), "000008 short\n");
     }
