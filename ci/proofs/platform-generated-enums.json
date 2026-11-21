@@ -33,7 +33,7 @@
   "lock": "403c96fd8b34a31c25784658866d166384f5e6b07afd9805451a7be6b5f73f33",
   "machine_newtype": "reviewed local newtype macro emits pub struct Name(pub u32); doc attributes only",
   "manifests": {
-    "Cargo.toml": "261fccb4004d0336a250531ac1c9606f085b219a4b4763fe26cfc91d27cfcbae",
+    "Cargo.toml": "ceeca8181aa752d708e40593d60617a6fe09113187cc77057c44bc6d3ea4892c",
     "appkit/Cargo.toml": "5cc1214cba7746fe0f2d4cfa5047b599e0d5124abe7bdaebe210381021b88c4a",
     "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
     "data/Cargo.toml": "74f79e6240f0965069ec34916ae276b3f7e5f4b944cf16a0846570a6b115afa0",
