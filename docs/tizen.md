@@ -67,11 +67,7 @@ symbol is exported. The link is written to `libplx.so.part` and renamed, so a fa
 **Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
 in the documentation shipped with the product), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
 `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`, the set the `.ipk` ships); `tizen/package.py` stages them and
-`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 2.8 is this package's ADDITIONAL
-entry for them (statically linked, versions from the `ci/dependencies.json` pins); section 3 describes the webOS package, where the same names
-are the television's own libraries. The rest of the file applies to this package where it holds the same thing: sections 2.1 (nanosvg), 2.2
-(icons), 2.4 (Rust crates) and 2.3 for Inter only (the other fonts are not staged); not sections 1, 2.5 (the NDK's startup objects and the ARM
-`getauxval` seam), 2.6 (Sentry Native is ARM-only) and 2.7 (`le-roots.pem` is not staged); section 2.8 spells this out.
+`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 2.8 is this package's additional entry and states, heading by heading, which other sections of the file cover the `.tpk`; section 3 there describes the webOS package, so read 2.8 first.
 
 ### What `tizen-verify` checks
 
