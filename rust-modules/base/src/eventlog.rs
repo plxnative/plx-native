@@ -1,7 +1,7 @@
 //! **The event log** — `/tmp/plxnative-events.log` on the television, the app's one support channel.
 //!
 //! [`log`] is the ONE sink every module writes through; [`redact_tokens`] and [`scrub`] are the
-//! guards every line passes on the way, and [`ring`] is the lab's tap. It lives in the base layer
+//! guards every line passes on the way, and [`ring`] is the lab's tap; [`set_tap`] is the platform's. It lives in the base layer
 //! (docs/module-layers.md) and names nothing outside itself but `paths`, so any module may log
 //! without naming the application, and the log closes no module cycle. It
 //! used to be `log` in `lib.rs`, and reaching the lab ring through `lab` from there put every
@@ -150,6 +150,54 @@ mod private_log_tests {
     }
 }
 
+/// The platform's tap. It is a once-set process global, so ONE test sets it, in the order that proves each claim: no
+/// tap, nothing changes; the tap, the scrubbed text; a second set, refused. Every other test in the process logs
+/// freely afterwards, and the tap ignores any line that does not carry this test's marker.
+#[cfg(test)]
+mod tap_tests {
+    use super::{events_log, log, set_tap, with_private_log};
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static LATE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn collect(line: &str) {
+        if line.contains("tap-test:") {
+            SEEN.lock().unwrap().push(line.to_string());
+        }
+    }
+
+    fn collect_late(line: &str) {
+        LATE.lock().unwrap().push(line.to_string());
+    }
+
+    #[test]
+    fn the_tap_sees_the_scrubbed_line_and_a_second_set_is_refused() {
+        with_private_log(|| {
+            log("tap-test: before the tap X-Plex-Token=BEFOREQQ77");
+            assert!(SEEN.lock().unwrap().is_empty(), "no tap is set, so nothing was handed anywhere");
+            let file = std::fs::read_to_string(events_log()).unwrap();
+            assert!(file.contains("tap-test: before the tap"), "and the file got the line as it always does: {file:?}");
+
+            assert!(set_tap(collect).is_ok(), "the first set is accepted");
+            log("tap-test: planted GET /x?X-Plex-Token=SECRETQQ99 ok");
+            {
+                let seen = SEEN.lock().unwrap();
+                assert_eq!(seen.len(), 1, "{seen:?}");
+                assert!(seen[0].contains("X-Plex-Token=<redacted> ok"), "the tap saw the redacted form: {:?}", seen[0]);
+                assert!(!seen[0].contains("SECRETQQ99"), "{:?}", seen[0]);
+            }
+            let file = std::fs::read_to_string(events_log()).unwrap();
+            assert!(file.contains("X-Plex-Token=<redacted> ok") && !file.contains("SECRETQQ99"), "{file:?}");
+
+            assert!(set_tap(collect_late).is_err(), "a second set is refused");
+            log("tap-test: after the refused set");
+            assert_eq!(SEEN.lock().unwrap().len(), 2, "the first tap is still the one called");
+            assert!(LATE.lock().unwrap().is_empty(), "the refused tap was never called");
+        });
+    }
+}
+
 /// The mode of the event log and its two siblings (`plxnative-crash.log`, `plxnative-stderr.log`,
 /// which `src/main.c`'s `open_fd_log` opens at the same mode): owner read/write, the app's own
 /// group (gid 5000 on the television) read, nothing for anyone else.
@@ -260,7 +308,31 @@ pub fn log(m: &str) {
     // Compiled out without the `lab-diagnostics` feature — see `lab`.
     #[cfg(feature = "lab-diagnostics")]
     crate::eventlog::ring::record(&line);
+    // The platform's tap sees the same scrubbed line, for a platform whose log channel is not the
+    // file (the hosted one's datagram sender). It does its own IO; this only hands it the text.
+    if let Some(tap) = TAP.get() {
+        tap(&line);
+    }
     let _ = append_record(&p, &line);
+}
+
+/// The platform's log tap: a plain function [`log`] calls with every SCRUBBED line, once set.
+static TAP: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Install the log tap, once per process. A platform whose log is not the file at [`events_log`]
+/// (a hosted one, whose files nobody can fetch) sets it before it runs the application, and
+/// forwards each line where it can be read.
+///
+/// The tap receives exactly what the file receives: the line after [`scrub::scrub_local`], so it
+/// is the same strict subset the lab ring is, and inherits every redaction. It runs on whichever
+/// thread logged, inside [`log`], so it must be quick, must not block and must not log (that
+/// would re-enter it): a failure it cannot report it drops. The base does no IO for it: any
+/// socket or file is the platform's own.
+///
+/// A second call is refused with the function it tried to install, and the first stays: one
+/// platform per process, and a late set must not swap the channel under running threads.
+pub fn set_tap(tap: fn(&str)) -> Result<(), fn(&str)> {
+    TAP.set(tap)
 }
 
 /// The log's credential backstop. These run on the pure function, so they need no filesystem.
