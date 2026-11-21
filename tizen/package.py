@@ -165,7 +165,10 @@ def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict
     author, dist = check_signing(env)
     host = stage(root, so, mock, log)
     dotnet_root = Path(env.get("DOTNET_ROOT") or Path.home() / ".dotnet")
-    build_env = dict(env)
+    # GNU make exports a command-line `PLATFORM=tizen` into every recipe, and MSBuild reads the environment as properties, case-insensitively:
+    # left in, it builds as Platform=tizen and writes bin/tizen/Release/ and obj/tizen/, where the glob below finds nothing. Drop it, and pin
+    # the property on the command (a global property outranks the environment).
+    build_env = {k: v for k, v in env.items() if k.upper() != "PLATFORM"}
     build_env.update({"DOTNET_ROOT": str(dotnet_root), "PATH": f"{dotnet_root}{os.pathsep}{env.get('PATH', '')}",
                       "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1",
                       # MSBuild environment properties scoped to this one child: the SDK's TizenPrepareCertificate falls back to its bundled
@@ -176,7 +179,7 @@ def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict
         raise PackageError("no dotnet: install a user-local .NET 8 SDK (dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet), "
                            "set DOTNET_ROOT if elsewhere, and the Tizen.NET.Sdk package restores from NuGet (docs/tizen.md, Toolchain)")
     # No build servers: a long-lived msbuild/compiler process would keep the environment (and the passwords in it) alive.
-    command = ["dotnet", "build", PROJECT, "-c", "Release", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false"]
+    command = ["dotnet", "build", PROJECT, "-c", "Release", "-nologo", "-nodeReuse:false", "-p:UseSharedCompilation=false", "-p:Platform=AnyCPU"]
     print("dotnet build -c Release (Tizen.NET.Sdk, " + TFM + "; signed with the supplied certificates)", flush=True)
     result = subprocess.run(command, cwd=host, env=build_env)
     if result.returncode != 0:

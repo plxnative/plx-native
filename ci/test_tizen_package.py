@@ -8,6 +8,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -94,6 +95,50 @@ class Signing(unittest.TestCase):
             with self.assertRaises(package.PackageError):
                 package.build_tpk(root, so, None, None, {})
             self.assertFalse((root / package.HOST_DIR / "lib").exists())
+
+
+class DotnetBuild(unittest.TestCase):
+    """`make PLATFORM=tizen` puts PLATFORM=tizen in every recipe's environment, and MSBuild reads the environment as properties,
+    case-insensitively: left in, the build writes bin/tizen/Release/... and the glob for bin/Release/... finds no package."""
+
+    def build(self, env_extra):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = fake_root(tmp)
+            so = tmp / "x86_64" / "libplx.so"
+            so.parent.mkdir()
+            so.write_bytes(b"elf")
+            author, dist = tmp / "a.p12", tmp / "d.p12"
+            author.write_bytes(b"x")
+            dist.write_bytes(b"x")
+            env = {"PATH": "/usr/bin", "PLX_TIZEN_AUTHOR_P12": str(author), "PLX_TIZEN_AUTHOR_PASS": "p",
+                   "PLX_TIZEN_DIST_P12": str(dist), "PLX_TIZEN_DIST_PASS": "q"}
+            env.update(env_extra)
+            seen = {}
+
+            def fake_run(command, cwd=None, env=None, **kwargs):
+                seen["command"], seen["env"] = list(command), dict(env)
+                out = Path(cwd) / "bin/Release" / package.TFM
+                out.mkdir(parents=True)
+                with zipfile.ZipFile(out / "plxntizen0-0.1.0.tpk", "w") as z:
+                    for name in package.REQUIRED_IN_TPK:
+                        z.writestr(name, b"elf" if name == "lib/libplx.so" else "x")
+                return unittest.mock.Mock(returncode=0)
+
+            with unittest.mock.patch.object(package.subprocess, "run", fake_run), \
+                    unittest.mock.patch.object(package.shutil, "which", lambda *a, **k: "/usr/bin/dotnet"):
+                package.build_tpk(root, so, None, None, env)
+            return seen
+
+    def test_the_child_env_has_no_platform_and_the_command_pins_anycpu(self):
+        seen = self.build({"PLATFORM": "tizen", "Platform": "tizen"})
+        self.assertEqual([k for k in seen["env"] if k.upper() == "PLATFORM"], [], "PLATFORM reached MSBuild as a property")
+        self.assertIn("-p:Platform=AnyCPU", seen["command"])
+
+    def test_the_signing_values_still_reach_the_child_only_as_properties(self):
+        seen = self.build({"PLATFORM": "tizen"})
+        self.assertEqual(seen["env"]["AuthorPass"], "p")
+        self.assertFalse(any("p" == a or "q" == a for a in seen["command"]), "a password is on the command line")
 
 
 class Staging(unittest.TestCase):
