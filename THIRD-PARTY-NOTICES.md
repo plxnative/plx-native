@@ -553,18 +553,35 @@ Portions of this software are copyright © The FreeType Project (https://freetyp
 
 The Tizen package carries this file as `res/THIRD-PARTY-NOTICES.md` and the licence texts it names as `res/licenses/` (`tizen/package.py`,
 `stage_notices`: `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`; `OFL.txt` ships as `res/OFL.txt`), and refuses a package
-without them. This entry is ADDITIONAL. Its inputs are the whole-archived `libplx_platform_tizen.a` (the application and its Rust crates, the main
-input), `svg.o`, SDL2_ttf, SDL2 and the system libraries (`mk/platform-tizen.mk`, the `cc -shared` line); `tizen-verify` refuses any other undefined
-symbol or `DT_NEEDED` entry (`ci/check-tizen-so.py`: `NEEDED_ALLOWED`, `NEEDED_REQUIRED`). Every other heading of this file has exactly one
-disposition for the `.tpk`:
+without them. This entry is ADDITIONAL. Its LINK-time inputs are the whole-archived `libplx_platform_tizen.a` (the application and its Rust crates,
+the main input), `svg.o`, SDL2_ttf, SDL2 and the system libraries (`mk/platform-tizen.mk`, the `cc -shared` line); `tizen-verify` refuses any other
+undefined symbol or `DT_NEEDED` entry (`ci/check-tizen-so.py`: `NEEDED_ALLOWED`, `NEEDED_REQUIRED`). The library also opens libraries BY NAME at run
+time (`plx_base::dynlib!`; the crates it compiles are the `cargo tree` of `plx_platform_tizen` with `TIZEN_FEATURES`). Those are:
+`libcurl.so.4` or `libcurl.so.5` (`rust-modules/net/src/net.rs:91`, `curlio.rs:179`, `net/connect_only.rs:14`); `libEGL.so.1`
+(`rust-modules/platform-tizen/src/egl.rs:27`); `libecore_wl2.so.1`, `libecore_input.so.1` and `libwayland-egl.so.1`
+(`rust-modules/platform-tizen/src/ecore.rs:40-114` and `:423-427`; `libecore_wl2` brings in `libwayland-client`, which this library does not name); and, only
+if the user starts a playback trace in Settings, `libgstreamer-1.0.so.0` (`rust-modules/os/src/playback_trace.rs:29`). All of them are the Tizen
+image's own; none is staged. The library also tries names this package does NOT ship, which fail to open: the bundled FFmpeg (`libavformat-plx.so.63`,
+`libavcodec-plx.so.63`, `libavutil-plx.so.61`, `libswscale-plx.so.10`; `rust-modules/media-codecs/src/ffi.rs:310-455`, the `ff: ... MISSING` lines of
+`docs/tizen.md`), `libass-plx*.so.0` (`rust-modules/gfx/src/rtl.rs:55` for Arabic and Hebrew text, `rust-modules/media/src/player/ass.rs:1272` for
+subtitles) and, in a `devtriggers` build with the dev capture on, `libturbojpeg.so.0` in the application directory (`rust-modules/src/capture.rs:472`).
+Not compiled into this library at all: the webOS port (`libhelpers.so.2`, `rust-modules/platform-webos/src/system.rs:985`), the separate storage
+service binary (`luna-service2` and `glib-2.0`, `rust-modules/os/src/storage_service/bus.rs:23,42`), Sentry Native (declared for 32-bit ARM Linux
+only, `rust-modules/telemetry/src/telemetry/native.rs:790`) and zlib (the `lab-diagnostics` feature, `rust-modules/base/src/diag.rs:7`, which
+`TIZEN_FEATURES` does not enable). EGL lookups by `rust-modules/gfx/src/egl.rs:110` only look at an EGL already mapped (`RTLD_NOLOAD`) and open nothing.
+The .NET host adds `bin/PlxHost.dll`, the project's own code under the project's own licence; `PlxHost.csproj` references `Tizen.NET` with
+`ExcludeAssets=Runtime` (the platform provides it, so no `Tizen.NET` assembly is copied from that package) and `Tizen.NET.Sdk` is a build-time
+package; whether the transitive `Tizen.NET.API8` contributes any assembly to `bin/` has not been read from a built package, and `verify_tpk`
+(`REQUIRED_IN_TPK`) requires `bin/PlxHost.dll` without forbidding others. Every other heading of this file has exactly one disposition for the `.tpk`:
 
-- **1.1 FFmpeg: does not apply.** Not linked and not staged.
-- **1.2 Native ASS rendering: does not apply.** libass, FriBidi, HarfBuzz and libunibreak are not linked. (The FreeType and zlib texts section 5
-  attributes to 1.2 are, for this package, this section's.)
+- **1.1 FFmpeg: does not apply.** Not linked and not staged; the library's attempt to open its own FFmpeg names finds nothing.
+- **1.2 Native ASS rendering: does not apply.** libass, FriBidi, HarfBuzz and libunibreak are not linked or staged; the attempt to open `libass-plx*`
+  finds nothing. (The FreeType and zlib texts section 5 attributes to 1.2 are, for this package, this section's.)
 - **1.3 Libraries provided by your television: applies with a difference.** `libplx.so` links the Tizen image's glibc dynamically
   (`libc.so.6` is required; `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `librt.so.1` and `libutil.so.1` appear as `--as-needed` leaves them), under
   the ordinary shared-library mechanism of LGPL-2.1 §6(b) and the reading of 1.3, at THAT image's version, not the table's; `licenses/LGPL-2.1.txt`
-  travels with the package. GLib and libcurl are not linked. 1.3's last paragraph (glibc's startup fragments linked in by the webOS NDK) is the
+  travels with the package. libcurl is opened at run time by name, the image's own, as on webOS (and under the curl licence, as 1.3 says), at
+  that image's version; GLib is not used. 1.3's last paragraph (glibc's startup fragments linked in by the webOS NDK) is the
   webOS binary's: see 2.5.
 - **2.1 Pinned C source (nanosvg): applies as written.** `svg.o` is linked into `libplx.so`.
 - **2.2 Icon artwork: applies as written.** The icons are compiled into the library (`include_str!`).
@@ -577,22 +594,27 @@ disposition for the `.tpk`:
 - **2.6 Native crash capture: does not apply.** The Sentry Native symbols are declared only for 32-bit ARM Linux and no crash handler is staged.
 - **2.7 Public CA root certificates: does not apply.** `le-roots.pem` is not staged.
 - **2.8** (this section): the Tizen package's own entry for SDL2, SDL2_ttf and FreeType.
-- **3 Dynamically linked: applies with a difference.** It describes the webOS television's libraries. For the Tizen package, glibc and `libgcc_s.so.1`
-  are the Tizen image's, at that image's versions, and `libGLESv2.so.2` is required (see 4); SDL2, SDL2_ttf and FreeType are NOT dynamically linked
-  (they are statically linked, above); the other rows (zlib, libcurl, libwayland-client, luna-service2, GLib) are not loaded by `libplx.so`.
+- **3 Dynamically linked: applies with a difference.** It describes the webOS television's libraries. For the Tizen package every library below
+  is the Tizen image's own, at that image's versions (none is the table's), and none is distributed here: glibc and `libgcc_s.so.1` (linked,
+  `DT_NEEDED`); `libGLESv2.so.2` (linked, required; see 4); libcurl, `libEGL.so.1`, `libecore_wl2.so.1`, `libecore_input.so.1`, `libwayland-egl.so.1`,
+  `libwayland-client` (through Ecore_Wl2) and, on request, `libgstreamer-1.0.so.0` (opened at run time, above). SDL2, SDL2_ttf and FreeType are NOT
+  dynamically linked (statically linked, above). Not loaded by this library: zlib, luna-service2 and GLib (above).
 - **4 Not determined: applies with a difference.** Its "licence not established" list is the `.ipk`'s (LG's `libGLESv2.so.2`, `libAcbAPI`,
   `libplayerAPIs`, `libpf`); the Tizen library does not link the last three. The Tizen image's own `libGLESv2.so.2` is required by the library and
-  its licence is likewise not established. The historical NDK archive paragraph does not apply (ARM webOS builds). The non-affiliation paragraph
-  and the third-party-brands paragraph apply as written, and PlxNative is likewise not affiliated with Samsung or Tizen, whose names are their owners'.
+  its licence is likewise not established; the licences of the other Tizen-image libraries listed in 3 (libEGL, Ecore, `libwayland-egl`,
+  `libwayland-client`, `libgstreamer`) have not been read here, and none is distributed. The historical NDK archive paragraph does not apply (ARM
+  webOS builds). The non-affiliation paragraph and the third-party-brands paragraph apply as written, and PlxNative is likewise not affiliated with
+  Samsung or Tizen, whose names are their owners'.
 - **5 The `licenses/` directory: applies with a difference.** Its table is written for the `.ipk` (it names FFmpeg, libass and Sentry Native).
   The `.tpk` ships the same `licenses/*.txt` set under `res/licenses/` (and `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` beside them rather than at a
   package root); the texts this package's contents need are `Zlib.txt` and `FreeType.txt` (this section), `MIT.txt`, `Apache-2.0.txt`,
   `LLVM-exception.txt`, `Unicode-3.0.txt`, `ICU4X.txt`, `libm.txt` and `qrcodegen.txt` (2.2, 2.4), `LGPL-2.1.txt` (1.3), and `res/OFL.txt` (2.3).
-- **6 Deliberately not listed: applies as written.** libjpeg-turbo, jsmpeg and the Open Watch Party data are not in the `.tpk` either (nothing of
-  them is staged or linked).
+- **6 Deliberately not listed: applies as written.** libjpeg-turbo (looked up in the application directory by the dev capture, and not staged),
+  jsmpeg and the Open Watch Party data are not in the `.tpk` either (nothing of them is staged or linked).
 - **Source-only attribution: applies with a difference.** The Frank Muller paragraph applies as written, and the last paragraph (no SDL2, GLES2 or KHR headers or
   sources in the repository) names this package's SDL2, SDL2_ttf and FreeType (this section). The first paragraph (the historical polyfill archive, checked by `ci/check-link-evidence.py` and `ci/check-packaged-elf.py`)
-  is the webOS ELF's; `tizen-verify` is this library's check of its own link inputs.
+  is the webOS ELF's; `tizen-verify` checks this library's `DT_NEEDED`, undefined symbols, exports and static SDL/SDL_ttf/FreeType symbols, which is not
+  the exact-linker-input proof `ci/check-link-evidence.py` gives the webOS ELF.
 
 ---
 
