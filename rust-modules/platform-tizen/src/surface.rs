@@ -13,8 +13,9 @@
 //! before the stop gets the other log line (`TizenShell::teardown`).
 //!
 //! **The window handle is null, and that is safe** ([`Surface::window`], D1). The SDL-shaped calls that read
-//! it (`textinput`'s focus read, the on-screen keyboard probe) take SDL's "no window" answer when SDL was
-//! never initialised, which `Shell::init` here never does; the tests that pin it are
+//! it differ: `textinput`'s `has_focus` returns `None` for a null window before any SDL call (the log's
+//! `focus=?`), and only the on-screen keyboard probe (`keyboard_probe(win)`) takes SDL's "no window" answer,
+//! which holds because SDL was never initialised, as `Shell::init` here never does; the tests that pin it are
 //! `plx_shell_sdl::text` and the application's `textinput`.
 //!
 //! Everything SDL-shaped that [`Shell`] asks for is a stated no-op: there is no SDL window to bind, no
