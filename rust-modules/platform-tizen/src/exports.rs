@@ -16,7 +16,7 @@
 //! refusal would.
 use crate::ecore::Window;
 use crate::host_abi::{self, PlxHostApi, PlxHostEvent};
-use crate::hosted::{Hosted, STOP_DEADLINE};
+use crate::hosted::{guarded, Hosted, STOP_DEADLINE};
 use crate::launch::Launch;
 use crate::{devboot, layout, log_udp, surface, HOSTED, PLATFORM};
 use plx_base::eventlog::log;
@@ -24,7 +24,8 @@ use plxnative_modules::host::{self, Exit};
 use std::ffi::{c_char, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-/// Steps 1-4 above, on the host thread. Refuses with [`host_abi::E_WINDOW`] when the window cannot be made.
+/// Steps 1-4 above, on the host thread. Refuses with [`host_abi::E_WINDOW`] when the window or a library it
+/// needs (Ecore, EGL) cannot be brought up; a panic after the window exists releases it ([`guarded`]).
 fn bring_up(launch: &Launch) -> Result<Window, i32> {
     layout::store(launch);
     if let Some(target) = launch.log_udp {
@@ -34,9 +35,7 @@ fn bring_up(launch: &Launch) -> Result<Window, i32> {
         }
     }
     devboot::arm(&launch.dev);
-    let window = Window::create()?;
-    window.show();
-    Ok(window)
+    guarded(Window::create()?, |window| window.show())
 }
 
 /// The loop thread's body: hand the window over, then run the application.
@@ -49,11 +48,12 @@ fn run(launch: Launch, window: Window) -> Exit {
     host::run(&PLATFORM, &pms_host, launch.pms_port)
 }
 
-/// `plx_host_start` over `hosted` (the process's own, in the export). A panic while bringing up answers as
-/// a refusal does: `on_stopped(1, 1)` on this thread, and the error code.
+/// `plx_host_start` over `hosted` (the process's own, in the export). A panic while bringing up is caught in
+/// [`Hosted::start`] and answers `E_WINDOW` with `on_stopped(1, 1)` on this thread, as a refusal does; this
+/// outer net is for a panic in `start`'s own code, and answers the same way.
 pub(crate) fn start(hosted: &'static Hosted, api: *const PlxHostApi, launch_json: *const c_char) -> i32 {
     catch_unwind(AssertUnwindSafe(|| hosted.start(api, launch_json, bring_up, run)))
-        .unwrap_or_else(|_| hosted.refuse(host_abi::E_STATE))
+        .unwrap_or_else(|_| hosted.refuse(host_abi::E_WINDOW))
 }
 
 /// Load the library's run: validate the table and the launch string, bring the window up on THIS (the host's

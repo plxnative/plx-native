@@ -41,6 +41,11 @@ plx_base::dynlib! {
     }
 }
 
+/// Load the EGL table (idempotent): the window layer asks it on the host thread, before any window exists.
+pub(crate) fn load() -> plx_base::dynlib::Loaded {
+    libegl::load(None)
+}
+
 const EGL_OPENGL_ES_API: u32 = 0x30A0;
 const EGL_NONE: i32 = 0x3038;
 const EGL_SURFACE_TYPE: i32 = 0x3033;
@@ -85,7 +90,7 @@ impl Egl {
     /// THIS thread. Every step that can fail is logged with `eglGetError`; whatever was made before the
     /// failure is released.
     pub fn create(wl_display: *mut c_void, native_window: *mut c_void) -> Result<Egl, String> {
-        if !crate::ecore::loaded("egl", libegl::load(None)) {
+        if !crate::ecore::loaded("egl", load()) {
             return Err("egl: libEGL.so.1 is not usable (the log line above says why)".into());
         }
         // SAFETY (whole function): EGL calls with EGL's arguments on a live table; every returned handle is

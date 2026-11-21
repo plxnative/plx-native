@@ -106,7 +106,7 @@ impl Hosted {
 
     /// `plx_host_start`. `bring_up` runs on the calling (host) thread and returns what the loop thread needs
     /// from it (the window); `run` runs the application on the new loop thread and returns its [`Exit`].
-    pub fn start<W: Send + 'static>(
+    pub fn start<W: Made + 'static>(
         &'static self,
         api: *const PlxHostApi,
         launch_json: *const c_char,
@@ -125,18 +125,28 @@ impl Hosted {
             Some(launch) => launch,
             None => return self.refuse(host_abi::E_LAUNCH),
         };
-        let window = match bring_up(&launch) {
-            Ok(window) => window,
-            Err(code) => return self.refuse(code),
+        // A panic while bringing up is a refusal like any other (`E_WINDOW`, with the callback): the step that
+        // made the window releases it itself ([`guarded`]), so nothing is left shown.
+        let window = match catch_unwind(AssertUnwindSafe(|| bring_up(&launch))) {
+            Ok(Ok(window)) => window,
+            Ok(Err(code)) => return self.refuse(code),
+            Err(_) => {
+                plx_base::eventlog::log("host: bringing the platform up panicked");
+                return self.refuse(host_abi::E_WINDOW);
+            }
         };
         self.running.store(true, Ordering::SeqCst);
-        let spawned = plx_base::task::spawn_sized("plx-loop", LOOP_STACK_BYTES, move || {
-            // A panic in the application must still end in a report: it is a loop that died, so nothing it
-            // held is released (`Exit::refused` is `Retained`).
-            let exit = catch_unwind(AssertUnwindSafe(|| run(launch, window))).unwrap_or(Exit::refused(1));
-            self.finish(&exit);
-        });
-        if spawned.is_none() {
+        let started = give_to_loop(
+            window,
+            |body| plx_base::task::spawn_sized("plx-loop", LOOP_STACK_BYTES, body).is_some(),
+            move |window| {
+                // A panic in the application must still end in a report: it is a loop that died, so nothing it
+                // held is released (`Exit::refused` is `Retained`).
+                let exit = catch_unwind(AssertUnwindSafe(|| run(launch, window))).unwrap_or(Exit::refused(1));
+                self.finish(&exit);
+            },
+        );
+        if !started {
             self.running.store(false, Ordering::SeqCst);
             return self.refuse(host_abi::E_THREAD);
         }
@@ -261,6 +271,53 @@ impl Hosted {
     }
 }
 
+/// What `bring_up` made on the host thread and the host thread must release if the start is then refused
+/// (the Ecore window: shown, with its handlers registered, until [`Made::unmake`]).
+pub trait Made: Send {
+    /// Release it. HOST THREAD.
+    fn unmake(self);
+}
+
+impl Made for () {
+    fn unmake(self) {}
+}
+
+/// Hand `made` to the loop thread: `spawn` starts a thread running the closure it is given (`false`: it could
+/// not), and that closure passes `made` to `body`. The window waits in a slot the loop thread empties first, so
+/// when the thread cannot be started it is released HERE, on the host thread, before the refusal reports
+/// "nothing is held" (a window dropped inside the never-run closure would stay shown for the process's life).
+fn give_to_loop<W: Made + 'static>(
+    made: W,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> bool,
+    body: impl FnOnce(W) + Send + 'static,
+) -> bool {
+    let slot = std::sync::Arc::new(Mutex::new(Some(made)));
+    let theirs = std::sync::Arc::clone(&slot);
+    let started = spawn(Box::new(move || {
+        let taken = theirs.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(made) = taken {
+            body(made);
+        }
+    }));
+    if !started {
+        if let Some(made) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            made.unmake();
+        }
+    }
+    started
+}
+
+/// Run `step` on what was just made; a panic in it releases it and is a refusal (`E_WINDOW`), so a panic
+/// between making the window and the loop owning it leaves nothing shown.
+pub fn guarded<W: Made>(made: W, step: impl FnOnce(&W)) -> Result<W, i32> {
+    if catch_unwind(AssertUnwindSafe(|| step(&made))).is_err() {
+        plx_base::eventlog::log("host: a step on the new window panicked; the window is released");
+        made.unmake();
+        return Err(host_abi::E_WINDOW);
+    }
+    Ok(made)
+}
+
 /// The task the host calls on its main thread for [`Hosted::on_host`].
 unsafe extern "C" fn run_job(arg: *mut c_void) {
     // SAFETY: `arg` is the `Box<Job>` `on_host` leaked, handed back once.
@@ -382,7 +439,7 @@ pub(crate) mod testing {
             self.stopped()
         }
 
-        pub(crate) fn start<W: Send + 'static>(
+        pub(crate) fn start<W: super::Made + 'static>(
             &self,
             bring_up: impl FnOnce(&Launch) -> Result<W, i32>,
             run: impl FnOnce(Launch, W) -> Exit + Send + 'static,
@@ -483,6 +540,76 @@ mod tests {
     fn a_window_that_will_not_open_is_a_refusal_reported_once() {
         let w = World::new();
         let code = w.start(|_| -> Result<(), i32> { Err(host_abi::E_WINDOW) }, |_, ()| unreachable!("no loop"));
+        assert_eq!(code, host_abi::E_WINDOW);
+        assert_eq!(w.stopped(), [(1, 1)]);
+        assert_eq!(w.hosted.push(Input::Pause), Err(host_abi::E_STATE), "nothing is running");
+    }
+
+    /// A plain value standing in for the window in the tests that check what the loop is handed.
+    impl Made for u32 {
+        fn unmake(self) {}
+    }
+
+    /// A `Made` that counts its release and remembers the thread.
+    struct Tracked(std::sync::Arc<Mutex<Vec<std::thread::ThreadId>>>);
+
+    impl Made for Tracked {
+        fn unmake(self) {
+            self.0.lock().unwrap().push(std::thread::current().id());
+        }
+    }
+
+    /// **A loop thread that cannot be started releases the window on the host thread**, once, before the
+    /// refusal; one that starts owns it and nothing is released by the host.
+    #[test]
+    fn a_loop_thread_that_cannot_start_returns_the_window_to_the_host_thread() {
+        let released = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let ran = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let started = give_to_loop(Tracked(released.clone()), |_dropped| false, move |_| flag.store(true, Ordering::SeqCst));
+        assert!(!started);
+        assert!(!ran.load(Ordering::SeqCst), "the body never ran");
+        assert_eq!(*released.lock().unwrap(), [std::thread::current().id()], "released once, here");
+
+        released.lock().unwrap().clear();
+        let (tx, rx) = mpsc::channel();
+        let started = give_to_loop(
+            Tracked(released.clone()),
+            |body| {
+                std::thread::spawn(body);
+                true
+            },
+            move |window| {
+                tx.send(()).unwrap();
+                drop(window);
+            },
+        );
+        assert!(started);
+        rx.recv_timeout(Duration::from_secs(5)).expect("the body got the window");
+        assert!(released.lock().unwrap().is_empty(), "a started loop owns it; the host releases nothing");
+    }
+
+    /// A panic in a step on the new window releases it (on this thread) and is `E_WINDOW`; a step that
+    /// returns keeps it.
+    #[test]
+    fn a_panic_on_the_new_window_releases_it_and_refuses() {
+        let released = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let out = plx_base::eventlog::with_private_log(|| guarded(Tracked(released.clone()), |_| panic!("show")));
+        assert!(matches!(out, Err(code) if code == host_abi::E_WINDOW));
+        assert_eq!(*released.lock().unwrap(), [std::thread::current().id()]);
+        released.lock().unwrap().clear();
+        assert!(guarded(Tracked(released.clone()), |_| {}).is_ok());
+        assert!(released.lock().unwrap().is_empty());
+    }
+
+    /// **A panic while bringing up is the header's `E_WINDOW` refusal**, with the callback it promises:
+    /// `on_stopped(1, 1)` once on the host thread, and nothing runs.
+    #[test]
+    fn a_panic_in_bring_up_is_a_documented_refusal_with_its_callback() {
+        let w = World::new();
+        let code = plx_base::eventlog::with_private_log(|| {
+            w.start(|_| -> Result<(), i32> { panic!("bring up") }, |_, ()| unreachable!("no loop"))
+        });
         assert_eq!(code, host_abi::E_WINDOW);
         assert_eq!(w.stopped(), [(1, 1)]);
         assert_eq!(w.hosted.push(Input::Pause), Err(host_abi::E_STATE), "nothing is running");
