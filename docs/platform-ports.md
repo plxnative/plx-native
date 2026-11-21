@@ -1849,6 +1849,13 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8b, one row per fact: the library name lists (F27) become per-platform lists supplied through the
   platform (`dynlib!` stays shared); `paths`'s fallback install prefix becomes a platform value; the
   storage helper is packaged only by `PLATFORM=webos`; `main.c` and `starfish.c` are webOS-only.
+  As landed (the Makefile PR): the goals that build the webOS package (`WEBOS_TV_GOALS` in the `Makefile`: `all`, `ipk`, `install`,
+  `deploy`, `test`, `pkg/plxnative`, the storage helper `pkg/plxnative-storage`, `src/%.o`, `symbols`, `symbols-libs`,
+  `sentry-symbols`, `libass`, `sentry-native`) are refused at parse time, above the stamp reset, under an explicit
+  `PLATFORM=desktop` or `tizen`; `SRCS` is untouched and no file moved (the keying is the goal, because the one C unit another
+  platform compiles, `svg.c`, is built by its own rule). `PLATFORM=webos`, the default, prints the same `make -B -n` text, and the
+  queries answer under every value. `make sim all` implies `desktop` from `sim` and so refuses `all` (one PLATFORM per
+  invocation); `PLATFORM=webos make sim all` takes both.
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
