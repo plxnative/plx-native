@@ -32,7 +32,12 @@
  *   plx_host_start is called once. It refuses a table that is NULL, smaller than version 1
  *   (size < PLX_HOST_API_V1_SIZE), of an abi_version of 0, or with a flags bit the library does not know
  *   (version 1 knows none: flags must be 0): PLX_HOST_E_ARGS, and no callback of any kind is made, because
- *   the table was not accepted. A later field of a bigger table is read only when size covers it.
+ *   the table was not accepted. A later field of a bigger table is read only when size covers it AND
+ *   abi_version names it: the player group below (version 2) is read only when size >= PLX_HOST_API_V2_SIZE and
+ *   abi_version >= 2, and then only when BOTH pointers are non-NULL. A version-1 host, a version-2 host that
+ *   left either NULL, or a table whose size stops at run_on_host is NOT refused: the library starts, reports
+ *   "no media player" and plays nothing (the platform composes no URI driver). Skew is "no playback", never a
+ *   refused start.
  *
  *   From the moment the table is ACCEPTED, on_stopped is delivered exactly once, whatever happens next:
  *     PLX_HOST_OK        the loop thread was started; on_stopped comes from it (or from the deadline thread
@@ -97,10 +102,49 @@
  * POST
  *   plx_host_post copies the event and queues it: a bounded push that never blocks. PLX_HOST_E_FULL means
  *   the queue was full and the event was dropped; PLX_HOST_E_STATE, that the library is not running (not
- *   started, or a stop was requested); PLX_HOST_E_ARGS, a NULL event, a size below PLX_HOST_EVENT_V1_SIZE or
- *   an unknown kind.
+ *   started, or a stop was requested); PLX_HOST_E_ARGS, a NULL event, a size below PLX_HOST_EVENT_V1_SIZE
+ *   (below PLX_HOST_EVENT_V2_SIZE for a player kind) or an unknown kind; PLX_HOST_E_STALE, a player event whose
+ *   epoch is not live (see PLAYER).
  *   A pause or a resume is one transition: the application is told once per change of state. A pause while
  *   paused, and a resume while running (the host's resume at launch), are accepted and make no event.
+ *
+ * PLAYER (version 2)
+ *   Two function pointers, player_open and player_verb, are the library's requests to the host's media
+ *   player. The host implements them however it likes (the shipped one P/Invokes libcapi-media-player.so.0;
+ *   tizen/host/PlxHost/PlxPlayer.cs); the table does not name an implementation.
+ *   - A request RETURNS AT ONCE: PLX_HOST_PLAYER_OK means it was queued for the host's own video thread, a
+ *     negative PLX_HOST_PLAYER_E_* means it was refused and nothing was queued. The library calls them from its
+ *     loop thread and never waits on the host; a result is an EVENT, posted with plx_host_post.
+ *   - epoch is a non-zero u32 the library mints per open. Every event the host posts for that player carries
+ *     it. The library keeps an epoch LIVE from player_open until it accepts the PLAYER_CLOSED of that epoch;
+ *     an event for an epoch that is not live (never opened, or already closed) is dropped and answers
+ *     PLX_HOST_E_STALE, so a completion that lands after a stop never reaches the application.
+ *   - player_open(epoch, uri, ecore_window, x, y, w, h): create a player, give it uri (a NUL-terminated string,
+ *     copied before the call returns; it carries the Plex token in its query, so the host never logs it), bind
+ *     it to the library's own Ecore_Wl2_Window (ecore_window is the Ecore_Wl2_Window* the library made with
+ *     ecore_wl2_window_new, as a u64 so the table has one layout on every architecture) over the rectangle
+ *     x, y, w, h, and prepare it. An open while another epoch is open closes that one first (its
+ *     PLAYER_CLOSED is posted). A failure AFTER the request was queued arrives as PLAYER_ERROR, never as a
+ *     return code. PLAYER_PREPARED follows a successful prepare.
+ *   - player_verb(epoch, verb, arg0, arg1): PLX_HOST_PLAYER_VERB_PLAY (a play requested before PREPARED
+ *     starts at PREPARED), _PAUSE, _SEEK (arg0 = target milliseconds, arg1 = the library's command id, echoed
+ *     in PLAYER_SEEK_DONE) and _CLOSE. CLOSE ends in exactly ONE PLAYER_CLOSED for that epoch, whether or not a
+ *     player existed, and releases it (the host never leaves a player behind). A verb for an epoch that is not
+ *     the host's current one is refused with PLX_HOST_PLAYER_E_STALE.
+ *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
+ *     kinds, with their payloads:
+ *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
+ *       PLAYER_SEEK_DONE(a = command id, b = ms)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
+ *       PLAYER_COMPLETED  PLAYER_ERROR(a = the player's native error code)  PLAYER_INTERRUPTED(a = native code)
+ *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)
+ *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
+ *     PLAYER_POSITION and PLAYER_BUFFERING, which keep only the latest per epoch. Position is polled on the HOST
+ *     side (about every 250 ms while playing, off the request queue) and posted: there is no synchronous
+ *     position call.
+ *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
+ *     never on the Ecore main thread and never on the loop thread. plx_host_post may be called from any thread,
+ *     including a native callback of the player. After plx_host_stop no request is made (the library's gate
+ *     refuses it); a request already running holds the clean on_stopped until it returns.
  */
 #ifndef PLX_HOST_H
 #define PLX_HOST_H
@@ -112,7 +156,7 @@
 extern "C" {
 #endif
 
-#define PLX_HOST_ABI_VERSION 1
+#define PLX_HOST_ABI_VERSION 2
 
 /* Return codes of plx_host_start and plx_host_post. */
 #define PLX_HOST_OK 0
@@ -122,14 +166,43 @@ extern "C" {
 #define PLX_HOST_E_WINDOW (-4)
 #define PLX_HOST_E_THREAD (-5)
 #define PLX_HOST_E_FULL (-6)
+#define PLX_HOST_E_STALE (-7) /* a player event of an epoch that is not live: dropped */
+
+/* Return codes of player_open and player_verb: 0 queued, negative refused. */
+#define PLX_HOST_PLAYER_OK 0
+#define PLX_HOST_PLAYER_E_UNAVAILABLE (-1) /* the host has no media player, or its video thread is not running */
+#define PLX_HOST_PLAYER_E_BUSY (-2)        /* the host's request queue is full */
+#define PLX_HOST_PLAYER_E_ARGS (-3)        /* epoch 0, a NULL or empty uri, no window, an unknown verb */
+#define PLX_HOST_PLAYER_E_STALE (-4)       /* a verb for an epoch that is not the host's current one */
 
 /* PlxHostEvent.kind */
 #define PLX_HOST_EVENT_PAUSE 1  /* OnPause: the app went to the background */
 #define PLX_HOST_EVENT_RESUME 2 /* OnResume: the app came back */
+/* Player events (version 2); each carries PlxHostEvent.epoch. */
+#define PLX_HOST_EVENT_PLAYER_PREPARED 16    /* a = duration ms */
+#define PLX_HOST_EVENT_PLAYER_STARTED 17     /* the host's Start() ran */
+#define PLX_HOST_EVENT_PLAYER_PAUSED 18      /* the host's Pause() ran */
+#define PLX_HOST_EVENT_PLAYER_POSITION 19    /* a = ms; latest wins */
+#define PLX_HOST_EVENT_PLAYER_SEEK_DONE 20   /* a = command id, b = ms */
+#define PLX_HOST_EVENT_PLAYER_BUFFERING 21   /* a = percent; latest wins */
+#define PLX_HOST_EVENT_PLAYER_VIDEO_SIZE 22  /* a = width, b = height */
+#define PLX_HOST_EVENT_PLAYER_COMPLETED 23   /* playback reached the end (the host validated it) */
+#define PLX_HOST_EVENT_PLAYER_ERROR 24       /* a = the player's native error code */
+#define PLX_HOST_EVENT_PLAYER_INTERRUPTED 25 /* a = native code: the system took the player */
+#define PLX_HOST_EVENT_PLAYER_CLOSED 26      /* the player of this epoch is released */
+#define PLX_HOST_EVENT_PLAYER_STALL 27       /* a position read has not returned for several seconds */
+
+/* player_verb's verb */
+#define PLX_HOST_PLAYER_VERB_PLAY 1
+#define PLX_HOST_PLAYER_VERB_PAUSE 2
+#define PLX_HOST_PLAYER_VERB_SEEK 3  /* arg0 = target ms, arg1 = command id */
+#define PLX_HOST_PLAYER_VERB_CLOSE 4
 
 typedef void (*PlxHostTask)(void *arg);
 typedef void (*PlxOnStopped)(int32_t code, int32_t clean);
 typedef int32_t (*PlxRunOnHost)(PlxHostTask task, void *arg);
+typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, uint64_t ecore_window, int32_t x, int32_t y, int32_t w, int32_t h);
+typedef int32_t (*PlxPlayerVerb)(uint32_t epoch, uint32_t verb, int64_t arg0, int64_t arg1);
 
 typedef struct PlxHostApi {
     uint32_t size;        /* sizeof(PlxHostApi) as the host was built */
@@ -138,16 +211,27 @@ typedef struct PlxHostApi {
     uint32_t reserved;    /* reserved: 0 */
     PlxOnStopped on_stopped;
     PlxRunOnHost run_on_host;
+    /* version 2: both or neither (NULL = no media player); read only when size >= PLX_HOST_API_V2_SIZE */
+    PlxPlayerOpen player_open;
+    PlxPlayerVerb player_verb;
 } PlxHostApi;
 
 typedef struct PlxHostEvent {
     uint32_t size; /* sizeof(PlxHostEvent) as the host was built */
     uint32_t kind; /* PLX_HOST_EVENT_* */
+    /* version 2: player events only (a pause or a resume may stop at kind); read only when size >= PLX_HOST_EVENT_V2_SIZE */
+    uint32_t epoch;    /* the player's epoch */
+    uint32_t reserved; /* 0; keeps the two i64 words 8-aligned on every architecture */
+    int64_t a;
+    int64_t b;
 } PlxHostEvent;
 
 /* What size must cover for version 1: up to and including the last version-1 field. */
 #define PLX_HOST_API_V1_SIZE ((uint32_t)(offsetof(PlxHostApi, run_on_host) + sizeof(PlxRunOnHost)))
 #define PLX_HOST_EVENT_V1_SIZE ((uint32_t)(offsetof(PlxHostEvent, kind) + sizeof(uint32_t)))
+/* ...and for version 2: up to and including the last version-2 field. */
+#define PLX_HOST_API_V2_SIZE ((uint32_t)(offsetof(PlxHostApi, player_verb) + sizeof(PlxPlayerVerb)))
+#define PLX_HOST_EVENT_V2_SIZE ((uint32_t)(offsetof(PlxHostEvent, b) + sizeof(int64_t)))
 
 int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);
 int32_t plx_host_post(const PlxHostEvent *event);
