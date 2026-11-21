@@ -262,11 +262,10 @@ pub struct DetailScreen {
     /// every frame's `reconcile` answers the page's default ([`Self::default_elem`]), so that seat
     /// follows the head wherever the landing puts it (the item, a later Also available landing) and
     /// never waits on a restore to fire. It ends with the viewer's own act: a move a direction key
-    /// or the pointer makes, an OK on a landed page, or a hold that opens a menu (a hold that opens
-    /// nothing, a key that moves nothing and an OK before the item lands leave the seat the page's).
-    /// `LibraryScreen::provisional` follows the head the same way for the Library's first seat but
-    /// ends on ANY key-down, pointer or wheel, so its ending is not this one. Never set with a
-    /// driver composed, where Play is the default from the first frame and the page keeps no
+    /// or the pointer makes, an OK on a landed page, a hold that opens a menu, or, on a landed page,
+    /// any key-down, pointer, click, drag or wheel (the Library's rule: such an input moves no focus
+    /// for a `FocusMoved` to report). A hold that opens nothing and every input before the item
+    /// lands leave the seat the page's. Never set with a driver composed, where Play is the default from the first frame and the page keeps no
     /// self-seat. Not hashed, not in [`SHAPE`]: a `SHAPE` bump would invalidate every detail
     /// fixture, and a fixture's page has a driver.
     provisional: bool,
@@ -1483,7 +1482,7 @@ impl DetailScreen {
     /// stops on the watched toggle alone, which presses nothing until the item is there
     /// (`activate_hero`), and the toggle is the last resort ([`hero::first_stop`]). That seat is
     /// the page's own ([`Self::provisional`]): `reconcile` answers this same rule every frame until
-    /// the viewer moves focus, so the landing, a later Also available landing and a restore that
+    /// the viewer acts at it, so the landing, a later Also available landing and a restore that
     /// waits or retires all leave the toggle without any one of them having to fire, and a reflex OK
     /// on a page that has just appeared never writes to someone's account.
     fn default_elem<H: ContentLike + crate::registry::MetadataLike + PlayerLike>(&self, cx: &Cx<'_, H>) -> u32 {
@@ -1903,8 +1902,8 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         // A focus the page itself placed (`provisional`) is the page's default wherever the item
         // stands: the landing, a later Also available landing and a restore that waits on a season
         // or retires all move it by this one rule, so nothing below has to fire for focus to leave
-        // the watched toggle. Only the viewer's own act ends it (the `FocusMoved`, `PressHold` and
-        // `activate` arms), or a return (`Enter(Restored)`).
+        // the watched toggle. Only the viewer's own act ends it (the `FocusMoved`, `PressHold`,
+        // `Input` and `activate` arms), or a return (`Enter(Restored)`).
         if self.provisional {
             return FocusKey { entry: want.entry, elem: self.default_elem(cx) };
         }
@@ -2467,6 +2466,17 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                             return Handled::Yes;
                         }
                     }
+                }
+                // Any key-down, pointer motion, click, drag or wheel is the viewer acting at the seat
+                // they hold, the Library's rule (`LibraryScreen`'s `Input` arm): a wheel scrolls with
+                // focus staying put and a hover on the control already focused moves nothing, so no
+                // `FocusMoved` ends the claim and a later landing would take the seat from them. It
+                // counts only once the item is there, as an OK does (`activate`): before that the seat
+                // is the watched toggle, which writes once the item lands, and none of these chose it.
+                if self.detail(meta).is_some()
+                    && matches!(input.kind, InputKind::Key { edge: Edge::Down, .. } | InputKind::Pointer { .. }
+                        | InputKind::Click { .. } | InputKind::Drag { .. } | InputKind::Wheel { .. }) {
+                    self.provisional = false;
                 }
                 if matches!(input.kind, InputKind::Key { key: Key::Up | Key::Down | Key::Left | Key::Right, edge: Edge::Down, .. }) {
                     self.restore_intent = None;
