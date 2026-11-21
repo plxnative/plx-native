@@ -10,6 +10,4 @@
 //! names no other platform, and is named by nothing. The library is compiled only under `tizen` (its
 //! own feature, in no default set), so a default-feature pass that lists this package builds an empty
 //! library and no build of the television's or the desktop's ever contains it.
-//!
-//! (push-path test line, removed in the next commit)
 #![cfg(feature = "tizen")]
