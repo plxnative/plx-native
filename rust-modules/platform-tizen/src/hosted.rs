@@ -135,9 +135,9 @@ impl Hosted {
         if self.gate.stopping() || self.callbacks.set(callbacks).is_err() {
             return host_abi::E_STATE;
         }
-        match callbacks.player {
-            Ok(_) => plx_base::eventlog::log("host: the host offers a media player (player_open, player_verb)"),
-            Err(why) => plx_base::eventlog::log(&format!("host: no media player: {}", why.reason())),
+        match self.player_support() {
+            Ok(()) => plx_base::eventlog::log(&format!("host: ABI version {}; the host offers a media player (player_open, player_verb)", host_abi::ABI_VERSION)),
+            Err(why) => plx_base::eventlog::log(&format!("host: ABI version {}; no media player: {}", host_abi::ABI_VERSION, why.reason())),
         }
         let launch = match launch_of(launch_json) {
             Some(launch) => launch,

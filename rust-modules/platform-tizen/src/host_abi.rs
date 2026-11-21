@@ -57,10 +57,14 @@ pub const EVENT_PLAYER_INTERRUPTED: u32 = 25;
 pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
 
-/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs.
+/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (W10 part B) is their caller; the tests use them now.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const VERB_PLAY: u32 = 1;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const VERB_PAUSE: u32 = 2;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const VERB_SEEK: u32 = 3;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const VERB_CLOSE: u32 = 4;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether
