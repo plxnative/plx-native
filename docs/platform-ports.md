@@ -1918,6 +1918,18 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - Goal: a `UriDriver` in `plx_platform_tizen` over `PlxHostApi` player calls (T6): capabilities (no
   DTS/TrueHD, token in the query string, no variable speed), `display()` evidence including readiness, and
   the shell's `video_hole`. No LG binding is faked and no default is published (Target shape 6b).
+- H6, restated (W10 inventory): `player_set_ecore_wl_display` with the library's Ecore_Wl2 window shows a mock
+  title beneath a window whose alpha is on. The managed `Display(Window)` cannot take our window (it takes a
+  MediaView, an ElmSharp window or a NUI window), so the host calls the native player directly (D1 = P1).
+- As landed (PR A, the host ABI and the C# player): `plx_host.h` is version 2: `player_open` and `player_verb`
+  appended to `PlxHostApi` (size-gated, both or neither), player events through `plx_host_post` carrying an epoch
+  (still exactly three exports), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
+  own in `Hosted` (lossless but for position and buffering). A v1 host or NULL pointers is "no playback", never a
+  refused start. The host is `PlxPlayer.cs` over `libcapi-media-player.so.0` (`PlayerNative.cs`): one video thread, a
+  host-side position poll, events posted straight from native callbacks. The window is found host-side
+  (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
+  pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
+  and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.

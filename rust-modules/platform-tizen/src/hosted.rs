@@ -250,8 +250,8 @@ impl Hosted {
         }
     }
 
-    /// Ask the host to open a player for `epoch` on `uri` over the library's Ecore window (`ecore_window`, the
-    /// `Ecore_Wl2_Window*` as a number) and the rectangle `area` (x, y, w, h), without waiting: the host queues
+    /// Ask the host to open a player for `epoch` on `uri` over the library's Ecore window (the host finds it
+    /// itself: `plx_host.h`, PLAYER) and the rectangle `area` (x, y, w, h), without waiting: the host queues
     /// the request for its video thread and everything after is an event. `Err` carries a `PLAYER_E_*`: no
     /// player in the table, a stop was requested (the gate refuses the call; the host is not asked), a bad
     /// argument, or the host's own refusal. The `uri` carries the Plex token: it is copied by the host and is
@@ -259,8 +259,8 @@ impl Hosted {
     ///
     /// A player is opened from the loop thread; the epoch is live from here until its `PLAYER_CLOSED` is accepted.
     #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
-    pub fn player_open(&self, epoch: u32, uri: &str, ecore_window: u64, area: [i32; 4]) -> Result<(), i32> {
-        if epoch == 0 || uri.is_empty() || ecore_window == 0 {
+    pub fn player_open(&self, epoch: u32, uri: &str, area: [i32; 4]) -> Result<(), i32> {
+        if epoch == 0 || uri.is_empty() {
             return Err(host_abi::PLAYER_E_ARGS);
         }
         let Ok(uri) = std::ffi::CString::new(uri) else { return Err(host_abi::PLAYER_E_ARGS) };
@@ -269,7 +269,7 @@ impl Hosted {
         self.player.opened(epoch);
         // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean; `uri` is a
         // NUL-terminated string valid for the call, which the host copies before returning.
-        let code = unsafe { (calls.open)(epoch, uri.as_ptr(), ecore_window, area[0], area[1], area[2], area[3]) };
+        let code = unsafe { (calls.open)(epoch, uri.as_ptr(), area[0], area[1], area[2], area[3]) };
         if code == host_abi::PLAYER_OK {
             return Ok(());
         }
@@ -456,8 +456,8 @@ pub(crate) mod testing {
         /// Armed by a test: `run_on_host` blocks until this is released, holding a callback in flight.
         pub(crate) block_run: Option<mpsc::Receiver<()>>,
         pub(crate) entered: Option<mpsc::Sender<()>>,
-        /// Each `player_open` the fake host got: epoch, the uri it copied, the window, the rectangle.
-        pub(crate) opens: Vec<(u32, String, u64, [i32; 4])>,
+        /// Each `player_open` the fake host got: epoch, the uri it copied, the rectangle.
+        pub(crate) opens: Vec<(u32, String, [i32; 4])>,
         /// Each `player_verb`: epoch, verb, arg0, arg1.
         pub(crate) verbs: Vec<(u32, u32, i64, i64)>,
         /// What the fake player requests answer.
@@ -506,7 +506,6 @@ pub(crate) mod testing {
     pub(crate) unsafe extern "C" fn fake_player_open(
         epoch: u32,
         uri: *const std::os::raw::c_char,
-        window: u64,
         x: i32,
         y: i32,
         w: i32,
@@ -522,7 +521,7 @@ pub(crate) mod testing {
             let _ = blocker.recv_timeout(Duration::from_secs(5));
         }
         if answer == 0 {
-            seen(|s| s.opens.push((epoch, copy, window, [x, y, w, h])));
+            seen(|s| s.opens.push((epoch, copy, [x, y, w, h])));
         }
         answer
     }
@@ -1099,7 +1098,7 @@ mod tests {
         let w = World::new();
         assert_eq!(w.start_with(table_v1(), |_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
         assert_eq!(w.hosted.player_support(), Err(NoPlayer::TableV1));
-        assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv?X=1", 0xdead, AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv?X=1", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
         assert_eq!(w.hosted.player_verb(1, host_abi::VERB_PLAY, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
         assert!(seen(|s| s.opens.is_empty() && s.verbs.is_empty()), "the host was never called");
         assert_eq!(w.hosted.post(&player_ev(1, host_abi::EVENT_PLAYER_PREPARED, 1000, 0)), host_abi::E_STALE);
@@ -1118,7 +1117,7 @@ mod tests {
             let w = World::new();
             assert_eq!(w.start_with(api, |_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
             assert_eq!(w.hosted.player_support(), Err(NoPlayer::NullPointer));
-            assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv", 0xdead, AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+            assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
             assert_eq!(w.hosted.player_verb(1, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
             assert!(seen(|s| s.opens.is_empty() && s.verbs.is_empty()));
             w.hosted.stop(Duration::from_secs(30));
@@ -1131,27 +1130,27 @@ mod tests {
     fn before_a_start_there_is_no_player() {
         let w = World::new();
         assert_eq!(w.hosted.player_support(), Err(NoPlayer::NotStarted));
-        assert_eq!(w.hosted.player_open(1, "http://h/a", 1, AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(w.hosted.player_open(1, "http://h/a", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
     }
 
-    /// **A version-2 host: the request reaches it as the library built it** (the uri copied, the window and
-    /// the rectangle, the verb and its arguments), a bad argument is refused before the host is asked, and the
+    /// **A version-2 host: the request reaches it as the library built it** (the uri copied, the
+    /// rectangle, the verb and its arguments), a bad argument is refused before the host is asked, and the
     /// host's own refusals come back as the contract's codes.
     #[test]
     fn player_requests_reach_the_host_and_refusals_come_back_as_codes() {
         let w = World::new();
         assert_eq!(idle_loop(&w), host_abi::OK);
         assert_eq!(w.hosted.player_support(), Ok(()));
-        assert_eq!(w.hosted.player_open(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER", 0xabcd, [0, 0, 1280, 720]), Ok(()));
+        assert_eq!(w.hosted.player_open(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER", [0, 0, 1280, 720]), Ok(()));
         assert_eq!(
             seen(|s| s.opens.clone()),
-            [(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER".to_string(), 0xabcd, [0, 0, 1280, 720])]
+            [(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER".to_string(), [0, 0, 1280, 720])]
         );
         assert_eq!(w.hosted.player_verb(7, host_abi::VERB_SEEK, 91_000, 42), Ok(()));
         assert_eq!(seen(|s| s.verbs.clone()), [(7, host_abi::VERB_SEEK, 91_000, 42)]);
-        // Refused before the host: epoch 0, an empty uri, no window, a NUL in the uri.
-        for bad in [(0, "http://h/a", 1u64), (1, "", 1), (1, "http://h/a", 0), (1, "http://h/\0a", 1)] {
-            assert_eq!(w.hosted.player_open(bad.0, bad.1, bad.2, AREA), Err(host_abi::PLAYER_E_ARGS), "{bad:?}");
+        // Refused before the host: epoch 0, an empty uri, a NUL in the uri.
+        for bad in [(0, "http://h/a"), (1, ""), (1, "http://h/\0a")] {
+            assert_eq!(w.hosted.player_open(bad.0, bad.1, AREA), Err(host_abi::PLAYER_E_ARGS), "{bad:?}");
         }
         assert_eq!(seen(|s| s.opens.len()), 1, "none of those reached the host");
         // The host's refusals are the contract's codes; a value outside them is "unavailable".
@@ -1162,7 +1161,7 @@ mod tests {
             (99, host_abi::PLAYER_E_UNAVAILABLE),
         ] {
             seen(|s| s.player_answer = answer);
-            assert_eq!(w.hosted.player_open(8, "http://h/b", 1, AREA), Err(expect));
+            assert_eq!(w.hosted.player_open(8, "http://h/b", AREA), Err(expect));
             assert_eq!(w.hosted.player_verb(8, host_abi::VERB_PAUSE, 0, 0), Err(expect));
         }
         seen(|s| s.player_answer = 0);
@@ -1181,7 +1180,7 @@ mod tests {
         assert_eq!(idle_loop(&w), host_abi::OK);
         let post = |kind, epoch, a, b| w.hosted.post(&player_ev(epoch, kind, a, b));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 1000, 0), host_abi::E_STALE, "never opened");
-        assert_eq!(w.hosted.player_open(4, "http://h/a", 1, AREA), Ok(()));
+        assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 7_200_000, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_VIDEO_SIZE, 4, 1920, 1080), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_STARTED, 4, 0, 0), host_abi::OK);
@@ -1206,7 +1205,7 @@ mod tests {
         );
         assert_eq!((drained.stale, drained.overflowed), (3, false));
         // A new epoch after the close is unaffected by it.
-        assert_eq!(w.hosted.player_open(5, "http://h/b", 1, AREA), Ok(()));
+        assert_eq!(w.hosted.player_open(5, "http://h/b", AREA), Ok(()));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 5, 1, 0), host_abi::OK);
         w.hosted.stop(Duration::from_secs(30));
         w.wait_stopped(1);
@@ -1230,7 +1229,7 @@ mod tests {
         let pause = PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_PAUSE, epoch: 0, reserved: 0, a: 0, b: 0 };
         let refused = (0..QUEUE_LIMIT * 2).filter(|_| hosted.post(&pause) == host_abi::E_FULL).count();
         assert!(refused > 0, "the key queue overflowed");
-        assert_eq!(hosted.player_open(2, "http://h/a", 1, AREA), Ok(()));
+        assert_eq!(hosted.player_open(2, "http://h/a", AREA), Ok(()));
         assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_POSITION, 100, 0)), host_abi::OK);
         assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_POSITION, 250, 0)), host_abi::OK);
         assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::OK, "not the key queue's fate");
@@ -1258,7 +1257,7 @@ mod tests {
             s.block_open = Some(release_rx);
         });
         let hosted = w.hosted;
-        let request = std::thread::spawn(move || hosted.player_open(9, "http://h/slow", 1, AREA));
+        let request = std::thread::spawn(move || hosted.player_open(9, "http://h/slow", AREA));
         entered_rx.recv_timeout(Duration::from_secs(5)).expect("the host is inside player_open");
         hosted.stop(Duration::from_secs(30));
         std::thread::sleep(Duration::from_millis(100));
@@ -1266,7 +1265,7 @@ mod tests {
         assert_eq!(hosted.gate.in_flight(), 1);
         // New requests after the stop never reach the host, and the player's late events are refused.
         let calls_before = seen(|s| s.opens.len() + s.verbs.len());
-        assert_eq!(hosted.player_open(10, "http://h/next", 1, AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
         assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
         assert_eq!(seen(|s| s.opens.len() + s.verbs.len()), calls_before, "the host was not asked");
         assert_eq!(hosted.post(&player_ev(9, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::E_STATE, "a late completion");

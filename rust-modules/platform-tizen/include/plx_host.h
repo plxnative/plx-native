@@ -119,11 +119,13 @@
  *     it. The library keeps an epoch LIVE from player_open until it accepts the PLAYER_CLOSED of that epoch;
  *     an event for an epoch that is not live (never opened, or already closed) is dropped and answers
  *     PLX_HOST_E_STALE, so a completion that lands after a stop never reaches the application.
- *   - player_open(epoch, uri, ecore_window, x, y, w, h): create a player, give it uri (a NUL-terminated string,
- *     copied before the call returns; it carries the Plex token in its query, so the host never logs it), bind
- *     it to the library's own Ecore_Wl2_Window (ecore_window is the Ecore_Wl2_Window* the library made with
- *     ecore_wl2_window_new, as a u64 so the table has one layout on every architecture) over the rectangle
- *     x, y, w, h, and prepare it. An open while another epoch is open closes that one first (its
+ *   - player_open(epoch, uri, x, y, w, h): create a player, give it uri (a NUL-terminated string, copied
+ *     before the call returns; it carries the Plex token in its query, so the host never logs it), bind it as
+ *     an OVERLAY to the library's own Ecore_Wl2 window over the rectangle x, y, w, h, and prepare it. The
+ *     window is not passed: the host finds it from the Ecore side (ecore_wl2_connected_display_get(NULL), then
+ *     ecore_wl2_display_window_find(display, 1): the library makes exactly one window and it is the first, which
+ *     the emulator probe measured to be the very pointer the library logs as "ecore: window_new(...)"). The
+ *     display is bound BEFORE prepare: a player without one does not advance. An open while another epoch is open closes that one first (its
  *     PLAYER_CLOSED is posted). A failure AFTER the request was queued arrives as PLAYER_ERROR, never as a
  *     return code. PLAYER_PREPARED follows a successful prepare.
  *   - player_verb(epoch, verb, arg0, arg1): PLX_HOST_PLAYER_VERB_PLAY (a play requested before PREPARED
@@ -135,7 +137,7 @@
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
  *       PLAYER_SEEK_DONE(a = command id, b = ms)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
- *       PLAYER_COMPLETED  PLAYER_ERROR(a = the player's native error code)  PLAYER_INTERRUPTED(a = native code)
+ *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code)  PLAYER_INTERRUPTED(a = native code)
  *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)
  *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
  *     PLAYER_POSITION and PLAYER_BUFFERING, which keep only the latest per epoch. Position is polled on the HOST
@@ -172,7 +174,7 @@ extern "C" {
 #define PLX_HOST_PLAYER_OK 0
 #define PLX_HOST_PLAYER_E_UNAVAILABLE (-1) /* the host has no media player, or its video thread is not running */
 #define PLX_HOST_PLAYER_E_BUSY (-2)        /* the host's request queue is full */
-#define PLX_HOST_PLAYER_E_ARGS (-3)        /* epoch 0, a NULL or empty uri, no window, an unknown verb */
+#define PLX_HOST_PLAYER_E_ARGS (-3)        /* epoch 0, a NULL or empty uri, an unknown verb */
 #define PLX_HOST_PLAYER_E_STALE (-4)       /* a verb for an epoch that is not the host's current one */
 
 /* PlxHostEvent.kind */
@@ -186,7 +188,7 @@ extern "C" {
 #define PLX_HOST_EVENT_PLAYER_SEEK_DONE 20   /* a = command id, b = ms */
 #define PLX_HOST_EVENT_PLAYER_BUFFERING 21   /* a = percent; latest wins */
 #define PLX_HOST_EVENT_PLAYER_VIDEO_SIZE 22  /* a = width, b = height */
-#define PLX_HOST_EVENT_PLAYER_COMPLETED 23   /* playback reached the end (the host validated it) */
+#define PLX_HOST_EVENT_PLAYER_COMPLETED 23   /* playback reached the end (the player's completed callback) */
 #define PLX_HOST_EVENT_PLAYER_ERROR 24       /* a = the player's native error code */
 #define PLX_HOST_EVENT_PLAYER_INTERRUPTED 25 /* a = native code: the system took the player */
 #define PLX_HOST_EVENT_PLAYER_CLOSED 26      /* the player of this epoch is released */
@@ -201,7 +203,7 @@ extern "C" {
 typedef void (*PlxHostTask)(void *arg);
 typedef void (*PlxOnStopped)(int32_t code, int32_t clean);
 typedef int32_t (*PlxRunOnHost)(PlxHostTask task, void *arg);
-typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, uint64_t ecore_window, int32_t x, int32_t y, int32_t w, int32_t h);
+typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, int32_t x, int32_t y, int32_t w, int32_t h);
 typedef int32_t (*PlxPlayerVerb)(uint32_t epoch, uint32_t verb, int64_t arg0, int64_t arg1);
 
 typedef struct PlxHostApi {

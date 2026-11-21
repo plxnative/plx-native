@@ -34,7 +34,7 @@ pub const PLAYER_OK: i32 = 0;
 pub const PLAYER_E_UNAVAILABLE: i32 = -1;
 /// `PLX_HOST_PLAYER_E_BUSY`: the host's request queue is full.
 pub const PLAYER_E_BUSY: i32 = -2;
-/// `PLX_HOST_PLAYER_E_ARGS`: epoch 0, a NULL or empty uri, no window, an unknown verb.
+/// `PLX_HOST_PLAYER_E_ARGS`: epoch 0, a NULL or empty uri, an unknown verb.
 pub const PLAYER_E_ARGS: i32 = -3;
 /// `PLX_HOST_PLAYER_E_STALE`: a verb for an epoch that is not the host's current one.
 pub const PLAYER_E_STALE: i32 = -4;
@@ -70,11 +70,12 @@ pub type OnStopped = unsafe extern "C" fn(code: i32, clean: i32);
 pub type HostTask = unsafe extern "C" fn(arg: *mut c_void);
 /// `run_on_host`: queue `task(arg)` for the host's main thread and return 0, or refuse it (non-zero).
 pub type RunOnHost = unsafe extern "C" fn(task: HostTask, arg: *mut c_void) -> i32;
-/// `player_open`: queue "create a player for `epoch`, give it `uri`, bind it to the Ecore window and prepare it"
+/// `player_open`: queue "create a player for `epoch`, give it `uri`, bind it to the library's Ecore window (which the
+/// host finds itself) and prepare it"
 /// for the host's video thread, and return at once ([`PLAYER_OK`] queued, negative refused). `uri` is a
 /// NUL-terminated string the host copies before returning.
 pub type PlayerOpen =
-    unsafe extern "C" fn(epoch: u32, uri: *const std::os::raw::c_char, ecore_window: u64, x: i32, y: i32, w: i32, h: i32) -> i32;
+    unsafe extern "C" fn(epoch: u32, uri: *const std::os::raw::c_char, x: i32, y: i32, w: i32, h: i32) -> i32;
 /// `player_verb`: queue one of the `VERB_*` verbs for the player of `epoch`, and return at once.
 pub type PlayerVerb = unsafe extern "C" fn(epoch: u32, verb: u32, arg0: i64, arg1: i64) -> i32;
 
@@ -436,7 +437,7 @@ mod tests {
             "typedef void (*PlxHostTask)(void *arg);",
             "typedef void (*PlxOnStopped)(int32_t code, int32_t clean);",
             "typedef int32_t (*PlxRunOnHost)(PlxHostTask task, void *arg);",
-            "typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, uint64_t ecore_window, int32_t x, int32_t y, int32_t w, int32_t h);",
+            "typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, int32_t x, int32_t y, int32_t w, int32_t h);",
             "typedef int32_t (*PlxPlayerVerb)(uint32_t epoch, uint32_t verb, int64_t arg0, int64_t arg1);",
         ] {
             assert!(code.contains(decl), "the header declares `{decl}`");
@@ -448,7 +449,7 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn open(_: u32, _: *const std::os::raw::c_char, _: u64, _: i32, _: i32, _: i32, _: i32) -> i32 {
+    unsafe extern "C" fn open(_: u32, _: *const std::os::raw::c_char, _: i32, _: i32, _: i32, _: i32) -> i32 {
         0
     }
     unsafe extern "C" fn verb(_: u32, _: u32, _: i64, _: i64) -> i32 {
