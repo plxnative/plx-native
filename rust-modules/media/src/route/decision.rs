@@ -1094,6 +1094,8 @@ mod backend_offer_session_tests {
         session.cur_src = (20_000, 1920, 1080); // more than a 480p rung admits: the pick would re-transcode
         let (ceiling, delivery) = (cur_ceiling(&session), cur_delivery(&session));
         assert!(!session.quality_pick_carriable());
+        assert!(!crate::player::failure_context(&session).quality_carriable,
+            "the failure read-out reads the same question: no Change quality either");
         set_quality(&mut session, Quality::P480);
         assert_eq!(quality(), Quality::Original, "a refused pick persists nothing");
         assert_eq!((cur_ceiling(&session), cur_delivery(&session)), (ceiling, delivery), "the route contract is untouched");
@@ -1101,6 +1103,7 @@ mod backend_offer_session_tests {
         // A provider that can certify a converted output, or a Feed, carries the pick as before.
         session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
         assert!(session.quality_pick_carriable());
+        assert!(crate::player::failure_context(&session).quality_carriable);
         session.install_backends(plx_playback_contract::BackendSet::BOTH);
         session.install_uri_preflight_port(None);
         assert!(session.quality_pick_carriable());
