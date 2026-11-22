@@ -13,10 +13,12 @@
 //!   returns the [`Surface`] the `App` owns from then on), the loop (`app::run` drives it every
 //!   frame, through `App::platform`, and presents and polls through the surface) and the bridge, which
 //!   holds the shell for the dispatcher's two opaque-region hooks and lends it to the pointer's own
-//!   callers (`input`, `playback`), which hide and show the Magic Remote's pointer through it.
-//! - `diag`: the six frame probes, [`FrameProbe`], read by the loop. The renderer's clear hook takes
+//!   callers (`input`, `playback`), which hide and show the Magic Remote's pointer through it. Its `frame` hook
+//!   states the platform's [`FrameSeam`] (a software [`Pacer`] and the [`Present`] hooks around the swap), which
+//!   the loop runs at the frame's present.
+//! - `diag`: the six frame probes and the heartbeat's tag, [`FrameProbe`], read by the loop. The renderer's clear hook takes
 //!   plain functions, so the platform's entry installs it (`gfx::install_clear_probe`).
-//! - `media`: [`MediaBoot`], the platform's two boot-time playback steps. `early_init` runs once before
+//! - `media`: [`MediaBoot`], the platform's two boot-time playback steps and one fact. `early_init` runs once before
 //!   the first adapter exists; `compose` installs the platform's drivers on the adapter and hands
 //!   back what it composed as a [`Composition`]. The boot then tells the route session what the
 //!   platform composed through [`publish_composition`], the one function that does, so the set of
@@ -309,7 +311,7 @@ pub struct Composition {
     pub resolver: Option<ResolvePort>,
 }
 
-/// A platform's two playback steps at boot. Both are plain functions: the platform's entry states
+/// A platform's two playback steps at boot, and one fact about its sink. All three are plain functions: the platform's entry states
 /// them once, in its `static`, and the boot calls them through [`Platform::media`].
 pub struct MediaBoot {
     /// Before the first adapter exists, once per process. The caller runs it only on a boot that
@@ -567,6 +569,17 @@ mod tests {
         s.hide_pointer();
         s.show_pointer_after_motion();
         assert!(!s.hide_is_cursor_swap(), "no hide, so a click is always a real one");
+
+        // The frame seam is the NONE of each group: no pacing, nothing around the swap. Destructured with no `..`,
+        // so a hook added to a group breaks this test until it is pinned.
+        let FrameSeam { pacer: Pacer { armed, begin, end }, present: Present { compose_under, before_swap } } =
+            *s.frame();
+        assert!(!armed(true) && !armed(false), "a platform that states no pacer never arms one");
+        end(begin());
+        compose_under();
+        before_swap();
+        assert_eq!(p.heartbeat_tag(), "", "only a simulator tags its heartbeat");
+        assert!(!(media.preview_seam_absent)(), "a platform with no sink has no absent video path to count");
 
         p.request();
         p.prepare_begin();

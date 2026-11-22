@@ -561,6 +561,8 @@ mod no_media_tests {
         assert_eq!(adapter.composed_backends(), plx_playback_contract::BackendSet::NONE, "and no driver of any kind");
         let controlled = (NO_MEDIA.compose)(&mut adapter, true);
         assert!(controlled.resolver.is_none(), "a controlled boot composes nothing either");
+        assert!(!(NO_MEDIA.preview_seam_absent)(), "nothing plays, so there is no absent video path to count");
+        assert!(!(WEBOS_MEDIA.preview_seam_absent)(), "the television's seam is always there");
 
         let mut session = plx_media::route::PlaybackSession::IDLE;
         let log = plx_base::eventlog::with_private_log(|| {
@@ -588,5 +590,13 @@ mod media_boot_tests {
         assert!(!adapter.composed_backends().uri);
         #[cfg(feature = "play-feed")]
         assert!(adapter.composed_backends().feed, "the Feed is the desktop's driver");
+    }
+
+    /// The simulator's preview Load has no video path behind it until the clock sink is armed
+    /// (`plxnative-clocksink`): the answer the application gave itself under `hostsim` before it was a platform
+    /// value. The test runtime root is a throwaway one, so the trigger is unarmed here.
+    #[test]
+    fn the_desktop_feed_boot_has_no_video_path_for_a_preview_until_the_clock_sink_is_armed() {
+        assert!((FEED_MEDIA.preview_seam_absent)());
     }
 }
