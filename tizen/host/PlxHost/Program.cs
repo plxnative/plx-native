@@ -286,7 +286,7 @@ namespace PlxHost
             base.OnResume();
             Log("OnResume");
             Post(Native.PLX_HOST_EVENT_RESUME, "resume");
-            PlxPlayer.Instance.ResumeAfterHome(); // starts only what OnPause paused
+            PlxPlayer.Instance.ResumeAfterHome(); // starts nothing: the library's foreground restore re-opens the source (plx_host.h, HOME); this only drops the host's pause note and logs why
         }
 
         protected override void OnTerminate()

@@ -1069,6 +1069,45 @@ mod backend_offer_session_tests {
         }
     }
 
+    /// **A Quality rung no composed backend can carry is refused, not applied to a title nothing can convert.** A rung is
+    /// a request for the server to convert. With no Feed and a URI provider that certifies no converted output, the live pick
+    /// on a playing URI original used to persist the rung, move the session's route contract and queue a Retranscode that only
+    /// a Feed engine's pump ever consumes: the title kept playing unchanged, while the next re-resolve of it (a Home round trip,
+    /// a stall retry) planned under the new ceiling and ended in `NoQualifiedBackend`. The refusal spends nothing.
+    #[test]
+    fn a_quality_pick_no_composed_backend_can_carry_is_refused_and_leaves_the_route_alone() {
+        use super::super::uri_preflight::{CarrierQualifier, ProductEvidence, ResolvePort};
+        let mut session = PlaybackSession::IDLE;
+        let _g = test_support::fresh_registry(&mut session);
+        restore_quality(Quality::Original);
+        let caps = plx_playback_contract::Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false,
+            pause: true, seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: false };
+        let evidence = ProductEvidence {
+            display: plx_playback_contract::uri::DisplayEvidence::ready("test"),
+            callable: caps,
+            certified: caps,
+        };
+        session.install_backends(plx_playback_contract::BackendSet::URI);
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(DefaultStreamOnly)));
+        session.begin_attempt_view(RouteStartAttempt::fixture(), crate::player::attempt_view::Backend::Uri);
+        session.cur_rk = "42".into();
+        session.cur_src = (20_000, 1920, 1080); // more than a 480p rung admits: the pick would re-transcode
+        let (ceiling, delivery) = (cur_ceiling(&session), cur_delivery(&session));
+        assert!(!session.quality_pick_carriable());
+        set_quality(&mut session, Quality::P480);
+        assert_eq!(quality(), Quality::Original, "a refused pick persists nothing");
+        assert_eq!((cur_ceiling(&session), cur_delivery(&session)), (ceiling, delivery), "the route contract is untouched");
+        assert!(!crate::player::pending_transcode_refresh(), "no Retranscode is queued for a pump that does not exist");
+        // A provider that can certify a converted output, or a Feed, carries the pick as before.
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
+        assert!(session.quality_pick_carriable());
+        session.install_backends(plx_playback_contract::BackendSet::BOTH);
+        session.install_uri_preflight_port(None);
+        assert!(session.quality_pick_carriable());
+        crate::player::reset_route_requests_for_test(&session);
+        restore_quality(Quality::Original);
+    }
+
     #[test]
     fn qualified_original_feed_precedes_uri_conversion_then_uri_precedes_feed_conversion() {
         let mut session = PlaybackSession::IDLE;
@@ -1449,6 +1488,16 @@ impl PlaybackSession {
     pub fn source_track_change_carriable(&self) -> bool {
         self.backends.feed
             || self.uri_preflight_port.as_ref().is_some_and(super::uri_preflight::ResolvePort::carries_source_track_change)
+    }
+
+    /// Whether some composed backend could carry a Quality rung the viewer picks while a title plays: a rung is a request for
+    /// the server to convert, and only a Feed (which transcodes) or a URI provider that certifies a converted output can
+    /// carry one. It is the same question as [`Self::source_track_change_carriable`], asked of the same provider flag
+    /// ([`OriginalQualifier::carries_source_track_change`](super::uri_preflight::OriginalQualifier::carries_source_track_change)),
+    /// because both are a re-resolve that only a converting backend can end in a play. Without one, the More menu does not
+    /// offer the ladder and [`set_quality`] refuses a rung before it persists or changes anything.
+    pub fn quality_pick_carriable(&self) -> bool {
+        self.source_track_change_carriable()
     }
 
     pub fn source_selection(&self) -> Option<SourceSelection> {
@@ -9408,6 +9457,12 @@ pub fn set_quality_for_retry(q: Quality) {
 pub fn set_quality(ps: &mut PlaybackSession, q: Quality) {
     if forced_direct_play(ps) {
         let _ = persist_quality_choice(q);
+        return;
+    }
+    if !ps.quality_pick_carriable() {
+        // Before anything is persisted, moved or queued: no composed backend converts, so the playing title keeps playing
+        // as it is and the next re-resolve of it is not planned under a ceiling nothing can carry.
+        crate::player::log(&format!("quality: {} refused: no composed backend can carry a converted output", q.label()));
         return;
     }
 

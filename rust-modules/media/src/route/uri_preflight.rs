@@ -517,6 +517,9 @@ pub trait OriginalQualifier: Send + Sync + std::panic::RefUnwindSafe {
     /// A provider that certifies only the source's default stream and no converted output says `false`, so the
     /// session refuses the pick instead of replacing the playing title with a failure
     /// ([`PlaybackSession::source_track_change_carriable`](super::PlaybackSession::source_track_change_carriable)).
+    /// A Quality rung picked while a title plays is the same kind of request (a converted output only a converting backend can
+    /// carry), so the same answer withholds the ladder and refuses the pick
+    /// ([`PlaybackSession::quality_pick_carriable`](super::PlaybackSession::quality_pick_carriable)).
     /// The default is the behaviour before the question existed: carriable.
     fn carries_source_track_change(&self) -> bool {
         true

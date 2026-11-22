@@ -598,9 +598,12 @@ namespace PlxHost
         // ---- the Home round trip (OnPause / OnResume, main thread) ---------------------------------------------------------------------------
         //
         // MEASURED on the emulator 2026-11-22 (TV 10.0 x86_64, a scratch probe): the native player raises nothing on its own when the app goes to
-        // the background. Paused at OnPause and started at OnResume it resumes in about 130 ms at the same position, and the picture is back once
-        // the window is (about 2 s). So the host pauses what is PLAYING at OnPause and starts exactly that at OnResume. Both only enqueue: the
-        // native calls run on the video thread, in order with the library's own requests, and never on the Ecore main thread that called us.
+        // the background, and a player paused at OnPause and started at OnResume resumes in about 130 ms at the same position. The host does
+        // only the first half of that: it pauses what is PLAYING at OnPause, so nothing plays behind the Home screen in the moment before the
+        // library acts. The library owns the rest (plx_host.h, HOME): at the background it parks the attempt (a CLOSE the host performs, the
+        // host closes its player at a stop), and at the foreground it re-opens the same source at the saved position as a new epoch. OnResume
+        // therefore starts nothing. Both only enqueue: the native calls run on the video thread, in order with the library's own requests,
+        // and never on the Ecore main thread that called us.
 
         // OnPause. A player that is playing is paused (PLAYER_PAUSED is posted, as for the library's own pause); one that was asked to play before
         // PREPARED is held back so it does not start behind the Home screen. Nothing is paused for a player that is not playing (idle, paused by

@@ -19,10 +19,12 @@
 //! library drops the same events one layer earlier (`hosted::player`, an epoch is live from the open until its
 //! `PLAYER_CLOSED`); this is the second layer.
 //!
-//! **Release.** A `Stop` asks the host to close and the attempt is released only by the host's `PLAYER_CLOSED` for its
-//! epoch. A close the host never confirms (or the library's gate refused after the app's stop, which never delivers
-//! one) is `Release::Quarantined` at the deadline, never a clean release, and the exit disposition stays
-//! `PreserveNativeOwnership` until a close is confirmed.
+//! **Release.** A `Stop` asks the host to close and the attempt is released by the host's `PLAYER_CLOSED` for its
+//! epoch. A close the host never confirms is `ReleaseStatus::Quarantined` at the deadline, never a clean release, and the
+//! exit disposition stays `PreserveNativeOwnership` until a close is confirmed. A close the host's gate refuses because the
+//! library is stopping can never be asked ([`Machine::verb_refused`]): the host closes its own player at terminate, so that
+//! release is the host's to make and the machine reports it `Released` at once (the exit disposition `Clean`) rather than
+//! quarantining a stop that cannot be confirmed.
 //!
 //! **What it does not claim.** It never emits `Observation::Presented`: that needs the window's alpha and the video
 //! hole (`ecore.rs`, `Shell::opaque_route`), which are not part of this driver, so startup metrics stay Unknown (the
