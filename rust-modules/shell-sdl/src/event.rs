@@ -75,8 +75,8 @@ pub fn rd_f32(ev: &[u8], off: usize) -> f32 {
 /// Reading the fork's offsets out of a stock event yields the window id as a keystate and
 /// a scancode as a sym — plausible-looking garbage rather than a crash.
 ///
-/// `cfg!` rather than `#[cfg]` deliberately: both arms stay compiled on both platforms, so
-/// the one nobody is currently building cannot rot. This is the single site that knows the
+/// The flavour is a value the platform states, not a `cfg`, so both arms are compiled and graded in
+/// every build and the one nobody runs cannot rot. This is the single site that knows the
 /// layout — `rd_u32`'s callers elsewhere read pointer events, whose offsets already agree.
 ///
 /// **The `wcode` this returns is LG's SCANCODE**, which is worth saying because the name suggests

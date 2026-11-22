@@ -5640,8 +5640,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
     //     `action_of` turns red, with `input.rs`'s decode literals and the hosted door's round
     //     trip. No production reader of the loop reads the action before W5d (the screens move onto
     //     it there), so no native effect test can see that one yet.
-    // The hostsim build feeds the STOCK SDL byte layout; LG's fork layout is graded in the default-feature
-    // run (`events::key_event_tests::the_key_layout_is_pinned_byte_for_byte`).
+    // These tests encode and decode in the host-test platform's flavour (`host_flavor()`, stock); both layouts are
+    // graded in every pass by `events::key_event_tests::the_key_layout_is_pinned_byte_for_byte`.
 
     /// How a key is delivered to a guard test: as the native SDL bytes (the pair, as literals) or as
     /// the hosted press that names only the action.

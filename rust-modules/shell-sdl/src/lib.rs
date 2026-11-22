@@ -8,7 +8,8 @@
 //! crate names none of it, and none of `ui`, `machine`, `os` or any application type. The contract
 //! between the two halves is one raw `SDL_Window*` ([`window::Window::raw`]) and the order of calls
 //! on one thread. [`init::InitHooks`] is the one place the platform states its SDL: the steps it runs
-//! around the bring-up (plain function pointers the television fills and a desktop leaves empty), the
+//! around the bring-up (plain function pointers: the television fills `before` and `after`, a desktop leaves those two
+//! empty and fills `after_context` with the vertex array a core profile needs), the
 //! [`init::SdlFlavor`] its events are laid out in and the [`init::GlProfile`] it asks for.
 //!
 //! The crate is a mounted module of the `shell_sdl` layer (`ci/module-layers.ini`), which may use

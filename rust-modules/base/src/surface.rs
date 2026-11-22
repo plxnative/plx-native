@@ -12,7 +12,7 @@
 //! 4K panel that composites the result up to 3840x2160 in hardware, for free. That is the right
 //! arrangement and this module exists to keep it working, not to replace it. On webOS 1-3 the owner can opt in
 //! to a smaller window (Settings > System > Interface resolution, applied at the next launch:
-//! 1600x900, 1280x720 or 960x540, webOS 1-3 only; `app::boot::requested_drawable` has what was measured), and the
+//! 1600x900, 1280x720 or 960x540, webOS 1-3 only; `plx_platform_webos`'s `port.rs::requested_drawable` has what was measured), and the
 //! same compositor upscale fills the panel. A smaller window trades text sharpness for smoother
 //! frames; only 1/2 (960x540) is a clean texel scale, while 2/3 (1280x720) and 5/6 (1600x900) resample
 //! and may shimmer while scrolling. The Home underlay field also needs a width that is a
