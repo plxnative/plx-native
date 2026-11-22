@@ -2036,4 +2036,54 @@ mod uri_boot_tests {
         assert_eq!(sought["position"], restore_ms);
         plx_os::tv::plane::installed().reset_for_test();
     }
+    /// **An ended URI attempt with no player page is stopped once, not on every frame of its release.** The EOS orphan
+    /// branch (`playback_tick`) stops an engine nothing owns, and a URI attempt's release is a close the host confirms
+    /// several frames later while the attempt still reads "needing teardown" (the Tizen emulator logged the line five times
+    /// at its end of stream; the webOS URI driver closes its own session at the end, so its release is already underway when
+    /// the branch is first reached). The branch must wait while the release is `Releasing` and then stop exactly once.
+    /// Here the native close is not confirmed for twelve frames, and then it is.
+    #[test]
+    fn an_ended_uri_attempt_with_no_player_page_is_stopped_once_while_its_release_is_pending() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        poll_until("the source was not loaded", || {
+            window_frame(&mut rig);
+            bus.calls("load") == 1
+        });
+        bus.say("load", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m1"}"#);
+        window_frame(&mut rig);
+        bus.say("subscribe", r#"{"audioInfo":{"track":0,"immersive":"none","mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        bus.say("subscribe", r#"{"loadCompleted":{"mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(super::super::bridge::player(&rig.app.pages).is_none(), "no player page is mounted");
+        bus.say("subscribe", r#"{"mediaId":"m1","endOfStream":true}"#);
+        let stops = |log: &str| log.matches("EOS: stopping an off-route engine nothing owns").count();
+        let (releasing, log) = plx_base::eventlog::with_private_log(|| {
+            for _ in 0..12 {
+                window_frame(&mut rig);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            (rig.app.adapters.player.backend_snapshot().phase,
+                std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default())
+        });
+        assert_eq!(plx_media::player::ended(&rig.app.player.session), Some(true));
+        assert_eq!(releasing, plx_playback_contract::Phase::Releasing, "the native close is not confirmed yet");
+        assert_eq!(stops(&log), 0, "a release already underway is not stopped again on every frame: {log}");
+        // The host confirms the close; the stop nothing else would make follows, once.
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        let log = plx_base::eventlog::with_private_log(|| {
+            for _ in 0..12 {
+                window_frame(&mut rig);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert_eq!(stops(&log), 1, "the one stop, once the release is done: {log}");
+        plx_os::tv::plane::installed().reset_for_test();
+    }
 }
