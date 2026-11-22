@@ -380,7 +380,7 @@ mod surface_pin_tests {
     /// removed; empty for none). The first groups are the interface of a platform's own types and entry; the media values
     /// and the simulator's sink are there because the application keeps the playback composition until W11a, which retires
     /// each of them (`docs/platform-ports.md`, Target shape 8 and W7).
-    const HOST_ITEMS: [(&str, &str); 34] = [
+    const HOST_ITEMS: [(&str, &str); 38] = [
         // What a platform builds, implements and reports input through, and the entry that boots it.
         ("Platform", ""),
         ("Shell", ""),
