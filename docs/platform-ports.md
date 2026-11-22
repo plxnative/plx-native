@@ -1876,12 +1876,13 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
     (`steps: InitSteps { before, after, after_context }`, `flavor: SdlFlavor`, `gl: GlProfile`) and `Shell::window()` its
     `WindowPlan { title, placement }`. webOS states `Lg`, `Es2` and its panel placement (the stored-size ask moved into
     `platform-webos`); the desktop states `Stock`, `Core41`, `Placement::Desktop` and the VAO bind as `after_context` (it owns the
-    three GL externs, so `gfx` names none of them); Tizen states `Lg`, `Es2`, no steps and the panel placement a Tizen build compiled
+    two vertex-array externs, `glGenVertexArrays` and `glBindVertexArray`, which left `gfx`; `gfx` keeps its own `glGetString`); Tizen states `Lg`, `Es2`, no steps and the panel placement a Tizen build compiled
     before (its own values to confirm on a device, W9). The flavour reaches the decoders as an argument (`decode_key`,
     `decode_wheel_dy`, `encode_key`, `encode_key_repeat`, `text_off`, through `App::sdl_flavor()`), never a process-global, and the
     window flags derive from `Placement` (`window_flags_of`); `surface::probe` takes a `DrawableNote` instead of reading a cfg. Both
-    layouts now run in the default test pass (`plx_shell_sdl` 46 -> 49 default tests). `feature = "hostsim"` lines in `.rs` files:
-    317 -> 289 (`shell-sdl` 30 -> 18, `src/app` 94 -> 79, `gfx.rs` 9 -> 7, `base/src/surface.rs` 14 -> 13). Left as they are (S lines):
+    layouts now run in the default test pass (`plx_shell_sdl` 46 -> 49 default tests). Lines naming `feature = "hostsim"`
+    (`git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`, at `221cb3dc0` and this branch's head): 235 -> 207, a delta of 28
+    (`shell-sdl` 30 -> 18, `src/app` 94 -> 79, `gfx.rs` 9 -> 7, `base/src/surface.rs` 14 -> 13). Left as they are (S lines):
     supersample, compositor model, the dump switch, the desktop window fit, the three desktop-only SDL externs, `ENV_STEERABLE`.
     `host` gained `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile`; like the SDL helpers beside them they do not retire at W11a.
   As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
