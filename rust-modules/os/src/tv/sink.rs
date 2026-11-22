@@ -156,9 +156,10 @@ pub trait VideoSink: DisplaySink {
     /// True when this sink has no video path at all, so a `Load` it refuses says nothing about what
     /// the television's pipeline would have admitted: the preview's refused open is then counted as
     /// "the seam is absent", not as an admitted Starfish failure that opens the breaker. The
-    /// television's own sink answers `false` (its refusal IS the firmware's), as do the refusing
-    /// ones; only the host's stand-in, which decodes nothing unless the clock sink is armed, says
-    /// `true`. Required, so every sink states it.
+    /// television's own sink answers `false` (its refusal IS the firmware's), as does `NoSink`;
+    /// `RefusingSink` passes on the answer of the sink it wraps (it fences verbs, not facts). Only the
+    /// host's stand-in, which decodes nothing unless the clock sink is armed, says `true`. Required,
+    /// so every sink states it.
     fn lacks_video_path(&self) -> bool;
     /// Positive proof that a joined Load never left a native object behind. A zero `ready()`
     /// answer is insufficient: firmware also reports zero after quarantining a live object.
