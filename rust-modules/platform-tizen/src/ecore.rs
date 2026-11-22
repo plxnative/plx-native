@@ -124,9 +124,18 @@ const WINDOW_TYPE_TOPLEVEL: c_int = 1;
 /// `ecore_wl2_window_alpha_set`, which the window gets at creation and keeps for the process (a flag of the
 /// window, so there is nothing to route per frame and `Shell::opaque_route` has no work). Measured on the TV 10.0
 /// emulator (2026-11-22): with it ON the native player's overlay video shows only through the pixels the frame
-/// clears to (0, 0, 0, 0) (the player route's own clear, `app/run.rs`) and the UI around them is intact; the
-/// frame is otherwise as opaque as it always was, because every page clears to an opaque ground. With it OFF
-/// (what this crate set before) the window is opaque and no video can show.
+/// clears to (0, 0, 0, 0) and the UI around them is intact. With it OFF (what this crate set before) the window
+/// is opaque and no video can show.
+///
+/// **Which frames clear to (0, 0, 0, 0).** The pages with a ground clear to an opaque colour (Home, detail,
+/// library, search: `frame_clear`), so they are as opaque as before. The PLAYER ROUTE clears to (0, 0, 0, 0)
+/// whenever `fr.player` is set, bound plane or not (`app/run.rs`), and `PlayerScreen` paints no ground, so its
+/// spinner and its "Playback failed" read-out are drawn over a transparent clear even when no plane is bound.
+/// Measured on the emulator at `3d56d35b2` (no URI driver yet, so the plane is never bound): hero Play opens the
+/// read-out, and behind it the emulator shows exactly (0, 0, 0) black (5778 of 5784 samples; the rest is the
+/// footer text), unchanged from +0.49 s to +6.86 s, with the text and pills drawn cleanly and Back returning to an
+/// opaque Home. The caveat: the EMULATOR's compositor had nothing under the window. What a retail set composites
+/// under a (0, 0, 0, 0) clear with no player is unmeasured and belongs to H6.
 pub const WINDOW_ALPHA: u8 = 1;
 
 /// Load one table, saying why when it does not load; `true` when it is live.
