@@ -120,6 +120,15 @@ plx_base::dynlib! {
 /// upstream header, not from a device: UNVERIFIED.
 const WINDOW_TYPE_TOPLEVEL: c_int = 1;
 
+/// **The window is translucent: this platform's frames go over a video plane.** The `alpha` argument of
+/// `ecore_wl2_window_alpha_set`, which the window gets at creation and keeps for the process (a flag of the
+/// window, so there is nothing to route per frame and `Shell::opaque_route` has no work). Measured on the TV 10.0
+/// emulator (2026-11-22): with it ON the native player's overlay video shows only through the pixels the frame
+/// clears to (0, 0, 0, 0) (the player route's own clear, `app/run.rs`) and the UI around them is intact; the
+/// frame is otherwise as opaque as it always was, because every page clears to an opaque ground. With it OFF
+/// (what this crate set before) the window is opaque and no video can show.
+pub const WINDOW_ALPHA: u8 = 1;
+
 /// Load one table, saying why when it does not load; `true` when it is live.
 pub(crate) fn loaded(what: &str, result: Loaded) -> bool {
     match result {
@@ -322,7 +331,7 @@ impl Window {
         unsafe {
             if loaded("ecore_wl2_opts", ecore_wl2_opts::load(None)) {
                 ecore_wl2_window_type_set(self.window, WINDOW_TYPE_TOPLEVEL);
-                ecore_wl2_window_alpha_set(self.window, 0);
+                ecore_wl2_window_alpha_set(self.window, WINDOW_ALPHA);
             }
             if loaded("ecore_wl2_opts_extra", ecore_wl2_opts_extra::load(None)) {
                 let hint = CString::new("wm.policy.win.user.geometry").unwrap_or_default();
@@ -577,6 +586,18 @@ unsafe extern "C" fn focus_cb(data: *mut c_void, _kind: c_int, _event: *mut c_vo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The window is created translucent, and by the named value.** The video plane shows through a window
+    /// whose alpha is on (E-measurement 2026-11-22, `docs/tizen.md`); the call is made in `set_options`, from
+    /// [`WINDOW_ALPHA`], and not from a literal that could read 0 again.
+    #[test]
+    fn the_window_is_created_translucent_from_the_named_value() {
+        assert_eq!(WINDOW_ALPHA, 1, "alpha ON: the overlay video shows through a (0, 0, 0, 0) clear");
+        let src = include_str!("ecore.rs");
+        let call = "ecore_wl2_window_alpha_set"; // built apart, so this test's own text is not what it finds
+        assert_eq!(src.matches(&format!("{call}(self.window, WINDOW_ALPHA);")).count(), 1);
+        assert!(!src.contains(&format!("{call}(self.window, 0);")), "no opaque window");
+    }
 
     /// **No Ecore, no window, no crash**: on a host without `libecore_wl2` (every host this runs on) the window
     /// layer answers one clean refusal, `E_WINDOW`, and logs which library did not open. This is the path a

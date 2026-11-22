@@ -1939,6 +1939,20 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
   pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
   and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
+- As landed (PR B2, the video plane under our UI and Home): measured on the TV 10.0 x86_64 emulator 2026-11-22 (scratch
+  probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
+  clears to (0, 0, 0, 0), the UI around it intact; (b) the video plane mixes STRAIGHT alpha (pixel-exact: a straight
+  (255, 255, 255, 128) strip is a 50 % veil over it) while window-over-window composition is premultiplied, which is webOS's split, so
+  the existing straighten pass and `frame_clear_through` / `opaque_route` chain are the answer, not a new one (D6); (c) the player
+  raises nothing at OnPause: `player_pause` there and `player_start` at OnResume resume in about 130 ms at the same position, the picture
+  back when the window is (about 2 s). The code: `ecore::WINDOW_ALPHA` = 1 at window creation (the platform's frames go over a video
+  plane; a window flag, so `Shell::opaque_route` stays a stated no-op); the straighten COPY program is its own source,
+  `fs_straighten_copy.frag`, with no preprocessor directive (the suspect above: the shared file's `#extension` lines in branches not
+  taken), the fetch file keeps the two fetch variants, a test pins the arithmetic equal; `PlxPlayer.PauseForHome` / `ResumeAfterHome`
+  (C#, video thread) pause what is playing at OnPause and start exactly that at OnResume; an accepted CLOSE retires its epoch at the
+  door (`E_STALE` after). The shader file is shared with webOS: its fetch programs' preprocessed text is token-identical to before, and
+  a `glGetProgramBinaryOES` before/after identity check on the LG set is OWED (not run here). Not done: that the copy program compiles on
+  YaGL (the next emulator run), the C# compile, H6 on a retail set (OPEN), the Rust URI driver and composition (PR B1).
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.
