@@ -233,10 +233,16 @@ impl Hosted {
         self.push(input).map_or_else(|code| code, |()| host_abi::OK)
     }
 
-    /// A player event from the host: refused after a stop or when the loop is not running (the same rule as an
-    /// input), dropped when its epoch is not live, queued otherwise. Never blocks.
+    /// A player event from the host: refused when the loop is not running, and after a stop (the same rule as an
+    /// input) EXCEPT `PLAYER_CLOSED`; dropped when its epoch is not live, queued otherwise. Never blocks.
+    ///
+    /// A CLOSE the host accepted before `plx_host_stop` is answered by a `PLAYER_CLOSED` that lands after it (from the host's
+    /// video thread, or from `PlxPlayer.Shutdown`'s own close at terminate). That event is the confirmation the application's
+    /// stop waits for, and the loop is still running until it has it: refusing it held the stop for [`STOP_DEADLINE`] and
+    /// reported it unclean. Every other kind stays refused, and an epoch that is not live is still stale.
     fn post_player(&self, event: PlayerEvent) -> i32 {
-        if self.gate.stopping() || !self.running.load(Ordering::SeqCst) {
+        let confirms_a_close = event.kind == host_abi::PlayerKind::Closed;
+        if (self.gate.stopping() && !confirms_a_close) || !self.running.load(Ordering::SeqCst) {
             return host_abi::E_STATE;
         }
         self.player.accept(event).map_or_else(|code| code, |()| host_abi::OK)

@@ -692,10 +692,41 @@ fn the_driver_over_the_hosted_contract_round_trips_and_a_close_after_the_library
     assert_eq!(dispatch_any(&mut driver, b, 5, Operation::Stop(StopReason::Exit)), DispatchResult::Queued);
     assert_eq!(host_saw(|s| s.verbs.len()), verbs_before, "the host was not called after the stop");
     let late = crate::host_abi::PlxHostEvent { size: host_abi::EVENT_V2_SIZE, kind: host_abi::EVENT_PLAYER_CLOSED, epoch: second, reserved: 0, a: 0, b: 0 };
-    assert_eq!(w.hosted.post(&late), host_abi::E_STATE);
+    assert_eq!(w.hosted.post(&late), host_abi::OK, "the host's CLOSED is still heard while the loop runs (the attempt is released already, so the machine drops it)");
     // The library cannot ask for the close any more (its gate is shut), and the host closes its own player at terminate
     // (`plx_host.h`, STOP): the stop is not held for a confirmation that cannot come, so the exit is clean.
     assert_eq!(poll_any(&mut driver), [DriverEvent::Release { attempt: b, status: ReleaseStatus::Released }]);
+    assert_eq!(driver.exit_disposition(), ExitDisposition::Clean);
+    w.wait_stopped(1);
+}
+
+/// **A CLOSE the host accepted just before the library was stopped is confirmed by the `CLOSED` that arrives just after.** The
+/// close was asked and accepted while the gate was open; `plx_host_stop` then closed it, and the host's `PLAYER_CLOSED` (posted by
+/// its video thread, or by `PlxPlayer.Shutdown`'s own close) was refused with `E_STATE`, so the attempt stayed `Closing` and the stop
+/// held for `STOP_DEADLINE` and reported unclean. That event is the confirmation the stop waits for: it is heard for a live epoch
+/// while the loop is still running, and every other kind is still refused.
+#[test]
+fn a_close_accepted_before_the_stop_is_confirmed_by_the_closed_that_arrives_after_it() {
+    use crate::hosted::testing::{complete, loop_until_quit, seen as host_saw, World};
+    let w = World::new();
+    assert_eq!(w.start(|_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
+    let timing = Timing { release_allowance_ms: 40, ..Timing::PRODUCT };
+    let mut driver = TizenUriDriver::new(HostedPlayer::new(w.hosted), timing);
+    let a = attempt(1);
+    let key = SourceKey::new(1);
+    assert_eq!(driver.stage_source(a, key, UriSource::new(URL.into(), vec![])), Ok(()));
+    assert_eq!(dispatch_any(&mut driver, a, 1, Operation::Start { source: key, requirements: plain_requirements() }), DispatchResult::Queued);
+    let epoch = host_saw(|s| s.opens.last().map(|o| o.0)).unwrap();
+    let event = |kind| crate::host_abi::PlxHostEvent { size: host_abi::EVENT_V2_SIZE, kind, epoch, reserved: 0, a: 0, b: 0 };
+    // The close is asked and ACCEPTED (the gate is open); then the host stops the library.
+    assert_eq!(dispatch_any(&mut driver, a, 2, Operation::Stop(StopReason::Exit)), DispatchResult::Queued);
+    assert_eq!(host_saw(|s| s.verbs.last().copied()), Some((epoch, host_abi::VERB_CLOSE, 0, 0)));
+    w.hosted.stop(std::time::Duration::from_secs(30));
+    // Its CLOSED arrives after the stop: heard (it is the confirmation), where a completion of the same epoch is not.
+    assert_eq!(w.hosted.post(&event(host_abi::EVENT_PLAYER_COMPLETED)), host_abi::E_STATE, "any other kind is refused after the stop");
+    assert_eq!(w.hosted.post(&event(host_abi::EVENT_PLAYER_CLOSED)), host_abi::OK, "the confirmation the stop waits for");
+    assert_eq!(poll_any(&mut driver), [DriverEvent::Release { attempt: a, status: ReleaseStatus::Released }],
+        "released by the host's own confirmation, not at the deadline");
     assert_eq!(driver.exit_disposition(), ExitDisposition::Clean);
     w.wait_stopped(1);
 }
