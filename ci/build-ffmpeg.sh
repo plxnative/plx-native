@@ -389,8 +389,7 @@ TAR=${FFMPEG_TARBALL:-$TARDIR/ffmpeg-$VERSION.tar.xz}
 # 11 MB over the network again. The sha256 below is checked either way, so a corrupt or
 # substituted cache copy fails exactly as a bad download would.
 # EVERY WRITE HERE IS PID-UNIQUE THEN RENAMED, and the lock above does not cover it. That lock is
-# per CONFIGURATION, and this file is shared by all of them: `PLATFORM=webos make -j all sim` (or `make all` and `make sim` run
-# side by side; plain `make -j all sim` is refused, `sim` implies PLATFORM=desktop) runs the ARM and the
+# per CONFIGURATION, and this file is shared by all of them: `make -j all sim` runs the ARM and the
 # host build at once, they hold DIFFERENT locks by design, and both want this one tarball. Writing
 # a fixed `$TAR.part` had them share that name too — one `mv` unlinking the path the other `curl`
 # was still writing into, which is a failed build if you are lucky and a truncated 11 MB tarball
