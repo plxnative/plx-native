@@ -301,7 +301,7 @@ namespace PlxHost
                 // After the library has been asked to stop (it refuses requests from then on, so it can NOT close a player it has open: its
                 // CLOSE is answered locally and the library treats the release as ours, plx_host.h STOP): close that player and end the video
                 // thread NOW, before waiting for on_stopped, so the native player is released on every terminate path, also when the wait
-                // below runs into the platform's own kill. Player events it still posts are refused by the library.
+                // below runs into the platform's own kill. Of the player events it still posts only PLAYER_CLOSED is heard by the library (the confirmation of a close it had accepted); the rest are refused.
                 PlxPlayer.Instance.Shutdown();
                 if (asked) WaitLibraryStopped();
             }

@@ -14,7 +14,7 @@ use plx_playback_contract::Failure;
 /// A request the host refused: nothing was queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// The host has no media player, or its video thread is not running, or the library was told to stop.
+    /// The host has no media player, or its video thread is not running (or has been shut down). The library having been told to stop is [`Refusal::Stopping`], not this.
     Unavailable,
     /// The host's request queue is full.
     Busy,

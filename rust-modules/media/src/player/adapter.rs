@@ -459,7 +459,8 @@ fn inert_sink() -> &'static dyn VideoSink { &NoSink }
 /// Common coordinator and main-thread proof, as one owned value (`App.adapters.player`).
 /// **A foreground restore of a URI original** (`player::begin_resume`'s URI branch). A URI original plan installs no
 /// stream URL, so the parked session cannot be reopened from a route: it is re-resolved at the saved position through
-/// the same door a Retry press uses (`route::retry_current_play`), and the offer that lands opens the driver again.
+/// `route::restore_uri_original`, which goes through the common request door (`request_play_with_queue`, origin `Resume`; not
+/// `route::retry_current_play`, which is the Retry press's own entry), and the offer that lands opens the driver again.
 /// The machine below holds the request and the answer between the foreground lifecycle (which has no metadata store)
 /// and the frame (which has): `Owed` until the frame takes it, `Flying` while the resolve runs, `Landed` until
 /// `land_resume` hands the lifecycle its answer.

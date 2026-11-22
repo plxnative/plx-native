@@ -11,7 +11,7 @@
 //! once, so the machine commits the state a request implies and the executor reports a refusal of that request
 //! afterwards ([`Machine::open_refused`], [`Machine::verb_refused`]): the machine rolls the commitment back and
 //! hands back the refusal the command now answers with. A refused CLOSE has no dispatch to answer, so the
-//! machine decides what it means: busy is retried on the next poll, anything else waits for the deadline.
+//! machine decides what it means: busy is retried on the next poll, `Stopping` is released at once (the host closes its own player at terminate), anything else waits for the deadline.
 //!
 //! **Epochs.** The machine mints one `epoch` per open and keeps at most one attempt active. Every request carries
 //! it and every event is checked against it: an event whose epoch is not the active one (a completion that lands

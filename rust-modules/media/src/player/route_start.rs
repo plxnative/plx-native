@@ -935,9 +935,10 @@ pub enum ResumeStart {
     /// Decided on the spot (no rebuild is owed): the caller starts the Load (or fails the start)
     /// now.
     Settled(ResumeOutcome),
-    /// A flight owns the rebuild at the saved position (`route::dispatch_resume_rebase`): the start
-    /// stays owed, `player::state` answers `Resolving` (via `route::resume_flight_outstanding`), and [`land_resume`] delivers the
-    /// outcome the caller starts the Load on.
+    /// A flight owns the work owed at the saved position, and the start stays owed until [`land_resume`] delivers the outcome the
+    /// caller starts the Load on. Two cases answer it: a TRANSCODE's rebuild (`route::dispatch_resume_rebase`, tracked by
+    /// `route::resume_flight_outstanding`, `player::state` answers `Resolving`) and a parked URI original's re-resolve
+    /// (`route::restore_uri_original`, the frame's [`pump_uri_restore`], tracked by `PlayerAdapter::uri_restore_outstanding`).
     Pending,
 }
 
@@ -987,9 +988,11 @@ fn note_transcode_resumed(ps: &mut crate::route::PlaybackSession, pa: &mut super
 /// restore (the parked session's start transaction is `Stable`/`Prepared`/`Failed`, or an Original
 /// trial's own `Prepared` one for a session suspended mid-trial, which the flight flies over without
 /// touching the trial's rollback; an `Idle` one has no URL and answers `NoRoute` here, never
-/// reaching the rebuild). No Engine exists. Everything but a transcode settles on the spot; a transcode's
+/// reaching the rebuild). No Engine exists. Everything but a transcode and a parked URI original settles on the spot. A transcode's
 /// rebuild at the saved position is a FLIGHT — planned here on the frame thread, the PMS half on a
-/// worker — and answers [`ResumeStart::Pending`]. The frame never reaches the server.
+/// worker — and answers [`ResumeStart::Pending`]; so does a parked URI original (it has no URL to resume), whose
+/// restore is a re-resolve of the same item at the saved position through `route::restore_uri_original`, performed by the frame
+/// ([`pump_uri_restore`]) and tracked by `PlayerAdapter::uri_restore_outstanding`. The frame never reaches the server.
 pub fn begin_resume(
     ps: &mut crate::route::PlaybackSession,
     pa: &mut super::adapter::PlayerAdapter,
