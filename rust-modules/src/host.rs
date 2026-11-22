@@ -84,7 +84,6 @@ pub const SIM_PRESENT: Present = crate::app::adapters::sim_present::PRESENT;
 pub const WEBOS_MEDIA: MediaBoot = MediaBoot {
     early_init: crate::app::adapters::backends::acb_init,
     compose: crate::app::adapters::backends::compose_native,
-    preview_seam_absent: crate::app::adapters::backends::preview_seam_present,
 };
 
 /// The desktop's [`MediaBoot`]: nothing to boot, and the Feed over the simulator's sink as the only driver, with no URI
@@ -93,7 +92,6 @@ pub const WEBOS_MEDIA: MediaBoot = MediaBoot {
 pub const FEED_MEDIA: MediaBoot = MediaBoot {
     early_init: crate::app::adapters::backends::feed_early_init,
     compose: crate::app::adapters::backends::compose_feed_alone,
-    preview_seam_absent: crate::app::adapters::backends::feed_preview_seam_absent,
 };
 
 /// The [`MediaBoot`] of a platform with no playback yet: no early init, a composition that installs no driver
@@ -104,7 +102,6 @@ pub const FEED_MEDIA: MediaBoot = MediaBoot {
 pub const NO_MEDIA: MediaBoot = MediaBoot {
     early_init: crate::app::adapters::backends::no_early_init,
     compose: crate::app::adapters::backends::compose_none,
-    preview_seam_absent: crate::app::adapters::backends::preview_seam_present,
 };
 
 /// Boot the application on `platform` and return the status it ended with: the application's entry
@@ -561,8 +558,6 @@ mod no_media_tests {
         assert_eq!(adapter.composed_backends(), plx_playback_contract::BackendSet::NONE, "and no driver of any kind");
         let controlled = (NO_MEDIA.compose)(&mut adapter, true);
         assert!(controlled.resolver.is_none(), "a controlled boot composes nothing either");
-        assert!(!(NO_MEDIA.preview_seam_absent)(), "nothing plays, so there is no absent video path to count");
-        assert!(!(WEBOS_MEDIA.preview_seam_absent)(), "the television's seam is always there");
 
         let mut session = plx_media::route::PlaybackSession::IDLE;
         let log = plx_base::eventlog::with_private_log(|| {
@@ -590,13 +585,5 @@ mod media_boot_tests {
         assert!(!adapter.composed_backends().uri);
         #[cfg(feature = "play-feed")]
         assert!(adapter.composed_backends().feed, "the Feed is the desktop's driver");
-    }
-
-    /// The simulator's preview Load has no video path behind it until the clock sink is armed
-    /// (`plxnative-clocksink`): the answer the application gave itself under `hostsim` before it was a platform
-    /// value. The test runtime root is a throwaway one, so the trigger is unarmed here.
-    #[test]
-    fn the_desktop_feed_boot_has_no_video_path_for_a_preview_until_the_clock_sink_is_armed() {
-        assert!((FEED_MEDIA.preview_seam_absent)());
     }
 }

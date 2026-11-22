@@ -176,19 +176,6 @@ pub(crate) fn compose_feed_alone(adapter: &mut PlayerAdapter, _controlled: bool)
     Composition::default()
 }
 
-/// The desktop's `preview_seam_absent`: a host Load of 0 with the clock sink off (`plxnative-clocksink`) is "no video
-/// path", not an admitted slot. `host::FEED_MEDIA` states it.
-#[cfg(feature = "hostsim")]
-pub(crate) fn feed_preview_seam_absent() -> bool {
-    !plx_base::devtrig::flag("clocksink")
-}
-
-/// The `preview_seam_absent` of a platform whose sink is real (the television's Starfish seam) or that plays nothing:
-/// the seam is always there. `host::WEBOS_MEDIA` and `host::NO_MEDIA` state it.
-pub(crate) fn preview_seam_present() -> bool {
-    false
-}
-
 /// The `early_init` of a platform that has no playback plane to boot: nothing to initialize. `host::NO_MEDIA` states it.
 pub(crate) fn no_early_init(_mt: &MainThread) {}
 

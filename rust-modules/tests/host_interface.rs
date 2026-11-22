@@ -160,17 +160,13 @@ impl Surface for FakeSurface {
 
 fn early_init(_mt: &MainThread) {}
 
-fn preview_seam_absent() -> bool {
-    false
-}
-
 fn compose(_adapter: &mut plx_media::player::adapter::PlayerAdapter, _controlled: bool) -> Composition {
     Composition::default()
 }
 
 /// The platform, as a sibling crate states it: a `static`, so every part of it is `Sync`.
 static PLATFORM: Platform =
-    Platform::new(&SERVICES, &SHELL, &FakeProbe, MediaBoot { early_init, compose, preview_seam_absent });
+    Platform::new(&SERVICES, &SHELL, &FakeProbe, MediaBoot { early_init, compose });
 
 fn assert_sync<T: Sync>(_: &T) {}
 

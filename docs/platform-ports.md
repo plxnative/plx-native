@@ -1031,8 +1031,7 @@ Ecore names to `remote_token_key` pairs".
 ### 6. Media, as four things
 
 - a. Composition and the two boot phases (review M5, C3; critic F7). `Platform.media` is `MediaBoot { early_init:
-  fn(&MainThread), compose: fn(&mut PlayerAdapter, controlled: bool) -> Composition, preview_seam_absent:
-  fn() -> bool }` (the third, W8c-3: the simulator's "no video path behind a preview Load" fact), with
+  fn(&MainThread), compose: fn(&mut PlayerAdapter, controlled: bool) -> Composition }`, with
   `Composition { resolver: Option<ResolvePort> }` (W6b landed this shape; the `&PlaybackSession` parameter this
   paragraph first named is dropped, see the deviation below):
   - `early_init` runs at today's `acb_init` site (`app/boot.rs:2043`, inside `if !controlled`, before
@@ -1229,7 +1228,7 @@ Ecore names to `remote_token_key` pairs".
   `acb_init`, `compose_native`, `compose_feed`) until W11a moves it into the webOS platform, and the simulator's video
   sink (`HOST_SINK`, `adapters/hostsim.rs`) draws the decoded picture, which only the application may. So `host` hands a
   platform READY values, and neither platform crate names `PlayerAdapter` in its production code:
-  - `WEBOS_MEDIA`, a `pub const MediaBoot { early_init: backends::acb_init, compose: backends::compose_native, preview_seam_absent: backends::preview_seam_present }`,
+  - `WEBOS_MEDIA`, a `pub const MediaBoot { early_init: backends::acb_init, compose: backends::compose_native }`,
     compiled in every build of the application because it carries no `cfg` (the application cannot know which platform crate names it);
   - `FEED_MEDIA` (`hostsim` builds only), the desktop's `MediaBoot`: a no-op `early_init` and `compose` over
     `backends::compose_feed` alone, so no URI driver and no resolver;
@@ -1859,18 +1858,25 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   seam goes to `test-support`.
   As landed (W8c-3, the frame seam): `Shell::frame` is a required hook returning a `FrameSeam { pacer: Pacer,
   present: Present }` (each group has a `NONE`), `FrameProbe::heartbeat_tag` a required method and
-  `MediaBoot::preview_seam_absent` a required field, all reachable through `host`. The webOS and Tizen platforms state
-  `FrameSeam::NONE`, `""` and `preview_seam_present` (always `false`); the desktop states the WSLg-aware pacer
+  all reachable through `host`. The webOS and Tizen platforms state `FrameSeam::NONE` and `""`; the desktop states the WSLg-aware pacer
   (`platform-desktop/src/pacer.rs`: armed on Linux under WSL's X11 SDL driver, the `Instant`, sleep and two
   environment reads the loop's `WslgFrameBudget` had in `app/window_activity.rs`, so `ci/allow/wall.txt` 3 -> 2 and
   its `ci/ports.ini` entry goes), the simulator's present hooks the application keeps because they draw
-  (`host::SIM_PRESENT`: compose-under on a bound frame and the supersampled copy to the window), ` sim=1` and the
-  clock-sink fact (`FEED_MEDIA`). The two arms no CI configuration builds (`hostsim` without `play-feed`:
+  (`host::SIM_PRESENT`: compose-under on a bound frame and the supersampled copy to the window), and ` sim=1`. The app's preview-admission `seam_absent` asks the sink
+  (`VideoSink::lacks_video_path`, W8c-1). The two arms no CI configuration builds (`hostsim` without `play-feed`:
   `dev/scenarios.rs` autopause `at=`, `dev/scenarios/screenshot.rs` clockstop) are deleted. `feature = "hostsim"`
   lines in `rust-modules`: 317 -> 300 (the application crate with `dev`, `host` and the desktop platform: 129 ->
   112); the test lists of `plxnative-modules` (1491 default, 1766 `hostsim`) and `plx_platform_webos` (63) are
   unchanged, `plx_platform_desktop`'s grows 5 -> 6. The `not(hostsim)` term of `src/lib.rs`'s `compile_error!` stays
   for W8b.
+  As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
+  likewise (`shared.rs` hooks `any(test, test-support)`); `ffi_host` is two exclusive declarations of one file (`hostsim`;
+  `any(test, test-support)` without it), because one `cfg` mixing `hostsim` with `test` is a production-visible fork the
+  `forks` ledger counts. `test_physical`'s sink is always the host sink. `pump.rs`'s `cfg!(hostsim)` read is the required
+  `VideoSink::lacks_video_path` (webOS `false`, host `!clocksink`, `NoSink` `false`, `RefusingSink` forwards); the four `os`
+  dead-code `cfg_attr`s are deleted. Discovered tests, `cargo test --lib -- --list`: `plx_media` default 2272 -> 2592
+  (320 gained, 0 lost; with `hostsim` 2592 -> 2592), `plx_play_feed` default 351 -> 368 (17 gained; with `hostsim` 368 -> 368, one
+  test renamed `hostsim::` -> `host_seam::`), `plx_os` 417 -> 417 in both. `make test-crate C=plx_media` now runs 2488 passed / 104 ignored.
 - Verify: the F9/F12 grep count before and after; `ci/check-ledger-ratchet.py` at or below every family
   total (a host difference that needs IO becomes a runner, never a `forks/` line); fw-compat-reviewer on
   W8b; a build-bench table for W8b. Risk: size. W8c blocks nothing Tizen needs; only W8a does.

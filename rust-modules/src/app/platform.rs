@@ -18,7 +18,7 @@
 //!   the loop runs at the frame's present.
 //! - `diag`: the six frame probes and the heartbeat's tag, [`FrameProbe`], read by the loop. The renderer's clear hook takes
 //!   plain functions, so the platform's entry installs it (`gfx::install_clear_probe`).
-//! - `media`: [`MediaBoot`], the platform's two boot-time playback steps and one fact. `early_init` runs once before
+//! - `media`: [`MediaBoot`], the platform's two boot-time playback steps. `early_init` runs once before
 //!   the first adapter exists; `compose` installs the platform's drivers on the adapter and hands
 //!   back what it composed as a [`Composition`]. The boot then tells the route session what the
 //!   platform composed through [`publish_composition`], the one function that does, so the set of
@@ -311,7 +311,7 @@ pub struct Composition {
     pub resolver: Option<ResolvePort>,
 }
 
-/// A platform's two playback steps at boot, and one fact about its sink. All three are plain functions: the platform's entry states
+/// A platform's two playback steps at boot. Both are plain functions: the platform's entry states
 /// them once, in its `static`, and the boot calls them through [`Platform::media`].
 pub struct MediaBoot {
     /// Before the first adapter exists, once per process. The caller runs it only on a boot that
@@ -321,10 +321,6 @@ pub struct MediaBoot {
     /// `controlled` is a replay or scripted Home, which touches no native port and so installs no
     /// native driver. It takes no session and publishes nothing: [`publish_composition`] does that.
     pub compose: fn(&mut PlayerAdapter, controlled: bool) -> Composition,
-    /// Whether a preview's Load reaching this platform's Feed has NO video path behind it (the simulator
-    /// with its clock sink off), asked per preview start: such a Load is not an admitted slot, and counting
-    /// it would spend the cycle and open the breaker. Every platform with a real sink answers `false`.
-    pub preview_seam_absent: fn() -> bool,
 }
 
 /// Tell the route session what the platform composed: the resolver first, then the backend set the
@@ -500,20 +496,11 @@ impl SwapShell {
 #[cfg(test)]
 impl MediaBoot {
     /// The media boot of a process with no platform: nothing to initialize and no driver to install.
-    pub(crate) const HOST_TEST: MediaBoot = MediaBoot {
-        early_init: host_test_early_init,
-        compose: host_test_compose,
-        preview_seam_absent: host_test_seam_absent,
-    };
+    pub(crate) const HOST_TEST: MediaBoot = MediaBoot { early_init: host_test_early_init, compose: host_test_compose };
 }
 
 #[cfg(test)]
 fn host_test_early_init(_mt: &MainThread) {}
-
-#[cfg(test)]
-fn host_test_seam_absent() -> bool {
-    false
-}
 
 #[cfg(test)]
 fn host_test_compose(_adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
@@ -579,7 +566,6 @@ mod tests {
         compose_under();
         before_swap();
         assert_eq!(p.heartbeat_tag(), "", "only a simulator tags its heartbeat");
-        assert!(!(media.preview_seam_absent)(), "a platform with no sink has no absent video path to count");
 
         p.request();
         p.prepare_begin();
