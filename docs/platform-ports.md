@@ -2011,7 +2011,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `requires_client_subtitle`, Boost Dialog, Auto on a non-local link and a relay are refused the same way, and with no Feed
   and `qualify_pms` Unknown each ends as `NoQualifiedBackend` (a resolver test pins `SubtitleOff`); whether the native player
   renders an embedded subtitle when none is set is an OPEN measurement, and `SubtitleOff` is not allowed until it is; a track pick
-  the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
+  the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title (and a Quality rung, which only a Feed or a converting provider can carry, is neither offered nor applied: `PlaybackSession::quality_pick_carriable`); a stall or failure of the original is not re-resolved on a composition with no Feed and no converting provider (`can_retry_uri_after_release`), so the viewer reads the stall and not a refusal; the parked attempt's `stopped` timeline goes out at the restore's retire and at an exit, at its own position; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
   behind `uri`; `mk/platform-tizen.mk` builds with it (`TIZEN_URI=0` builds without), and the identity line says which build it is.
   The shared conformance suite (`plx_playback_contract::uri_conformance`, D7) runs over `FakeUriDriver` and this driver, and
   the mock's `--extra-media-video-only` serves a local video-only file for the audio-less emulator. Still open: an emulator run of it with the video-only mock; H6 on a
