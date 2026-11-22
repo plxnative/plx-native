@@ -3,7 +3,7 @@
 //! here from the media crate when the driver left it; the assertions are unchanged.
 
 /// The display sink the probe opens its window on, as media's `start` hands it: the simulator's
-/// host sink under hostsim, the port's installed sink otherwise.
+/// host sink under `sim`, the port's installed sink otherwise.
 fn display() -> &'static dyn plx_os::tv::sink::DisplaySink {
     #[cfg(feature = "sim")]
     {

@@ -1828,13 +1828,14 @@ check-cargo-unit-default:
 	@# disappear rebuilds honest in a scratch workspace that uses the real build.rs.
 	RUST_TOOLCHAIN=$(RUST_TOOLCHAIN) python3 ci/test_build_not_always_dirty.py
 
-# The `hostsim` unit suite (the host feed seam exists only there).
+# The `hostsim` unit suite: the crates that declare `sim`, re-run with it on.
 check-cargo-unit-hostsim:
 	@# The crates of HOSTSIM_SUITE (the ones that declare `sim`) again under `sim`, which is
-	@# not a duplicate run: the host feed seam (`play-feed/src/ffi_host.rs`) only exists in that configuration,
-	@# so every test that drives an AU through `sf_feed` is COMPILED OUT of the default pass and cannot fail it. The prime-livelock
-	@# regression is one of those, and it guards the 94-second freeze of 2026-08-29 — a defect that
-	@# was invisible to all 1398 default-feature tests because the seam it needs was not there.
+	@# not a duplicate run: the tests that need the feature itself (the simulator's sink and compositor stand-in,
+	@# the steerable runtime root, the desktop window fit) are compiled only with `sim` on. The host feed seam
+	@# (`play-feed/src/ffi_host.rs`) is not one of them since W8c-1: `play-feed/src/lib.rs` compiles it under
+	@# `any(test, test-support)` as well, so the tests that drive an AU through `sf_feed` (the prime-livelock
+	@# regression, which guards the 94-second freeze of 2026-08-29, among them) are in every test build.
 	@# Cargo keys fingerprints by feature set, so the two configurations coexist in one target/ and
 	@# this costs a few seconds warm rather than a rebuild.
 	@# The second cargo line is W7a's gate and a test executable of its own (`--lib` never builds an integration test):

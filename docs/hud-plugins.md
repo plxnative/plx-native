@@ -1496,7 +1496,7 @@ the television's. `plxnative-sim --hud-lint` prints every state's cost beside it
 ## Storage per install mode
 
 New `paths::hud_candidates()` on F39's pattern, keyed by `app_id()`:
-0. a steerable (hostsim) build: `in_runtime_dir("huds")` FIRST, so simulators never share one store;
+0. a steerable (`sim`) build: `in_runtime_dir("huds")` FIRST, so simulators never share one store;
 1. `/media/developer/{id}-huds/` (Dev Mode: rw, survives reinstall);
 2. `/media/internal/.{id}-huds/` (the HBC/cryptofs jail's persistent rw location);
 3. `/media/developer/temp/{id}-huds/` if (1) is refused, created owner-only like the image cache;

@@ -247,7 +247,7 @@ fn derive_app_dir() -> (PathBuf, AppDirSource) {
     derive_app_dir_with(fallback_of(choice()))
 }
 
-/// The derivation: the environment (a hostsim build only), then the executable's own place, then
+/// The derivation: the environment (a `sim` build only), then the executable's own place, then
 /// `fallback` (the platform's [`Layout::fallback_dir`]).
 fn derive_app_dir_with(fallback: &str) -> (PathBuf, AppDirSource) {
     // The simulator's binary lives in `target/<profile>/`, which is not where `appfont.ttf`
@@ -786,7 +786,7 @@ pub fn image_cache_dir_is_private(path: &Path) -> bool {
 /// [`image_cache_candidates`]'s pattern and keyed by [`app_id`] so two flavours never share a store
 /// (a debug build's unreviewed sideload must never reach the stable install):
 ///
-/// 1. a steerable (hostsim) build: [`in_runtime_dir`]`("huds")` FIRST, so two simulators never share one;
+/// 1. a steerable (`sim`) build: [`in_runtime_dir`]`("huds")` FIRST, so two simulators never share one;
 /// 2. `/media/developer/{id}-huds` (Developer Mode: rw, survives a reinstall);
 /// 3. `/media/internal/.{id}-huds` (the production jail's persistent rw location);
 /// 4. `/media/developer/temp/{id}-huds` when (2) is refused, created owner-only

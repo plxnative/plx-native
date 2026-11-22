@@ -18,7 +18,7 @@
 //! runtime root steerable by `PLXNATIVE_RUNTIME_DIR`, so the boot's event log, crash log and diagnostics
 //! land in a throwaway directory and not in a real install's. It refuses to run without that variable.
 //! The rest of the file compiles in every configuration (`make lint` and `check-cargo-lint` build it),
-//! which type-checks the interface from outside in the default non-hostsim feature set too.
+//! which type-checks the interface from outside in the default feature set, without `sim`, too.
 //!
 //! The application replaces the process's panic hook while it boots (`install_panic_logger`): it wraps
 //! the previous hook, so a panic still reaches the test harness, and additionally writes one line to the
