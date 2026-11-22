@@ -5,7 +5,7 @@
 //! a loop thread this crate starts while the host's main thread stays the Ecore main loop. It has run on the
 //! Tizen TV emulator and on no retail set, and it says so: the platform the Plex server reads is `Tizen` with a
 //! version ending `(emulator)` ([`identity`]). **Playback is the `uri` feature's** (W10 part B): built with it, the
-//! media boot is [`player::MEDIA`], the URI driver over the host's native player, and a direct-play title plays;
+//! media boot is [`player::MEDIA`], the URI driver over the host's native player, which the planner offers a narrow set of titles to (host-tested only: nothing has been run on a device, and no title is claimed to play);
 //! built without it, the media boot is `host::NO_MEDIA` and nothing plays (`compose: backends=none`). The x86_64 build is not an `all(target_os = "linux", target_arch = "arm")` one, so the
 //! crash-capture branches the television build has are not selected here: a fault on the emulator leaves no
 //! crash file.

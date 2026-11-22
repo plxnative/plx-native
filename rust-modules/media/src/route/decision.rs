@@ -994,6 +994,67 @@ mod backend_offer_session_tests {
             Some(42_000_000_000), Some(true)), "Force forbids an implicit PCM transform");
     }
 
+    /// A URI provider that certifies the source's default stream only and no converted output (the Tizen shape).
+    struct DefaultStreamOnly;
+    impl super::super::uri_preflight::OriginalQualifier for DefaultStreamOnly {
+        fn qualify(&self, _: &plx_base::task::OffFrame, _: super::super::uri_preflight::OriginalRequest)
+            -> super::super::uri_preflight::Verdict {
+            super::super::uri_preflight::Verdict::Unknown(super::super::uri_preflight::UriDecline::NotCertified)
+        }
+        fn carries_source_track_change(&self) -> bool { false }
+    }
+
+    /// **A source-track pick the URI driver cannot carry must not replace the playing title with a failure.** With no
+    /// Feed and a provider that certifies no output for the pick, the re-plan (which retires the playing item and
+    /// ends in `NoQualifiedBackend`) is refused up front with a typed reason and spends nothing; a composition with
+    /// a Feed (webOS), or a provider that can certify the output, is not refused.
+    #[test]
+    fn a_source_track_pick_no_composed_backend_can_carry_is_refused_before_the_title_is_replaced() {
+        use super::super::uri_preflight::{CarrierQualifier, ProductEvidence, ResolvePort};
+        let _serial = plx_base::testlock::serial();
+        let picks = [
+            ViewerReconfigure::SourceAudio(72),
+            ViewerReconfigure::SourceSubtitle { sid: 81, mode: SubMode::Track, forced_lang: None },
+            ViewerReconfigure::SourceTracks { audio_sid: 72, subtitle_sid: 81 },
+        ];
+        let caps = plx_playback_contract::Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false,
+            pause: true, seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: false };
+        let evidence = ProductEvidence {
+            display: plx_playback_contract::uri::DisplayEvidence::ready("test"),
+            callable: caps,
+            certified: caps,
+        };
+        let mut session = PlaybackSession::IDLE;
+        session.install_backends(plx_playback_contract::BackendSet::URI);
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(DefaultStreamOnly)));
+        let request = PlaybackRequest {
+            sid: ServerId::UNSET, rk: "42".into(), part: "/library/parts/7".into(),
+            vcodec: "h264".into(), acodec: "ac3".into(), title: "Film".into(),
+            ctx: String::new(), preview: false, version: None, show_rk: String::new(),
+        };
+        session.request = Some(request.clone());
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        for pick in &picks {
+            assert_eq!(viewer_reconfigure_refusal(&session, pick), Some(ViewerReconfigureRefusal::NoBackendCarriesTrack),
+                "{pick:?}");
+            assert!(!request_viewer_reconfigure(&mut session, &mut meta, pick.clone(), Some(42_000_000_000), Some(false)));
+        }
+        assert_eq!(session.request, Some(request), "the playing title's request is untouched");
+        assert_eq!(session.reconfigure_pause_goal(), None);
+        assert_eq!(session.metric_request(), None, "no new request was begun");
+        assert!(session.backend_policy.is_none(), "a refused pick spends no recipe or episode");
+        // What is not a source-track pick is not this gate's business.
+        assert_eq!(viewer_reconfigure_refusal(&session, &ViewerReconfigure::Speed(1500)), None);
+        // A provider that can certify the replacement, or a Feed, is not refused (webOS keeps its behaviour).
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
+        assert_eq!(viewer_reconfigure_refusal(&session, &picks[0]), None);
+        session.install_uri_preflight_port(None);
+        session.install_backends(plx_playback_contract::BackendSet::BOTH);
+        for pick in &picks {
+            assert_eq!(viewer_reconfigure_refusal(&session, pick), None, "{pick:?}");
+        }
+    }
+
     #[test]
     fn qualified_original_feed_precedes_uri_conversion_then_uri_precedes_feed_conversion() {
         let mut session = PlaybackSession::IDLE;
@@ -1366,6 +1427,15 @@ impl PlaybackSession {
     }
 
     pub fn backends(&self) -> plx_playback_contract::BackendSet { self.backends }
+
+    /// Whether some composed backend could carry a viewer's pick of a source track the playing URI attempt cannot
+    /// switch to natively. A Feed always can (it re-plays the source with that selection); without one the URI
+    /// resolver's provider must say it certifies such an output
+    /// ([`OriginalQualifier::carries_source_track_change`](super::uri_preflight::OriginalQualifier::carries_source_track_change)).
+    pub fn source_track_change_carriable(&self) -> bool {
+        self.backends.feed
+            || self.uri_preflight_port.as_ref().is_some_and(super::uri_preflight::ResolvePort::carries_source_track_change)
+    }
 
     pub fn source_selection(&self) -> Option<SourceSelection> {
         self.source_selection
@@ -10561,12 +10631,41 @@ pub enum ViewerReconfigure {
     SourceTracks { audio_sid: i64, subtitle_sid: i64 },
 }
 
+/// Why a viewer's edit was refused before any re-plan started (nothing was retired, nothing spent).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewerReconfigureRefusal {
+    /// The pick is a source track the playing URI attempt cannot switch to natively, and no composed backend could
+    /// carry the replacement: no Feed, and the URI resolver certifies no output for it
+    /// ([`PlaybackSession::source_track_change_carriable`]). Re-planning would retire the playing title and end in
+    /// `NoQualifiedBackend`, so the title keeps playing as it is.
+    NoBackendCarriesTrack,
+}
+
+impl ViewerReconfigure {
+    fn is_source_track_change(&self) -> bool {
+        matches!(self, Self::SourceAudio(_) | Self::SourceSubtitle { .. } | Self::SourceTracks { .. })
+    }
+}
+
+/// The refusal `change` would meet before it re-plans, or `None` when the re-plan may proceed. It reads only the
+/// session's composition, so it is the same answer on every platform with the same backends: a composition with a
+/// Feed (webOS) is never refused here.
+pub fn viewer_reconfigure_refusal(ps: &PlaybackSession, change: &ViewerReconfigure) -> Option<ViewerReconfigureRefusal> {
+    (change.is_source_track_change() && !ps.source_track_change_carriable())
+        .then_some(ViewerReconfigureRefusal::NoBackendCarriesTrack)
+}
+
 /// Re-resolve the same source and selected tracks at a proven viewer position. This is one new
 /// finite policy episode, whereas automatic failures continue within their existing episode.
 /// The old executor remains owned until the normal resolved-start/release queue replaces it.
 pub fn request_viewer_reconfigure(ps: &mut PlaybackSession,
     meta: &mut plx_data::stores::metadata::MetadataStore,
     change: ViewerReconfigure, position_ns: Option<i64>, paused: Option<bool>) -> bool {
+    if let Some(refusal) = viewer_reconfigure_refusal(ps, &change) {
+        // Before anything is retired or spent: the playing title keeps playing.
+        crate::player::log(&format!("viewer reconfigure refused ({refusal:?}): no composed backend can carry {change:?}"));
+        return false;
+    }
     let (Some(request), Some(position_ns), Some(paused)) =
         (ps.request.clone(), position_ns, paused) else { return false };
     if position_ns < 0 || ps.preview { return false; }

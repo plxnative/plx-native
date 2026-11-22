@@ -2003,9 +2003,15 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements; every request and event carries the epoch
   and a completion after a stop is dropped. Capabilities: progressive URI, pause, seek, and `audio_track` (a deviation
   from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
-  states, so the offer of an ordinary title fails without it; the flag settles the source's FIRST audio stream only and the
-  qualifier declines a play that selects another). `TizenQualifier` certifies a source only where Standard would direct-play it
-  and never a converted PMS output; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
+  states, so the offer of a title fails without it; the driver settles that request for the source's one audio stream by
+  construction, not on native evidence, and `TizenQualifier` certifies ONLY a source with a single audio stream until the
+  retail default stream is measured). `TizenQualifier` certifies a source only where Standard would direct-play it
+  and never a converted PMS output; **the planner refuses most real titles before the qualifier is asked**: `subtitle_choice = Off`
+  (any subtitle stream, none selected) is `SubtitleOff`, a selected embedded subtitle fails `subtitle_track`, a sidecar is
+  `requires_client_subtitle`, Boost Dialog, Auto on a non-local link and a relay are refused the same way, and with no Feed
+  and `qualify_pms` Unknown each ends as `NoQualifiedBackend` (a resolver test pins `SubtitleOff`); whether the native player
+  renders an embedded subtitle when none is set is an OPEN measurement, and `SubtitleOff` is not allowed until it is; a track pick
+  the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
   behind `uri`; `mk/platform-tizen.mk` builds with it (`TIZEN_URI=0` builds without), and the identity line says which build it is.
   The shared conformance suite (`plx_playback_contract::uri_conformance`, D7) runs over `FakeUriDriver` and this driver, and
   the mock's `--extra-media-video-only` serves a local video-only file for the audio-less emulator. Still open: an emulator run of it with the video-only mock; H6 on a

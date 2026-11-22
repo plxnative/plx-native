@@ -184,7 +184,7 @@ fn play_is_accepted_by_started_and_pause_by_paused() {
 }
 
 #[test]
-fn a_seek_lands_on_seek_done_and_a_refused_or_expired_one_is_a_refusal_of_that_command() {
+fn a_seek_lands_on_seek_done_a_refused_one_is_a_refusal_and_an_expired_one_waits_for_the_position() {
     let (mut driver, fake) = rig();
     let (a, epoch) = prepared(&mut driver, &fake, 1);
     for (command, b, want) in [
@@ -192,8 +192,8 @@ fn a_seek_lands_on_seek_done_and_a_refused_or_expired_one_is_a_refusal_of_that_c
         (11, 91_000, DriverEvent::SeekLanded { attempt: a, command: cmd(11), position: Some(seen(ContentTime::from_millis(91_000))) }),
         (12, -1, DriverEvent::ControlRefused { attempt: a, command: cmd(12), operation: Operation::Seek(ContentTime::from_millis(5_000)),
             failure: Failure::Refused }),
-        (13, -2, DriverEvent::ControlRefused { attempt: a, command: cmd(13), operation: Operation::Seek(ContentTime::from_millis(5_000)),
-            failure: Failure::TimedOut }),
+        // Expired (b = -2): the seek MAY STILL LAND and the position is the authority, so it is no refusal.
+        (13, -2, DriverEvent::SeekLanded { attempt: a, command: cmd(13), position: None }),
     ] {
         let target = if b >= 0 { b as u64 } else { 5_000 };
         assert_eq!(dispatch(&mut driver, a, command, Operation::Seek(ContentTime::from_millis(target))), DispatchResult::Queued);
@@ -279,6 +279,56 @@ fn a_stalled_position_read_fails_the_player_only_if_it_stays_silent() {
 }
 
 #[test]
+fn a_pause_suspends_the_stall_grace_and_playing_again_starts_it_afresh() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared(&mut driver, &fake, 1);
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.post(epoch, PlayerKind::Stall, 0, 0);
+    fake.advance(100);
+    // The viewer's (or Home's) pause arrives while the position read was hung: a paused player is silent on purpose.
+    fake.post(epoch, PlayerKind::Paused, 0, 0);
+    let events = poll(&mut driver);
+    assert_eq!(events.last(), Some(&observation(a, Observation::Playback(seen(Playback::Paused)))));
+    fake.advance(10_000);
+    assert_eq!(poll(&mut driver), [], "a working paused attempt is not failed for its silence");
+    // A stall reported while paused is not armed either.
+    fake.post(epoch, PlayerKind::Stall, 0, 0);
+    fake.advance(10_000);
+    assert_eq!(poll(&mut driver), []);
+    // Playing again re-arms nothing by itself; a new STALL starts a new grace.
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.advance(10_000);
+    let events = poll(&mut driver);
+    assert!(!events.iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Failed(_), .. })), "{events:?}");
+    fake.post(epoch, PlayerKind::Stall, 0, 0);
+    assert_eq!(poll(&mut driver), []);
+    fake.advance(200);
+    assert_eq!(poll(&mut driver), [observation(a, Observation::Failed(Failure::TimedOut))]);
+}
+
+#[test]
+fn a_close_refused_as_busy_is_asked_again_and_other_refusals_wait_for_the_deadline() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared(&mut driver, &fake, 1);
+    // The host's queue is full: nothing was queued, so no PLAYER_CLOSED is coming until the close is asked again.
+    fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+    assert_eq!(dispatch(&mut driver, a, 5, Operation::Stop(StopReason::Stop)), DispatchResult::Queued);
+    assert!(fake.verbs().is_empty());
+    fake.advance(100);
+    assert_eq!(poll(&mut driver), [], "still busy: still held, not yet quarantined");
+    fake.with(|s| s.refuse_verb = None);
+    fake.advance(100);
+    assert_eq!(poll(&mut driver), []);
+    assert_eq!(fake.verbs(), [Verb::Close], "the next poll asked again and the host took it");
+    fake.advance(100);
+    assert_eq!(poll(&mut driver), [], "a close the host took is asked once");
+    assert_eq!(fake.verbs(), [Verb::Close]);
+    fake.post(epoch, PlayerKind::Closed, 0, 0);
+    assert_eq!(poll(&mut driver), [DriverEvent::Release { attempt: a, status: ReleaseStatus::Released }]);
+    assert_eq!(driver.exit_disposition(), ExitDisposition::Clean);
+}
+
+#[test]
 fn buffering_is_a_rebuffer_only_after_the_first_start() {
     let (mut driver, fake) = rig();
     let (a, epoch) = prepared(&mut driver, &fake, 1);
@@ -356,7 +406,11 @@ fn a_close_the_host_refuses_leaves_the_player_held_and_quarantines_at_the_deadli
     fake.with(|s| s.refuse_verb = Some(Refusal::Unavailable));
     assert_eq!(dispatch(&mut driver, a, 5, Operation::Stop(StopReason::Exit)), DispatchResult::Queued);
     assert_eq!(driver.exit_disposition(), ExitDisposition::PreserveNativeOwnership);
-    fake.advance(500);
+    fake.with(|s| s.refuse_verb = None);
+    fake.advance(100);
+    assert_eq!(poll(&mut driver), [], "a refusal that is not busy is not asked again");
+    assert!(fake.verbs().is_empty());
+    fake.advance(400);
     assert_eq!(poll(&mut driver), [DriverEvent::Release { attempt: a, status: ReleaseStatus::Quarantined }]);
     assert_eq!(driver.exit_disposition(), ExitDisposition::PreserveNativeOwnership);
 }
@@ -680,6 +734,19 @@ fn a_play_that_selects_another_audio_stream_is_declined() {
     assert!(matches!(resolver().qualify(&off(), request(plays(), 0, None)), Verdict::Known(_)));
 }
 
+/// Which stream the retail player starts on when a source has several is unmeasured, so a source with more than one
+/// audio stream is not certified, whichever stream is selected (the webOS precedent `ManyAudioTracksExported`).
+#[test]
+fn a_source_with_several_audio_streams_is_not_certified() {
+    for (sid, ordinal) in [(31342, Some(0)), (31343, Some(1)), (0, None)] {
+        let mut req = request(plays(), sid, ordinal);
+        req.has_multiple_audio_tracks = true;
+        let verdict = resolver().qualify(&off(), req);
+        assert!(matches!(verdict, Verdict::Unknown(UriDecline::NotCertified)), "audio {sid}");
+    }
+    assert!(matches!(resolver().qualify(&off(), request(plays(), 31342, Some(0))), Verdict::Known(_)), "one stream is");
+}
+
 /// The emulator has no audio device, so its runs serve VIDEO-ONLY media (the mock's `--extra-media-video-only`). The planner
 /// states such a source as `audio_sid = 0`, no ordinal, an empty audio codec and `StandardDirectPlay.audio = true` (`plan.rs`:
 /// no track list yields `(-1, "", 0)` and "no codec at all is a file with no audio"). That source is certified, its offer
@@ -698,6 +765,36 @@ fn a_video_only_source_is_certified_and_started_with_no_track_to_settle() {
     assert_eq!(dispatch(&mut driver, attempt(1), 1, start), DispatchResult::Queued);
 }
 
+/// **The refusal set that keeps most real titles from reaching the driver.** The planner sets `subtitle_choice: Off`
+/// whenever the item has ANY subtitle stream and none is selected, and the resolver refuses that play
+/// (`SubtitleOff`, final for the play) before the qualifier is asked, because no driver here can switch the native
+/// player's default subtitle off; a client-drawn subtitle, an audio enhancement, a non-local Auto link and a relay
+/// are refused the same way. With no Feed these end as `NoQualifiedBackend`. Whether Tizen's player renders an
+/// embedded subtitle when none is set (which would decide whether `SubtitleOff` could be allowed) is unmeasured, so
+/// it is NOT allowed.
+#[test]
+fn a_title_with_subtitle_streams_and_none_selected_is_refused_before_the_qualifier_is_asked() {
+    let mut off_choice = request(plays(), 31342, Some(0));
+    off_choice.subtitle_choice = TrackChoice::Off;
+    assert!(matches!(resolver().qualify(&off(), off_choice), Verdict::Refused(UriDecline::SubtitleOff)));
+    for (name, tweak, why) in [
+        ("client subtitle", (|r: &mut OriginalRequest| r.requires_client_subtitle = true) as fn(&mut OriginalRequest),
+            UriDecline::ClientSubtitle),
+        ("relay", |r| r.link_allows_original = false, UriDecline::Relay),
+        ("auto on a non-local link", |r| r.auto_allows_original = false, UriDecline::AutoOnNonLocalLink),
+        ("burned subtitle", |r| r.requires_subtitle_burn = true, UriDecline::SubtitleBurn),
+    ] {
+        let mut req = request(plays(), 31342, Some(0));
+        tweak(&mut req);
+        let verdict = resolver().qualify(&off(), req);
+        assert!(matches!(verdict, Verdict::Refused(got) if got == why), "{name}");
+    }
+    let mut boost = request(plays(), 31342, Some(0));
+    boost.selection.audio_contract = plx_plex::plex::AudioEnhancements { boost_dialog: true, normalize_loudness: false };
+    let verdict = resolver().qualify(&off(), boost);
+    assert!(matches!(verdict, Verdict::Refused(UriDecline::AudioEnhancement)), "boost dialog");
+}
+
 /// A track selection the contract states for a subtitle is outside the capabilities: no offer carries one.
 #[test]
 fn a_selected_subtitle_is_not_offered() {
@@ -705,4 +802,29 @@ fn a_selected_subtitle_is_not_offered() {
     req.subtitle_choice = TrackChoice::Selected(9);
     req.selection.subtitle_sid = 9;
     assert!(!matches!(resolver().qualify(&off(), req), Verdict::Known(_)));
+}
+
+/// **A track pick the Tizen driver cannot carry does not replace the playing title.** Through the Tizen composition's
+/// own resolver and a session whose backend set has no Feed (the Tizen composition), the shared reconfigure door refuses
+/// a source audio or subtitle pick with a typed reason, spends nothing and leaves the playing request as it was.
+#[test]
+fn a_track_pick_the_driver_cannot_carry_is_refused_by_the_session_and_the_title_keeps_playing() {
+    use plx_media::route::{request_viewer_reconfigure, viewer_reconfigure_refusal, PlaybackSession, SubMode,
+        ViewerReconfigure, ViewerReconfigureRefusal};
+    assert!(!resolver().carries_source_track_change());
+    let mut session = PlaybackSession::IDLE;
+    session.install_backends(BackendSet::URI);
+    session.install_uri_preflight_port(resolver());
+    assert!(!session.source_track_change_carriable());
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    for pick in [ViewerReconfigure::SourceAudio(31343),
+        ViewerReconfigure::SourceSubtitle { sid: 9, mode: SubMode::Track, forced_lang: None },
+        ViewerReconfigure::SourceTracks { audio_sid: 31343, subtitle_sid: 9 }] {
+        assert_eq!(viewer_reconfigure_refusal(&session, &pick), Some(ViewerReconfigureRefusal::NoBackendCarriesTrack));
+        assert!(!request_viewer_reconfigure(&mut session, &mut meta, pick, Some(5_000_000_000), Some(false)));
+    }
+    assert_eq!(session.metric_request(), None, "no replacement request was begun");
+    // With a Feed in the set (webOS) the same pick is not refused here.
+    session.install_backends(BackendSet::BOTH);
+    assert!(session.source_track_change_carriable());
 }

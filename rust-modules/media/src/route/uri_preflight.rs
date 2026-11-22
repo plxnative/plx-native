@@ -510,6 +510,17 @@ pub trait OriginalQualifier: Send + Sync + std::panic::RefUnwindSafe {
     fn qualify_pms(&self, _off: &OffFrame, _request: PmsRequest) -> PmsVerdict {
         PmsVerdict::Unknown
     }
+
+    /// Whether this provider can ever certify a URI output that plays a source track the viewer picks while a
+    /// title is playing and the native driver cannot switch to (`UriDriver::maps_track` is false): the
+    /// re-resolve a pick like that asks for ends in a replacement play, which retires the playing title first.
+    /// A provider that certifies only the source's default stream and no converted output says `false`, so the
+    /// session refuses the pick instead of replacing the playing title with a failure
+    /// ([`PlaybackSession::source_track_change_carriable`](super::PlaybackSession::source_track_change_carriable)).
+    /// The default is the behaviour before the question existed: carriable.
+    fn carries_source_track_change(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone)]
@@ -524,6 +535,9 @@ impl ResolvePort {
     }
 
     pub fn evidence(&self) -> ProductEvidence { self.evidence }
+
+    /// See [`OriginalQualifier::carries_source_track_change`].
+    pub fn carries_source_track_change(&self) -> bool { self.qualifier.carries_source_track_change() }
 
     /// Whether even attempting a PMS candidate could produce a URI offer. This is only a
     /// preflight cost gate; it never qualifies a source or promises release.
