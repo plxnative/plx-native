@@ -310,6 +310,7 @@ Citations in this section quote the tree at e9924f0f9 with its old names (see "N
   - `EGL_SONAMES: &[&str] = &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]` (`gfx/src/egl.rs:110`);
   - libcurl's `["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]`
     (`net/src/net/connect_only.rs:14`).
+  (As found, at the time of the review. W8b has since moved both into the platform's `libraries` group.)
 - F28. Branch `samsung/hello-tpk` now carries the hello-world. `git log --oneline
   origin/main..origin/samsung/hello-tpk` lists `72c5cd82a` ("tizen/hello: sign with a Samsung
   certificate profile, stream the log over UDP"), `ab0ba40ca` ("tizen/hello: log without eprint, ...")
@@ -667,7 +668,8 @@ the emulator runs (E1-E13) measured it, the item says so.
   Option B's `Ecore_Wl2_Window*`. SDL2 on a retail Tizen TV is not evidenced (2d, 1); the emulator ran static SDL2 + SDL2_ttf with `SDL_Init(TIMER|EVENTS)`
   and no video driver (E10), so the dummy-video-driver variant of Option A was not exercised. Option B drawing
   from a Rust thread works on the emulator (H3, H4; E6, E8) and is unmeasured on a retail set.
-- T6. URI playback via `Tizen.Multimedia.Player` (C#) is proven:
+- T6. URI playback through the platform's player is proven. The host drives the native libcapi-media-player (P/Invoke), not
+  `Tizen.Multimedia.Player`, because the managed `Display` cannot take our window at API8 (measured 2026-11-22):
   - only the User-Agent and Cookie headers pass;
   - no DTS or TrueHD;
   - esplusplayer feed is firmware-dependent (2e).
@@ -686,8 +688,8 @@ The Tizen hello-world (F28) exists to answer these, and the text cites them by n
 - H3: whether Option B, a native Ecore_Wl2 window, draws from a Rust thread (T5).
 - H4: whether Ecore main-thread handlers and a Rust loop thread run without deadlock (T5, F32).
 - H5: whether static SDL2 and SDL2_ttf draw text and a GLES2 texture through our path (F15).
-- H6: whether `Tizen.Multimedia.Player` shows a mock title beneath our window and survives a TV-menu round trip
-  (T6, W10).
+- H6: whether the native libcapi-media-player, driven by the host (the managed `Display` cannot take our window at API8, measured
+  2026-11-22), shows a mock title beneath our window and survives a TV-menu round trip (T6, W10).
 - H7: whether the application's own renderer, `plx_gfx`, compiles its shader programs and draws on the set's GL
   (README "H7" on `samsung/hello-tpk` at `e8da14ce6`; F40 says why a rejected required shader ends the process).
 - H8: whether the application's own libcurl binding (`plx_net` on the `dynlib!` loader) finds a libcurl on the set
@@ -868,14 +870,26 @@ split by who reads it (critic M4):
      and consent is neither read nor written, whatever the authority says; only the install's own preference
      file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
      layers chose their store by; the helper's wake-up (`storage::client::install_activator`) is not a member: its type is the helper's wire diagnostics and `tv` names no `storage` (L15), so it stays a `storage`-owned install point the webOS port calls;
-   - `layout { payload_dir, state_root }` (W9): two `fn() -> PathBuf` hooks, the package's read-only payload directory
-     and the directory the app's record files live under. The type is `plx_base::paths::Layout` (`paths` is below `tv`
+   - `layout { payload_dir, state_root, fallback_dir }` (W9, W8b): two `fn() -> PathBuf` hooks, the package's read-only
+     payload directory and the directory the app's record files live under, and the payload directory of last resort
+     (a `&'static str`: the platform's install prefix, for a process whose `/proc/self/exe` cannot be read; webOS states
+     the Developer Mode one, the desktop and Tizen the neutral `.`, `NO_FALLBACK_DIR`). The type is `plx_base::paths::Layout` (`paths` is below `tv`
      and cannot read it; `tv` re-exports it), and `Platform::install_services` publishes it into a publish-once slot in
      `paths` as its second line, after the `tv` install, so `app_dir()` and `persistent_state_root()` answer from it and
      fall back to the derivation (`current_exe` and the environment) when none was published. `Layout::DERIVED` states
-     "no layout of my own": webOS, the desktop and the host-test value say it, and their `appdir:` line is unchanged.
+     "no layout of my own": the desktop and the host-test value say it (webOS says it with its own `fallback_dir`), and their `appdir:` line is unchanged.
      A publish after `app_dir()` was read, or a second one, is refused (`paths` never logs, so `install_services` logs
      the refusal). The runtime root and the app id stay out: the webOS C shim freezes both before any Rust runs;
+   - `libraries { curl, egl }` (W8b): the OS-owned library names that differ per platform, two ordered `&[&str]` lists:
+     the three libcurl tables (`net`, `curlio`'s `curlmulti`, `connect_only`'s `raw`, declared `dynlib! { curl:
+     platform(curl) { .. } }`) and the EGL probe (`gfx/src/egl.rs`). The type is `plx_base::dynlib::Libraries`
+     (`dynlib` is below `tv`; `tv` re-exports it) and `Platform::install_services` publishes it as its third line,
+     through the same publish-once cell as the layout (`plx_base::choice::Choice`). webOS states curl
+     `["libcurl.so.4", "libcurl.so.5"]` and EGL `["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]`; the desktop the union
+     (adding the Mac's `libcurl.4.dylib`); Tizen `["libcurl.so.4"]` and `["libEGL.so.1"]`. `Libraries::NONE` is the
+     empty statement (a table then reports a missing library with its own log line); a process that published
+     nothing, a host test, reads `Libraries::HOST`, the union. Bundled `-plx` libraries, zlib, gst and a platform
+     crate's own tables (Tizen's Ecore and EGL chain loads before the install) stay literal;
    - `legacy_webos_media { sink, display_sink, uri_media }`: the Starfish, ACB and `com.webos.media` verbs (F31),
      named for what they are (critic M3). Every hook is required (Decision 2, C): a platform states each field,
      a named `NONE` being a statement and a `Default`-filled gap not allowed. The one exemption is this group:
@@ -1290,7 +1304,7 @@ Ecore names to `remote_token_key` pairs".
 | lifecycle | SDL app events | SDL app events | C# OnPause/OnResume/OnTerminate through `plx_host_post`; stop request and completion |
 | key store | keymanager3 / palm, `Durable` | `HostFile` (later Keychain) | `MemoryOnly` first (client id, language, resolution kept; Decision 7, B), then the Tizen store |
 | identity, caps | `webos::probe`, codec table, jail verdict | host values, `NotApplicable` | `Tizen` + version, player codec set, `NotApplicable` |
-| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over `Tizen.Multimedia.Player` (W10), Feed later (W12) |
+| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over the device's native media player, `libcapi-media-player`, called from the C# host (W10), Feed later (W12) |
 | display evidence | the LG driver's (ACB, exported window) | n/a | the Tizen driver's own |
 | storage helper | LS2/DB8 service (`rust-modules/storage`) | none | none |
 | diagnostics | event, crash and stderr descriptors (`main.c`, F19) | unchanged | in-app UDP log sink, required (Target shape 7, E5) |
@@ -1851,6 +1865,10 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8b, one row per fact: the library name lists (F27) become per-platform lists supplied through the
   platform (`dynlib!` stays shared); `paths`'s fallback install prefix becomes a platform value; the
   storage helper is packaged only by `PLATFORM=webos`; `main.c` and `starfish.c` are webOS-only.
+  Rust half done: the first two rows (`tv::Services` states `libraries`, and `layout.fallback_dir`; see the
+  `libraries` and `layout` groups above) and the native-backend `compile_error!`, which moved from the application
+  crate to `plx_platform_webos` (a rule of the webOS build, not of every 32-bit ARM Linux one); the Makefile rows
+  remain.
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
@@ -1931,15 +1949,47 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   proves the emulator only: a retail set may still fail H1 or H2.
 
 ### W10 (H). The Tizen URI playback driver
-- Prerequisites: W9, W6c, and H6: `Tizen.Multimedia.Player` shows a mock title beneath our window with
+- Prerequisites: W9, W6c, and H6 (restated below): the native player shows a mock title beneath our window with
   the alpha model that works (report 2e, open conflict). It also survives a TV-menu round trip (review
   M9). The hello-world plays no media (F28, F37), so H6 needs a step-3 probe and a retail set: the
-  emulator cannot test `Tizen.Multimedia` (F37) and the runs did not probe it (E9, E11). The Home round trip of E11
+  emulator could not be assumed to run `Tizen.Multimedia` (F37, E9, E11); the 2026-11-22 probe then measured the native player chain on it (below), which still shows no picture and says nothing of a retail set. The Home round trip of E11
   covers the window and the EGL surface on the emulator only, with no player, so it is not H6. The tester request
   for H6 (with H1 and H2) is posted only with the owner's approval (Decision 5).
 - Goal: a `UriDriver` in `plx_platform_tizen` over `PlxHostApi` player calls (T6): capabilities (no
   DTS/TrueHD, token in the query string, no variable speed), `display()` evidence including readiness, and
   the shell's `video_hole`. No LG binding is faked and no default is published (Target shape 6b).
+- H6, restated (W10 inventory): `player_set_ecore_wl_display` with the library's Ecore_Wl2 window shows a mock
+  title beneath a window whose alpha is on. The managed `Display(Window)` cannot take our window (it takes a
+  MediaView, an ElmSharp window or a NUI window), so the host calls the native player directly (D1 = P1).
+- As landed (PR A, the host ABI and the C# player): `plx_host.h` is version 2: `player_open` and `player_verb`
+  appended to `PlxHostApi` (size-gated, both or neither), player events through `plx_host_post` carrying an epoch
+  (still exactly three exports), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
+  own in `Hosted` (lossless but for position and buffering). A v1 host or NULL pointers is "no playback", never a
+  refused start. The host is `PlxPlayer.cs` over `libcapi-media-player.so.0` (`PlayerNative.cs`): one video thread, a
+  host-side position poll, events posted straight from native callbacks. The window is found host-side
+  (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
+  pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
+  and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
+- As landed (PR B2, the video plane under our UI and Home): measured on the TV 10.0 x86_64 emulator 2026-11-22 (scratch
+  probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
+  clears to (0, 0, 0, 0), the UI around it intact (the player route clears that way whether or not a plane is bound, `app/run.rs`
+  `fr.player`, and `PlayerScreen` has no ground: measured at `3d56d35b2` with no plane ever bound, the "Playback failed" read-out sits on
+  exact (0, 0, 0) black on the emulator, whose compositor had nothing under the window; a retail set's answer is H6's); (b) the video plane mixes STRAIGHT alpha (pixel-exact: a straight
+  (255, 255, 255, 128) strip is a 50 % veil over it) while window-over-window composition is premultiplied, which is webOS's split, so
+  the existing straighten pass and `frame_clear_through` / `opaque_route` chain are the answer, not a new one (D6); (c) the player
+  raises nothing at OnPause: `player_pause` there and `player_start` at OnResume resume in about 130 ms at the same position, the picture
+  back when the window is (about 2 s). The code: `ecore::WINDOW_ALPHA` = 1 at window creation (the platform's frames go over a video
+  plane; a window flag, so `Shell::opaque_route` stays a stated no-op); the straighten COPY program is its own source,
+  `fs_straighten_copy.frag`, with no preprocessor directive (the suspect above: the shared file's `#extension` lines in branches not
+  taken), the fetch file keeps the two fetch variants, a test pins the arithmetic equal; `PlxPlayer.PauseForHome` / `ResumeAfterHome`
+  (C#, video thread) pause what is playing at OnPause and start exactly that at OnResume; an accepted CLOSE retires its epoch at the
+  door (`E_STALE` after). The shader file is shared with webOS: its fetch programs' preprocessed text is token-identical to before, and
+  a `glGetProgramBinaryOES` before/after identity check on the LG set is OWED (not run here). Emulator run at `3d56d35b2`
+  (2026-11-22, the Windows session): the `.tpk` built with MSBuild 0 warnings, 0 errors and `check-tizen-so` passed; no shader compile
+  failure and the log reads `straighten: no framebuffer fetch - the pass copies the frame`; the UI is opaque and correct at alpha 1
+  (Home, detail, back); a clean stop and 0 log gaps; a Home round trip resumes the same pid and comes back drawn; the unbound player route
+  as above. Still UNVERIFIED: Home with a player open (`PauseForHome` / `ResumeAfterHome` never exercised, no player existed), a picture
+  through the real URI driver (PR B1), anything on a retail set (H6 OPEN).
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.
