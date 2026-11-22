@@ -11263,7 +11263,7 @@ pub fn restore_uri_original(ps: &mut PlaybackSession,
     let owned = if ps.tsession.is_empty() { ps.sess.clone() } else { ps.tsession.clone() };
     if parked_final_report.is_some() {
         // The parked attempt ends here, and the server hears it at its own position: the ordered stop worker posts A's `stopped`
-        // timeline and then stops its transcode, and its fence holds the replacement's reporter (and resolve) behind both. The park
+        // timeline and then stops its transcode, and its fence holds the replacement's reporter behind the first (the resolve drains the worker, below). The park
         // reported nothing, as a Feed's suspend does, and without this the retired-session mechanism of the next report
         // (`report_timeline`) would post A's stop late, at the REPLACEMENT's position. Nothing else owns the encoder of a parked
         // session, so the worker takes it whether or not the ticket still names it.
@@ -11278,8 +11278,10 @@ pub fn restore_uri_original(ps: &mut PlaybackSession,
     let mut retry = current_retry_context(ps, resume_ns.max(0));
     retry.candidate_purpose = CandidatePurpose::NewCandidate;
     let caps = ps.attempt_caps();
+    // The resolve is a worker of its own, independent of the stop's, and the fence holds only the replacement's reporter: without
+    // `drain_previous` B's `/playQueues` could reach the server before A's `stopped` (a user Retry's wait, for the same reason).
     answer.started = request_play_with_queue(ps, meta, caps, request, Some(retry),
-        Some(playback_trace_generation()), false,
+        Some(playback_trace_generation()), answer.reported,
         crate::player::report::AttemptOrigin::Resume, None, false, None);
     answer
 }

@@ -2063,7 +2063,9 @@ mod uri_boot_tests {
     /// stopped after B played and at B's time (the emulator's mock: `timeline A playing 9377`, `playQueue B`, `transcode stop A`,
     /// `timeline A stopped time=15588`, `timeline B playing 15588`). The park itself reports nothing, as the webOS Feed's suspend
     /// does (a Feed's engine goes on under the same session); the retire reports A's stop, carrying A's saved position, before the
-    /// second resolve starts.
+    /// second resolve starts. The stop and the resolve are two workers, so the order the mock sees rests on the restore's
+    /// `drain_previous` (the resolve drains the stop worker first), not on the workers' speed: with the stop worker slowed by 400 ms
+    /// this test failed before that and passes after it.
     #[test]
     fn a_restore_reports_the_parked_attempt_stopped_at_its_own_position_before_the_next_play() {
         let _serial = plx_base::testlock::serial();
