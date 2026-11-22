@@ -139,9 +139,11 @@ display does not advance (position frozen), hence display-before-prepare. The pr
 thread per player instance, so they only post events. `EnableExportingVideoFrame` is unsupported (no raw video). The existing `internet` privilege
 was enough. With the window's alpha on the UI draws unchanged; no picture shows yet because the UI is opaque everywhere (the hole is part B).
 
-Not verified: anything on a retail set (the library's thread, the overlay beneath an alpha window, privileges, firmware differences), and the C# is
+Not verified: anything on a retail set (the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is not
 compiled by any CI job (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`) and was not
-compiled where it was written (`which dotnet` finds none on that Mac): the first compile is a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
+compiled where it was written (`which dotnet` finds none on that Mac). It was compiled and smoke-tested once, on the TV 10.0 emulator at `37d70e0ed`:
+MSBuild 0 warnings, 0 errors; Home, detail and back; `on_stopped code=0 clean=1`; 0 UDP gaps. That smoke opened no player. Later edits to the C# are
+not covered by it until a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK compiles them again. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
 no backend.
 
 The application and package id is `plxntizen0` (ten alphanumerics): a neutral name for the emulator package. A retail package id is

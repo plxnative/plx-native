@@ -263,6 +263,7 @@ namespace PlxHost
             }
             running = true;
             Log("plx_host_start OK; the library's loop is running");
+            if (playerOpenDelegate != null) PlxPlayer.LogWindow(); // main thread: Ecore
             if (Stopped.IsSet && ShouldExitHost(stopRequested, running))
             {
                 // The loop ended before this line ran (on_stopped found `running` still false): nothing else will end the process.

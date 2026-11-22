@@ -38,6 +38,9 @@ namespace PlxHost
         private const int StallMs = 3000;
         private const int BindWaitMs = 3000;
         private const int CloseWaitMs = 3000;
+        // A native seek whose completion callback has not fired within this long is given up: its command ids get SEEK_DONE with the failure
+        // marker (b = -1) and the next held seek is sent (plx_host.h, PLAYER_SEEK_DONE).
+        private const int SeekWaitMs = 10000;
 
         // The window the library made is the first Ecore_Wl2 window (id 1) on the connected display: the library makes exactly one. Measured on
         // the emulator to be the very pointer the library logs ("ecore: window_new(...) -> 0x..."); BindDisplay logs the pointer it found, so the
@@ -70,6 +73,7 @@ namespace PlxHost
         {
             internal int TargetMs;
             internal readonly List<long> Commands = new List<long>();
+            internal Timer Deadline; // armed while this seek is in flight
         }
 
         // A job and the epoch it works for, so a job that throws can be answered with that epoch's PLAYER_ERROR.
@@ -120,6 +124,23 @@ namespace PlxHost
             note = "media player: " + MediaPlayerNative.MediaLib + " did not open (" + (err == IntPtr.Zero ? "no dlerror" : Marshal.PtrToStringAnsi(err))
                 + "); the table leaves the player pointers NULL, so the library plays nothing";
             return false;
+        }
+
+        // Logs the library's window pointer once, after plx_host_start returned (the library makes its window during start), so a smoke run can
+        // compare it with libplx's `ecore: window_new(...) -> 0x...` line without opening a player. Main thread (Ecore). Never throws.
+        internal static void LogWindow()
+        {
+            try
+            {
+                IntPtr display = MediaPlayerNative.ecore_wl2_connected_display_get(IntPtr.Zero);
+                IntPtr window = display == IntPtr.Zero ? IntPtr.Zero : MediaPlayerNative.ecore_wl2_display_window_find(display, LibraryWindowId);
+                PlxApp.Log("player: at start, ecore window id " + LibraryWindowId + " -> 0x" + window.ToInt64().ToString("x")
+                    + " (compare with the library's `ecore: window_new(...) -> ` line; 0x0 = not made yet)");
+            }
+            catch (Exception e)
+            {
+                PlxApp.Log("player: the window lookup at start threw " + e.GetType().Name + ": " + e.Message);
+            }
         }
 
         // ---- the table's two requests (loop thread): validate, enqueue, return --------------------------------------------------------------
@@ -320,15 +341,24 @@ namespace PlxHost
             int rc = -1;
             bool ran = PlxApp.RunOnMain(() =>
             {
-                lock (s.HandleGate)
+                try
                 {
-                    if (s.Closing || s.Handle == IntPtr.Zero) return;
-                    IntPtr display = MediaPlayerNative.ecore_wl2_connected_display_get(IntPtr.Zero);
-                    IntPtr window = display == IntPtr.Zero ? IntPtr.Zero : MediaPlayerNative.ecore_wl2_display_window_find(display, LibraryWindowId);
-                    PlxApp.Log("player: ecore window id " + LibraryWindowId + " -> 0x" + window.ToInt64().ToString("x")
-                        + " (compare with the library's `ecore: window_new(...) -> ` line)");
-                    if (window == IntPtr.Zero) { rc = Native.PLX_HOST_PLAYER_FAIL_BASE + 1; return; }
-                    rc = MediaPlayerNative.player_set_ecore_wl_display(s.Handle, MediaPlayerNative.DISPLAY_TYPE_OVERLAY, window, x, y, w, h);
+                    lock (s.HandleGate)
+                    {
+                        if (s.Closing || s.Handle == IntPtr.Zero) return;
+                        IntPtr display = MediaPlayerNative.ecore_wl2_connected_display_get(IntPtr.Zero);
+                        IntPtr window = display == IntPtr.Zero ? IntPtr.Zero : MediaPlayerNative.ecore_wl2_display_window_find(display, LibraryWindowId);
+                        PlxApp.Log("player: ecore window id " + LibraryWindowId + " -> 0x" + window.ToInt64().ToString("x")
+                            + " (compare with the library's `ecore: window_new(...) -> ` line)");
+                        if (window == IntPtr.Zero) { rc = Native.PLX_HOST_PLAYER_FAIL_BASE + 1; return; }
+                        rc = MediaPlayerNative.player_set_ecore_wl_display(s.Handle, MediaPlayerNative.DISPLAY_TYPE_OVERLAY, window, x, y, w, h);
+                    }
+                }
+                catch (Exception e)
+                {
+                    // An entry point missing on some firmware, say: a throw is the host's failure (+3), never mistaken for a native code.
+                    PlxApp.Log("player: the display bind threw " + e.GetType().Name + ": " + e.Message);
+                    rc = Native.PLX_HOST_PLAYER_FAIL_BASE + 3;
                 }
             }, BindWaitMs);
             if (!ran)
@@ -391,9 +421,45 @@ namespace PlxHost
             int rc = MediaPlayerNative.player_set_play_position(s.Handle, seek.TargetMs, 1, SeekDoneCb, UserOf(s.Epoch));
             if (rc != 0)
             {
+                // A refused seek is not the end of the player: every command id it answers gets its SEEK_DONE with the failure marker, and the
+                // next held seek (if any) is tried. Each pass consumes SeekLater, so this ends.
+                PlxApp.Log("player: epoch " + s.Epoch + ": player_set_play_position returned " + rc);
                 s.SeekNow = null;
-                Fail(s, "player_set_play_position", rc);
+                FailSeek(s, seek);
+                SendHeldSeek(s);
+                return;
             }
+            // The completion callback is bounded: a player that never answers must not hold every later seek (and its command ids) for ever.
+            uint epoch = s.Epoch;
+            seek.Deadline = new Timer(_ => Enqueue(epoch, ss => OnSeekDeadline(ss, seek)), null, SeekWaitMs, Timeout.Infinite);
+        }
+
+        // PLAYER_SEEK_DONE with b = -1 for every command id the seek answered: the seek did not land.
+        private static void FailSeek(Session s, Seek seek)
+        {
+            DisarmSeek(seek);
+            foreach (long command in seek.Commands)
+            {
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, -1);
+            }
+        }
+
+        private static void DisarmSeek(Seek seek)
+        {
+            Timer t = seek.Deadline;
+            seek.Deadline = null;
+            if (t != null) t.Dispose();
+        }
+
+        // The video thread, SeekWaitMs after a seek was sent: still in flight means the callback is not coming. A completion that arrives
+        // after this is taken for the NEXT seek's (the callback carries no token), which is the cost of not waiting for ever.
+        private void OnSeekDeadline(Session s, Seek seek)
+        {
+            if (s.SeekNow != seek) return;
+            PlxApp.Log("player: epoch " + s.Epoch + ": a seek did not complete within " + SeekWaitMs + " ms");
+            s.SeekNow = null;
+            FailSeek(s, seek);
+            SendHeldSeek(s);
         }
 
         private void OnPrepared(Session s)
@@ -416,6 +482,7 @@ namespace PlxHost
             Seek landed = s.SeekNow;
             if (landed == null) return;
             s.SeekNow = null;
+            DisarmSeek(landed);
             foreach (long command in landed.Commands)
             {
                 Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, landed.TargetMs);
@@ -448,6 +515,7 @@ namespace PlxHost
         {
             s.Closing = true;
             s.Playing = false;
+            if (s.SeekNow != null) DisarmSeek(s.SeekNow);
             if (s.Handle == IntPtr.Zero) return;
             // A position read or the display bind may be inside the handle: wait for it, with a bound. A read that never returns leaks the handle
             // (the process exit is its teardown) rather than destroying it under the read.
@@ -485,20 +553,28 @@ namespace PlxHost
             }
         }
 
+        // A read that outlives StallMs is given up on (STALL is posted once) but its task is kept: no second read starts on that handle while it
+        // is stuck, and the poller moves on, so a later epoch's player is polled and can stall on its own.
+        private Task<int> stuckRead; // poller only
+        private Session stuckSession; // poller only
+
         private void PollOnce(Session s)
         {
-            Task<int> read = Task.Run(() => ReadPosition(s));
-            if (!read.Wait(StallMs))
+            Task<int> read = stuckSession == s ? stuckRead : null;
+            if (read == null) read = Task.Run(() => ReadPosition(s));
+            else if (!read.IsCompleted) return; // still stuck on this handle: STALL was already posted
+            stuckRead = null;
+            stuckSession = null;
+            if (!read.IsCompleted && !read.Wait(StallMs))
             {
                 if (!s.StallSent)
                 {
                     s.StallSent = true;
                     Post((uint)Native.PLX_HOST_EVENT_PLAYER_STALL, s.Epoch, 0, 0);
                 }
-                while (!read.Wait(500))
-                {
-                    if (shuttingDown) return;
-                }
+                stuckRead = read;
+                stuckSession = s;
+                return;
             }
             int ms = read.Result;
             if (ms >= 0)

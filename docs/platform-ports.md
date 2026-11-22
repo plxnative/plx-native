@@ -667,7 +667,8 @@ the emulator runs (E1-E13) measured it, the item says so.
   Option B's `Ecore_Wl2_Window*`. SDL2 on a retail Tizen TV is not evidenced (2d, 1); the emulator ran static SDL2 + SDL2_ttf with `SDL_Init(TIMER|EVENTS)`
   and no video driver (E10), so the dummy-video-driver variant of Option A was not exercised. Option B drawing
   from a Rust thread works on the emulator (H3, H4; E6, E8) and is unmeasured on a retail set.
-- T6. URI playback via `Tizen.Multimedia.Player` (C#) is proven:
+- T6. URI playback through the platform's player is proven. The host drives the native libcapi-media-player (P/Invoke), not
+  `Tizen.Multimedia.Player`, because the managed `Display` cannot take our window at API8 (measured 2026-11-22):
   - only the User-Agent and Cookie headers pass;
   - no DTS or TrueHD;
   - esplusplayer feed is firmware-dependent (2e).
@@ -686,8 +687,8 @@ The Tizen hello-world (F28) exists to answer these, and the text cites them by n
 - H3: whether Option B, a native Ecore_Wl2 window, draws from a Rust thread (T5).
 - H4: whether Ecore main-thread handlers and a Rust loop thread run without deadlock (T5, F32).
 - H5: whether static SDL2 and SDL2_ttf draw text and a GLES2 texture through our path (F15).
-- H6: whether `Tizen.Multimedia.Player` shows a mock title beneath our window and survives a TV-menu round trip
-  (T6, W10).
+- H6: whether the native libcapi-media-player, driven by the host (the managed `Display` cannot take our window at API8, measured
+  2026-11-22), shows a mock title beneath our window and survives a TV-menu round trip (T6, W10).
 - H7: whether the application's own renderer, `plx_gfx`, compiles its shader programs and draws on the set's GL
   (README "H7" on `samsung/hello-tpk` at `e8da14ce6`; F40 says why a rejected required shader ends the process).
 - H8: whether the application's own libcurl binding (`plx_net` on the `dynlib!` loader) finds a libcurl on the set
