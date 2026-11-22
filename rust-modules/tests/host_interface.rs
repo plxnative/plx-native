@@ -27,8 +27,8 @@
 #![cfg_attr(not(feature = "hostsim"), allow(dead_code))]
 
 use plxnative_modules::host::{
-    Action, Composition, Edge, EventSink, Exit, FrameProbe, Lifecycle, MainThread, MediaBoot, OpenAsk, Placement,
-    Platform, PointerEdge, RawKey, Services, Shell, Surface,
+    Action, Composition, Edge, EventSink, Exit, FrameProbe, FrameSeam, Lifecycle, MainThread, MediaBoot, OpenAsk,
+    Placement, Platform, PointerEdge, RawKey, Services, Shell, Surface,
 };
 #[cfg(feature = "hostsim")]
 use plxnative_modules::host::Release;
@@ -109,6 +109,9 @@ impl Shell for FakeShell {
     fn hide_is_cursor_swap(&self) -> bool {
         false
     }
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 static SHELL: FakeShell = FakeShell { log: Mutex::new(Vec::new()), asked: Mutex::new(None) };
@@ -123,6 +126,9 @@ impl FrameProbe for FakeProbe {
     fn acquired(&self) {}
     fn fields(&self) -> String {
         String::new()
+    }
+    fn heartbeat_tag(&self) -> &'static str {
+        ""
     }
 }
 
@@ -154,13 +160,17 @@ impl Surface for FakeSurface {
 
 fn early_init(_mt: &MainThread) {}
 
+fn preview_seam_absent() -> bool {
+    false
+}
+
 fn compose(_adapter: &mut plx_media::player::adapter::PlayerAdapter, _controlled: bool) -> Composition {
     Composition::default()
 }
 
 /// The platform, as a sibling crate states it: a `static`, so every part of it is `Sync`.
 static PLATFORM: Platform =
-    Platform::new(&SERVICES, &SHELL, &FakeProbe, MediaBoot { early_init, compose });
+    Platform::new(&SERVICES, &SHELL, &FakeProbe, MediaBoot { early_init, compose, preview_seam_absent });
 
 fn assert_sync<T: Sync>(_: &T) {}
 

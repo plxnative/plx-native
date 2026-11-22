@@ -92,6 +92,9 @@ pub trait Shell: Sync {
     /// remote's OK arrives as a click at wherever the invisible pointer sits, which the loop reads as
     /// the OK key (`input::click_is_ok`). `false` where a click is always a real one.
     fn hide_is_cursor_swap(&self) -> bool;
+    /// What this platform does around the frame's present: its pacer and its present hooks
+    /// ([`FrameSeam`]). A platform with nothing to do states [`FrameSeam::NONE`].
+    fn frame(&self) -> &'static FrameSeam;
 }
 
 /// The window the application presents to and reads events from, owned by `App` for the rest of the
@@ -213,6 +216,68 @@ pub(crate) fn detached_surface() -> Box<dyn Surface> {
     Box::new(plx_shell_sdl::Window::DETACHED)
 }
 
+/// What a platform does around the frame's present, as two groups the loop reads once per presented frame
+/// (`run::present_and_swap`, the pump): a software [`Pacer`] and the [`Present`] hooks that sit between the
+/// frame's last draw and the swap. The loop owns WHERE they run; the platform owns what they do, so a
+/// wall-clock read, an environment read or a simulator's compositor stand-in is the platform's and never a
+/// line in the application. Every hook is required: a platform with nothing to do states
+/// [`FrameSeam::NONE`], which the television and the Tizen build do.
+pub struct FrameSeam {
+    pub pacer: Pacer,
+    pub present: Present,
+}
+
+/// A platform's software frame pacing, for a host whose swap does not wait for the display (WSLg's X11/GLX
+/// accepts interval 1 without blocking). The pacer's stamp is a `u64` the platform alone reads, so the
+/// application never holds a clock: recorded replays continue to see only their injected ticks.
+pub struct Pacer {
+    /// Asked once at boot, after the swap interval is set: does this platform pace in software now?
+    /// `vsync` is whether the application asked the driver for interval 1 (a frame dump and
+    /// `plxnative-novsync` ask for 0, and then nothing waits).
+    pub armed: fn(vsync: bool) -> bool,
+    /// The top of a frame the pacer is armed for: the stamp [`end`](Pacer::end) is handed back.
+    pub begin: fn() -> u64,
+    /// After a presented frame's swap: wait out what is left of the frame period.
+    pub end: fn(started: u64),
+}
+
+/// The hooks a platform runs between a presenting frame's last draw and its swap.
+pub struct Present {
+    /// On a frame the video plane is bound for, after the straighten pass and before the capture seam,
+    /// the screenshot seam and the swap: put whatever the television's compositor would put UNDER the UI.
+    /// The television does nothing (its compositor is the real one); the simulator composes the decoded
+    /// picture, or black.
+    pub compose_under: fn(),
+    /// On every presenting frame, after the screenshot seam and before the swap: a platform that rendered
+    /// into an offscreen target copies it to the window here.
+    pub before_swap: fn(),
+}
+
+fn never_armed(_vsync: bool) -> bool {
+    false
+}
+fn no_stamp() -> u64 {
+    0
+}
+fn no_wait(_started: u64) {}
+fn no_hook() {}
+
+impl Pacer {
+    /// No software pacing: the swap paces the frame, as on the television and every desktop but WSLg.
+    pub const NONE: Pacer = Pacer { armed: never_armed, begin: no_stamp, end: no_wait };
+}
+
+impl Present {
+    /// Nothing between the last draw and the swap.
+    pub const NONE: Present = Present { compose_under: no_hook, before_swap: no_hook };
+}
+
+impl FrameSeam {
+    /// The seam of a platform whose swap paces the frame and whose compositor is not ours: the
+    /// television and the Tizen build state it.
+    pub const NONE: FrameSeam = FrameSeam { pacer: Pacer::NONE, present: Present::NONE };
+}
+
 /// The dev frame probe (`/tmp/plxnative-framecb`): the platform's presentation-callback clock, read
 /// by the loop and by the renderer's clear hook. Unarmed, every call is a latched flag read.
 pub trait FrameProbe: Sync {
@@ -228,6 +293,10 @@ pub trait FrameProbe: Sync {
     fn acquired(&self);
     /// The probe's log fields since the previous line; `""` unarmed.
     fn fields(&self) -> String;
+    /// Appended to every heartbeat line, last: `""` on a television, ` sim=1` on the simulator, whose
+    /// numbers are about a different machine and must say so on the line itself (`tests/run.py` and the
+    /// `ui-sim` skill grep the text).
+    fn heartbeat_tag(&self) -> &'static str;
 }
 
 /// What a platform's composition installed that the route session also has to know: the resolver the
@@ -250,6 +319,10 @@ pub struct MediaBoot {
     /// `controlled` is a replay or scripted Home, which touches no native port and so installs no
     /// native driver. It takes no session and publishes nothing: [`publish_composition`] does that.
     pub compose: fn(&mut PlayerAdapter, controlled: bool) -> Composition,
+    /// Whether a preview's Load reaching this platform's Feed has NO video path behind it (the simulator
+    /// with its clock sink off), asked per preview start: such a Load is not an admitted slot, and counting
+    /// it would spend the cycle and open the breaker. Every platform with a real sink answers `false`.
+    pub preview_seam_absent: fn() -> bool,
 }
 
 /// Tell the route session what the platform composed: the resolver first, then the backend set the
@@ -343,6 +416,9 @@ impl Shell for HostShell {
     fn hide_is_cursor_swap(&self) -> bool {
         false
     }
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 /// The frame probe of a process with no platform: always unarmed. Test builds only.
@@ -358,6 +434,9 @@ impl FrameProbe for HostProbe {
     fn acquired(&self) {}
     fn fields(&self) -> String {
         String::new()
+    }
+    fn heartbeat_tag(&self) -> &'static str {
+        ""
     }
 }
 
@@ -396,6 +475,9 @@ impl Shell for SwapShell {
     fn hide_is_cursor_swap(&self) -> bool {
         true
     }
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 #[cfg(test)]
@@ -416,11 +498,20 @@ impl SwapShell {
 #[cfg(test)]
 impl MediaBoot {
     /// The media boot of a process with no platform: nothing to initialize and no driver to install.
-    pub(crate) const HOST_TEST: MediaBoot = MediaBoot { early_init: host_test_early_init, compose: host_test_compose };
+    pub(crate) const HOST_TEST: MediaBoot = MediaBoot {
+        early_init: host_test_early_init,
+        compose: host_test_compose,
+        preview_seam_absent: host_test_seam_absent,
+    };
 }
 
 #[cfg(test)]
 fn host_test_early_init(_mt: &MainThread) {}
+
+#[cfg(test)]
+fn host_test_seam_absent() -> bool {
+    false
+}
 
 #[cfg(test)]
 fn host_test_compose(_adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
