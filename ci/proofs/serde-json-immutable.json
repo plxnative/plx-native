@@ -515,7 +515,7 @@
         ],
         "edition": "2021",
         "lib": "platform-tizen/src/lib.rs",
-        "lib_sha256": "0a9b9cf327b44e921c0ca5ba5e947e205716a734c6f96dc29c13bf55c6cdba89"
+        "lib_sha256": "53222448155080de40ccdf1ffd9c58d02c041d9ba6946ae9910efdc8c79c1984"
       },
       "platform-webos/Cargo.toml": {
         "dependency": [
