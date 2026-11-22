@@ -1057,7 +1057,7 @@ pub fn pump_uri_restore(
 ) {
     if let Some(resume_ns) = pa.take_uri_restore_request() {
         log(&format!("resume(uri): re-resolving the parked source at {}s", resume_ns / 1_000_000_000));
-        if !crate::route::restore_uri_original(ps, meta, resume_ns) {
+        if !crate::route::restore_uri_original(ps, meta, resume_ns, parked_final_report(ps)) {
             pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
         }
         return;
@@ -1541,6 +1541,18 @@ fn final_position_ns(ps: &crate::route::PlaybackSession, observed: Option<i64>) 
         return crate::route::unpresented_resume_ns(ps);
     }
     observed.unwrap_or_else(|| crate::route::unpresented_resume_ns(ps))
+}
+
+/// The final report of a URI attempt a Suspend parked, read when the foreground restore retires it: the item, the position the
+/// attempt itself last had (the one a stop of it would have named, [`begin_teardown`]'s own rule) and its duration. `None` when
+/// the attempt never learned a duration, which a stop cannot report either.
+fn parked_final_report(ps: &crate::route::PlaybackSession) -> Option<(String, i64, i64)> {
+    if ps.attempt_view().backend() != Some(super::attempt_view::Backend::Uri) { return None; }
+    let facts = ps.attempt_view().facts();
+    let pos = final_position_ns(ps, facts.position_ns);
+    let dur = facts.duration_ns.unwrap_or(0);
+    let rk = crate::route::cur_rk(ps);
+    (!rk.is_empty() && dur > 0).then(|| (rk, pos / 1_000_000, dur / 1_000_000))
 }
 
 /// Capture final reporting facts before native teardown resets position and duration.

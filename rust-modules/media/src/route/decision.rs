@@ -11242,11 +11242,12 @@ pub fn retry_declined_uri_source(ps: &mut PlaybackSession,
 /// (`Stop(Suspend)`) closed the native session and left the attempt's start transaction `Prepared` and its logical
 /// Streaming Resource open; a new resolve cannot start under a standing transaction, and the old resource is not the
 /// new source's. So the transaction is ended as a failed start (as a declined source's is), the resource is retired,
-/// and the request goes through the common door as a NEW attempt of the same item (`begin_attempt`: the opened recipe
+/// (with the parked attempt's own `stopped` timeline, at its own position, sent first when `parked_final_report` carries one) and the request goes through the common door as a NEW attempt of the same item (`begin_attempt`: the opened recipe
 /// is not spent for a title that is being reopened after a park, as a Retry press's is not). `false` when there is nothing to re-resolve or the
 /// request door refuses (the restore then answers `RebuildRejected` and the session stays parked).
 pub fn restore_uri_original(ps: &mut PlaybackSession,
-    meta: &mut plx_data::stores::metadata::MetadataStore, resume_ns: i64) -> bool {
+    meta: &mut plx_data::stores::metadata::MetadataStore, resume_ns: i64,
+    parked_final_report: Option<(String, i64, i64)>) -> bool {
     if !uri_restore_owed(ps) { return false; }
     let Some(request) = ps.request.clone() else { return false };
     if let Some(ticket) = pending_route_start() {
@@ -11254,7 +11255,14 @@ pub fn restore_uri_original(ps: &mut PlaybackSession,
     }
     let active = worker_ticket();
     let owned = if ps.tsession.is_empty() { ps.sess.clone() } else { ps.tsession.clone() };
-    if !owned.is_empty() && active.encoder() == owned && replace_active_encoder_for(&active, "").is_some() {
+    if parked_final_report.is_some() {
+        // The parked attempt ends here, and the server hears it at its own position: the ordered stop worker posts A's `stopped`
+        // timeline and then stops its transcode, and its fence holds the replacement's reporter (and resolve) behind both. The park
+        // reported nothing, as a Feed's suspend does, and without this the retired-session mechanism of the next report
+        // (`report_timeline`) would post A's stop late, at the REPLACEMENT's position. Nothing else owns the encoder of a parked
+        // session, so the worker takes it whether or not the ticket still names it.
+        scrobble_stop(ps, parked_final_report, None);
+    } else if !owned.is_empty() && active.encoder() == owned && replace_active_encoder_for(&active, "").is_some() {
         let mut identities = vec![owned.clone()];
         if !ps.sess.is_empty() && ps.sess != owned { identities.push(ps.sess.clone()); }
         retire_plan_resources(AbandonedPlanResources { sid: cur_sid(ps), identities });

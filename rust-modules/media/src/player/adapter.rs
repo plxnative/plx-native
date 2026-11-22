@@ -767,6 +767,19 @@ impl PlayerAdapter {
         false
     }
 
+    /// **A parked URI attempt whose stop was never reported.** A Suspend (the host's terminate arrives as one too) closes the
+    /// native session and leaves the attempt for the foreground restore to re-open, so nothing is live and no route attempt is
+    /// bound, and [`Self::playback_needs_teardown`] reads false; yet the server was told the title was playing and nothing has told
+    /// it otherwise. The attempt is unfinalized, owes its restore, and that restore has not begun (once it has, the retire reports it
+    /// at [`crate::route::restore_uri_original`]). A process exit stops it here, at its own position, through the one stop path.
+    pub fn parked_uri_owes_stop(&self, ps: &crate::route::PlaybackSession) -> bool {
+        !self.uri_finalized
+            && self.uri_route_attempt.is_none()
+            && !self.uri_restore_outstanding()
+            && ps.attempt_view().backend() == Some(super::attempt_view::Backend::Uri)
+            && crate::route::uri_restore_owed(ps)
+    }
+
     /// A pending first Play keeps the native pause hold until its exact startup command is
     /// accepted. Viewer toggles read the common pending goal during that interval.
     pub fn backend_viewer_paused(&self) -> Option<bool> {

@@ -3802,6 +3802,22 @@ pub(crate) fn quits_sdl(native_exit: plx_media::player::NativeExit) -> bool {
     release_of(native_exit) == Release::Complete
 }
 
+/// The playback half of [`shutdown`]: abandon the pending report and stop what the server was told is playing. That includes a
+/// URI attempt a Suspend parked (the host's terminate is one): its native session is already closed, so nothing reads as live,
+/// but its `stopped` timeline and transcode stop were never sent, and a restore that will never come is the only thing that
+/// would have sent them (`PlayerAdapter::parked_uri_owes_stop`).
+pub(crate) fn end_playback_for_exit(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+) {
+    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
+    pa.sync_request_metrics(ps);
+    plx_media::player::report::abandon_pending(ps);
+    if pa.playback_needs_teardown(ps) || pa.parked_uri_owes_stop(ps) {
+        plx_media::player::stop_playback(ps, pa);
+    }
+}
+
 /// Teardown after the loop: abandon the pending report, stop the active backend, wait for the stop
 /// scrobble, close the capture stream and the poster workers, quit SDL (unless a worker is still
 /// in firmware: `surface.quit()` is the platform's, and WHETHER it runs is this function's). Answers
@@ -3812,12 +3828,7 @@ pub(crate) unsafe fn shutdown(
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     surface: &dyn super::platform::Surface,
 ) -> Release {
-    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
-    pa.sync_request_metrics(ps);
-    plx_media::player::report::abandon_pending(ps);
-    if pa.playback_needs_teardown(ps) {
-        plx_media::player::stop_playback(ps, pa);
-    }
+    end_playback_for_exit(ps, pa);
     // The stop's `Unload` runs off-frame; the process must not exit inside it, nor with the
     // object it is releasing left undestroyed. The wait is bounded, and a worker still inside
     // firmware (an overdue `Unload`, or a timed-out Load's media thread) means the display must not
