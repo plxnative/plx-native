@@ -154,7 +154,7 @@ and the lines are compared to the tree as an exact multiset.
 
 | Rule | A site is | Key |
 |---|---|---|
-| `workers` | a production call that starts a worker in a machine: `task::spawn(`, `spawn_small(`, `spawn_small_keeping(`, `spawn_small_or_inline(`, `spawn_off_frame(`, `spawn_off_frame_keeping(`, `storage_worker::submit(`, `submit_retained(`, the command worker's `.submit_ticket(` | `<path>::<enclosing fn>::<spelling>` |
+| `workers` | a production call that starts a worker in a machine: `task::spawn(`, `spawn_small(`, `spawn_small_keeping(`, `spawn_small_or_inline(`, `spawn_sized(`, `spawn_off_frame(`, `spawn_off_frame_keeping(`, `storage_worker::submit(`, `submit_retained(`, the command worker's `.submit_ticket(` | `<path>::<enclosing fn>::<spelling>` |
 | `globals` | a production read of a process-global registry in a machine: `client_for`, `current_server`, `current_snapshot`, `keypin::revision`, `keypin::blocked_for`, `session::peek`, `grant::offers`, the session cache's `session::peek_settled` and `session::current_gen`, the server registry's roster readers (`server_ids`, `server_roster_gen`, `server_facts_gen`, `server_probe_result`), the controlled-run switch `tape::active`, the subtitle registries' colour-pick readers (`sidecar::takes_colour`, `sidecar::selected`, `ass_source::takes_colour`, `ass_source::selected`: no site; the Subtitles menu reads the fact from the session's readout), the player's pause readers (`transport::viewer_paused`, `preview::paused`: each takes the session but also reads process-global state, the claim hold's slot and the preview machine's phase; `transport::paused` reads only the session's readout and is no longer a spelling), the device's capability answer (`devcaps::caps`, and the zero-argument `is_dp_audio` / `is_dp_audio_track` that used to read it), and `player::TX` in the player's lifecycle (at zero) | `<path>::<enclosing fn>::<spelling>` |
 | `forks` | a production test/production fork whose predicate reads `test` or `feature = "test-support"`: a `#[cfg(..)]` attribute that a production build can satisfy (`not(test)`, `not(any(test, feature = "test-support"))`, `all(target_os = .., not(test))`, ...), or an inline `cfg!(..)` of any value | `<path>::<item name>`, or `<path>::<enclosing fn>` for a statement or an inline `cfg!`, or `<path>::<struct>` for a field |
 | `fxlanes` | an `AppFx::<Variant>` arm of `Bridge::app_effect` that does not push `Fx::Deliver(`: one site for each variant on its head, and one for an arm that names no variant (`other => ..`, `_ => ..`) | `<path>::AppFx::<Variant>`, or `<path>::AppFx::_` |
@@ -170,7 +170,7 @@ dropped.
 `session/src`, `screens/src`, `ui/src`, `appkit/src` and `machine/src`, plus
 `plex/src/plex/session.rs` (the session owner's state), the player's `lifecycle.rs`, `recovery.rs`
 (the failed-open ladder machine), `release.rs` (the native object's release machine) and the route planners `route/plan.rs` and `route/plan_memory.rs`. The IO layers (the rest of `plex/`, `media/`,
-`net/`, `platform/`) are where those calls belong, so they are not scanned. `forks` reads the whole
+`net/`, `os/`) are where those calls belong, so they are not scanned. `forks` reads the whole
 of every crate that holds a machine (`FORK_SCOPE` in `ci/check-deps.sh` names them: `data/`, `plex/`, `media/`,
 `play-feed/`, `session/`, `screens/`, `ui/`, `appkit/` and `machine/` among them), because a fork anywhere in them is a test that does not run the
 product's code. It read only the first four until the scope was widened to the rest; the
@@ -293,7 +293,7 @@ opaque payloads. Foreign types remain opaque without reproducible source-backed 
 a familiar dependency name is not a certificate.
 
 `ci/readonly_generated.py` and `ci/proofs/platform-generated-enums.json` separately certify
-the actual platform language include: pinned package/module/include, complete production
+the actual os language include: pinned package/module/include, complete production
 build scripts, generator/templates, manifests/configuration and locked graph. The reviewed
 pipeline emits only unit enum variants in every configuration; strict catalogue/schema and
 ASCII variant validation permit new languages without a count/list pin. The same evidence
