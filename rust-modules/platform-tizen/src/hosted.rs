@@ -258,7 +258,7 @@ impl Hosted {
     /// never logged here.
     ///
     /// A player is opened from the loop thread; the epoch is live from here until its `PLAYER_CLOSED` is accepted.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn player_open(&self, epoch: u32, uri: &str, area: [i32; 4]) -> Result<(), i32> {
         if epoch == 0 || uri.is_empty() {
             return Err(host_abi::PLAYER_E_ARGS);
@@ -279,7 +279,7 @@ impl Hosted {
 
     /// Ask the host for one of the `VERB_*` verbs on the player of `epoch`, without waiting. The same refusals as
     /// [`Hosted::player_open`], and `PLAYER_E_STALE` for an epoch the host no longer holds.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn player_verb(&self, epoch: u32, verb: u32, arg0: i64, arg1: i64) -> Result<(), i32> {
         if epoch == 0 {
             return Err(host_abi::PLAYER_E_ARGS);
@@ -295,7 +295,7 @@ impl Hosted {
     }
 
     /// Hand the application every player event queued, in order, and what was lost. Loop thread only.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn drain_player(&self, out: &mut Vec<PlayerEvent>) -> Drained {
         self.player.drain(out)
     }

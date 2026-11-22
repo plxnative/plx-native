@@ -19,7 +19,7 @@
 //! `plx_shell_sdl::text` and the application's `textinput`.
 //!
 //! Everything SDL-shaped that [`Shell`] asks for is a stated no-op: there is no SDL window to bind, no
-//! surface to release, no opaque region to route (the Tizen build has no video plane: it does not play)
+//! surface to release, no opaque region to route (this crate routes no opaque region yet: the window's alpha is off, so a `uri` build's picture is not made visible here)
 //! and no platform bus to pump. The drawable size is not probed: the window is the screen's size, which
 //! [`crate::ecore`] logs, and anything other than 1920x1080 is UNHANDLED (the renderer's canvas is that).
 use crate::ecore::Window;

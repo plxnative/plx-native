@@ -1315,7 +1315,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   application's features with its defaults (the webOS crate omits `placeholder-sentinel`, which only the simulator's dump build names; `ci/test_platform_features.py`); the desktop's dependencies are `optional` and only its
   `hostsim` enables them, so a default-feature pass lists it and builds nothing of it.
   `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate: a hosted `.so` entry, an Ecore window, an EGL
-  context, the remote's keys and a UDP log tap, emulator only, with `host::NO_MEDIA` and no playback. Its library is
+  context, the remote's keys and a UDP log tap, emulator only; its `uri` feature (W10 part B) composes the Tizen URI driver over the host's native player, and without it the media boot is `host::NO_MEDIA` and nothing plays. Its library is
   `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency (the application, `plx_base`, `plx_os`, and
   `serde_json` for the launch string) is `optional` and only `tizen` enables them, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
   Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.

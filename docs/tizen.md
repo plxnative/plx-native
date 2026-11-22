@@ -9,7 +9,7 @@
 - **Emulator only.** The one configuration that is built and checked is x86_64: the Tizen TV 10.0 emulator image, `tizen80`.
   An armv7 (retail) configuration is recorded in `docs/platform-ports.md` and refused by the makefile (`TIZEN_ARCH`) until a retail
   set has answered what it must (H1, H2 there).
-- **No playback.** No backend is composed (`compose: backends=none`). On a detail page Resume is dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`). On Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below).
+- **Playback is the `uri` feature's, and it is host-tested only: this driver has not been run on the emulator or on a retail set.** A build with the platform crate's `uri` feature (the makefile's default; `TIZEN_URI=0` builds without it) composes the Tizen URI driver over the host's native player (below): the planner offers an ordinary direct-play title as a progressive URI source and the library asks the host to play it. A build without `uri`, or a host with no player group in its table, composes no backend (`compose: backends=none`): on a detail page Resume is then dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`); on Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below). What a `uri` build does NOT yet show: the window's alpha is still off and no opaque region is routed, so the picture beneath the UI is not made visible by this part, and the library emits no `Presented` for it. H6 (below) is open.
 - **No frame-rate or latency claim.** The emulator's GL runs on llvmpipe through the emulator's GL forwarding; a number taken there
   says nothing about a television, and none is quoted.
 - **A mock server, never a real account.** The package signs in against the mock Plex server (`tests/mock_pms.py`) with a placeholder
@@ -44,7 +44,7 @@ builds the webOS package; this platform has none).
 | `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
 | `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for `x86_64-unknown-linux-gnu`: compile-only, no link, no SDL |
 | `tizen-sdl` | Linux x86_64, `cc`, `make`, `curl` | the static SDL2 + SDL2_ttf under `tizen/sdl-build/x86_64` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
-| `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/x86_64/libplx.so` |
+| `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/x86_64/libplx.so` |
 | `tizen-verify` | Linux, binutils | `ci/check-tizen-so.py verify` on the linked library (below) |
 | `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
 | `tizen-tpk` | the above, .NET 8 SDK, a Samsung certificate profile | the signed `tizen/out/PlxNative-x86_64.tpk`; refuses at once, naming the missing variables, without the profile |
@@ -143,8 +143,31 @@ Not verified: anything on a retail set (the library's thread, the overlay beneat
 compiled by any CI job (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`) and was not
 compiled where it was written (`which dotnet` finds none on that Mac). It was compiled and smoke-tested once, on the TV 10.0 emulator at `37d70e0ed`:
 MSBuild 0 warnings, 0 errors; Home, detail and back; `on_stopped code=0 clean=1`; 0 UDP gaps. That smoke opened no player. Later edits to the C# are
-not covered by it until a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK compiles them again. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
-no backend.
+not covered by it until a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK compiles them again. This is the host's half: the Rust URI driver that calls `Hosted::player_open` is the platform crate's `uri` feature (next).
+
+### The Rust driver over it (the `uri` feature, W10 part B)
+
+`rust-modules/platform-tizen/src/player/` holds `TizenUriDriver`, a Sans-IO `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements: it
+starts no worker and reads no global, its requests go out as `Hosted::player_open` / `player_verb` and every answer returns as one addressed event
+through `drain_player`. Every request and event carries the epoch, and an event of any other epoch (a completion after a stop) is dropped and counted.
+The driver states `progressive_uri`, `pause`, `seek` and `audio_track`, and no HLS, packet feed, subtitle track, audio-off or subtitle-off. `audio_track` has a narrow
+meaning: the host ABI has no track verb, so the driver settles a `SelectTrack(Audio)` only for the source's FIRST audio stream (the one the native player starts
+on, not measured on a retail set), and the qualifier never certifies a play that selects another stream; the planner needs the flag because it issues that
+`SelectTrack` for any title whose server-selected audio stream is stated. Stop sends the CLOSE verb and waits for the host's `CLOSED`; past a deadline it reports a
+quarantined release and the process-exit disposition stays Preserve. The platform's own `TizenQualifier` certifies a source only where Standard would
+direct-play it (so DTS and TrueHD, and every container Standard hands to the server, are refused with the planner's typed reason) and never a converted PMS
+output (`qualify_pms` is Unknown); the codec table behind Standard is still `Caps::assumed()`, the 49SM9000PLA row, not a Tizen measurement. The composition
+(`player::MEDIA`) replaces `host::NO_MEDIA` in a `uri` build; it installs the driver only when the host's table offers a player and the run is not a controlled
+one, and returns the resolver only when the adapter accepted the driver. It names no LG binding and publishes no default backend.
+
+What the host-side tests cover: the driver over a scripted fake port, the same conformance suite (`plx_playback_contract::uri_conformance`) over the contract's
+`FakeUriDriver` and over this driver, `hosted::testing` wiring (a round trip, STOP as CLOSE, a late completion refused as stale, no host call after `plx_host_stop`),
+and the qualifier through the planner's resolver. **Not covered:** a picture on screen (alpha off, no opaque region routed, no `Presented`), the retail player's
+default audio stream, a real PMS's answer to `X-Plex-Platform: Tizen`, and everything H6 asks of a retail set (decode, sound, armv7, the TV-menu round trip).
+
+An emulator playback run (not yet made) has no audio device, so it must serve VIDEO-ONLY media: `python3 tests/mock_pms.py --extra-media clip.mp4 --extra-media-video-only` (the
+mock already serves byte ranges; a file with an audio stream is refused without the flag). By the source and its test (`identity::probe_device`, read per request by `plex::identity`; not observed on the wire, the mock's request log keeps no headers) the app sends
+`X-Plex-Platform: Tizen` and `X-Plex-Platform-Version: <version> (emulator)`.
 
 The application and package id is `plxntizen0` (ten alphanumerics): a neutral name for the emulator package. A retail package id is
 assigned by Samsung's seller process, not chosen here.
@@ -221,8 +244,8 @@ In the receiver, in order (the host's lines are fixed by `Program.cs`; the libra
    `native library .../lib/libplx.so exists, N bytes`;
 2. `dev boot: the members of .../dev-boot.json ...` (no `dev boot: none`);
 3. `plx_host_start OK; the library's loop is running`, and no `plx_host_start FAILED`, `DllNotFoundException` or `EntryPointNotFoundException`;
-4. the library's own lines: the platform identity (Tizen, emulator, no playback), the mock server's identity, the GL line without a failure,
-   Home reached with the mock's libraries, Resume dimmed on a detail page with `preview: blocked ... reason=Cached(RefusedDirect)` (the Home hero's Play is a known gap, below), and each remote key logged as an action;
+4. the library's own lines: the platform identity (`platform: Tizen <version> (emulator only; direct play through the host's native player, not run on a retail set)`; a build without `uri` says `(emulator only; no playback)`), the mock server's identity, the GL line without a failure,
+   Home reached with the mock's libraries, Resume dimmed on a detail page with `preview: blocked ... reason=Cached(RefusedDirect)` in a build without `uri` (the Home hero's Play is a known gap, below); in a `uri` build the log says `uri: display path=ecore-overlay ready` and `compose: backends=uri resolver=yes`, and each remote key logged as an action;
 5. no sequence gap in the receiver, and no crash lines;
 6. a Home-button round trip logs `OnPause` then `OnResume` and the screen redraws; closing the app logs `OnTerminate` and ends with
    `on_stopped code=0 clean=1`.

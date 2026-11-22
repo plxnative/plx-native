@@ -58,17 +58,17 @@ pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
 
 /// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
-#[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) reads it
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) reads it
 pub const PLAYER_FAIL_BASE: i64 = 2_147_418_112;
 
-/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (W10 part B) is their caller; the tests use them now.
-#[cfg_attr(not(test), allow(dead_code))]
+/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (the `uri` feature) is their caller.
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_PLAY: u32 = 1;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_PAUSE: u32 = 2;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_SEEK: u32 = 3;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_CLOSE: u32 = 4;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether

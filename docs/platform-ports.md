@@ -1233,7 +1233,7 @@ Ecore names to `remote_token_key` pairs".
     compiled in every build of the application because it carries no `cfg` (the application cannot know which platform crate names it);
   - `FEED_MEDIA` (`hostsim` builds only), the desktop's `MediaBoot`: a no-op `early_init` and `compose` over
     `backends::compose_feed` alone, so no URI driver and no resolver;
-  - `NO_MEDIA` (W9; no `cfg`, like `WEBOS_MEDIA`), the `MediaBoot` of a platform with no playback yet (Tizen): a no-op
+  - `NO_MEDIA` (W9; no `cfg`, like `WEBOS_MEDIA`), the `MediaBoot` of a platform with no playback (a Tizen build without its `uri` feature): a no-op
     `early_init` and a `compose` that installs nothing, so `BackendSet::NONE` and no resolver, which the one
     `publish_composition` path logs as `compose: backends=none resolver=no`;
   - `HostGate`, `InFlight`, `Completion` and `Stopped` (W9; no `cfg`), the exit half of the hosted contract (Target shape 7):
@@ -1939,6 +1939,19 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
   pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
   and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
+- As landed (PR B, the driver and its composition; host-tested only: not run on the emulator and NOT verified on a retail set):
+  `TizenUriDriver` (`rust-modules/platform-tizen/src/player/`, the platform crate's own `uri` feature) is a Sans-IO
+  `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements; every request and event carries the epoch
+  and a completion after a stop is dropped. Capabilities: progressive URI, pause, seek, and `audio_track` (a deviation
+  from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
+  states, so the offer of an ordinary title fails without it; the flag settles the source's FIRST audio stream only and the
+  qualifier declines a play that selects another). `TizenQualifier` certifies a source only where Standard would direct-play it
+  and never a converted PMS output; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
+  behind `uri`; `mk/platform-tizen.mk` builds with it (`TIZEN_URI=0` builds without), and the identity line says which build it is.
+  The shared conformance suite (`plx_playback_contract::uri_conformance`, D7) runs over `FakeUriDriver` and this driver, and
+  the mock's `--extra-media-video-only` serves a local video-only file for the audio-less emulator. Still open: an emulator run of it with the video-only mock; H6 on a
+  retail set (decode, sound, armv7, the TV-menu round trip); a visible picture (the window's alpha, the opaque region and
+  `Presented` are not in this PR); the retail player's default audio stream; and how a real PMS answers `X-Plex-Platform: Tizen`.
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.
