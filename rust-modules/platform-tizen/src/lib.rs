@@ -78,7 +78,12 @@ static SERVICES: Services = Services {
         system_locale: identity::system_locale,
         sound_output: IdentityHooks::NONE.sound_output,
     },
-    secure: SecureHooks { mode: StoreMode::MemoryOnly, ..SecureHooks::NONE },
+    secure: SecureHooks {
+        seal: SecureHooks::NONE.seal,
+        open: SecureHooks::NONE.open,
+        remove: SecureHooks::NONE.remove,
+        mode: StoreMode::MemoryOnly,
+    },
     system: SystemHooks::NONE,
     storage: StorageHooks { authority: Authority::Files },
     layout: layout::LAYOUT,

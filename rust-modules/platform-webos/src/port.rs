@@ -51,7 +51,11 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
     storage: plx_os::tv::StorageHooks { authority: plx_os::tv::authority::Authority::Helper },
     // The derivation, with the one thing only webOS knows: the Developer Mode install directory, the
     // payload's last resort when `/proc/self/exe` cannot be read (not expected on a device).
-    layout: plx_os::tv::Layout { fallback_dir: INSTALL_DIR, ..plx_os::tv::Layout::DERIVED },
+    layout: plx_os::tv::Layout {
+        payload_dir: plx_os::tv::Layout::DERIVED.payload_dir,
+        state_root: plx_os::tv::Layout::DERIVED.state_root,
+        fallback_dir: INSTALL_DIR,
+    },
     // What this television's firmwares answer to, in the order worth trying (`plx_base::dynlib::Handle::open`:
     // releases 5.3.1 and 6.4.0 keep a `libcurl.so.5` alias beside the real `.so.4`); EGL is LG's
     // `libEGLfk.so.2` where a set carries it (webOS 2.2.3-5.3.1), else `libEGL.so.1`. The Mac's dylib name is

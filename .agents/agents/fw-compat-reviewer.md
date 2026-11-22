@@ -215,9 +215,9 @@ Four things, in this order:
    states `["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]`, and a process that published nothing
    reads that union (`Libraries::HOST`); every position has
    a written reason: `.so.4` first because that is what most of the fleet answers to, and the
-   macOS `.4.dylib` **last, deliberately** — a television never reaches it, so it costs the device
-   one extra failed `dlopen` only in the already-fatal no-curl case, while being the single
-   candidate that lets the desktop build sign in at all. Read any new list against
+   macOS `.4.dylib` **last, deliberately** in the desktop list and in `Libraries::HOST` (the
+   webOS list drops it: no television carries it), while being the single candidate that lets
+   the desktop build sign in at all. Read any new list against
    `tools/fwcompat.py --inventory <lib>`.
 4. **Is `dynlib!` even right here?** If the SONAME does not move, the answer is no; link it and
    keep the compile-time check.
