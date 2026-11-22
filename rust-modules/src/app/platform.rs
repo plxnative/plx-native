@@ -212,8 +212,8 @@ pub trait EventSink {
 /// `pub` for `host`, which re-exports it for the two real platform crates.
 ///
 /// # Safety
-/// `hooks` must be sound to call on the SDL main thread (`mt` is the proof of the thread) at the two
-/// points `plx_shell_sdl::init::init` calls them.
+/// `hooks.steps.before` and `after` must be sound to call on the SDL main thread (`mt` is the proof of
+/// the thread) at the two points `plx_shell_sdl::init::init` calls them.
 pub unsafe fn sdl_init(mt: &MainThread, hooks: &InitHooks) -> Result<(), Exit> {
     plx_shell_sdl::init::init(mt, hooks).map_err(|_| Exit::refused(1))?;
     plx_shell_sdl::init::request_gl(mt, hooks.gl);
@@ -225,8 +225,13 @@ pub unsafe fn sdl_init(mt: &MainThread, hooks: &InitHooks) -> Result<(), Exit> {
 ///
 /// `pub` for `host`. It stays in the application crate: the `Surface` it returns is implemented for
 /// `plx_shell_sdl::Window` here (the orphan rule), so a platform crate cannot rebuild it.
-pub fn sdl_open(mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
-    plx_shell_sdl::Window::open(mt, hooks, ask)
+///
+/// # Safety
+/// `hooks.steps.after_context` must be sound to call on the SDL main thread (`mt` is the proof of the
+/// thread), once, with the new GL context current (see `plx_shell_sdl::Window::open`).
+pub unsafe fn sdl_open(mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
+    // SAFETY: the caller's contract above.
+    unsafe { plx_shell_sdl::Window::open(mt, hooks, ask) }
         .map(|window| Box::new(window) as Box<dyn Surface>)
         .map_err(|_| Exit::refused(1))
 }

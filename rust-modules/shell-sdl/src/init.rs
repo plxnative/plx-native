@@ -85,7 +85,8 @@ const CTX_PROFILE_CORE: c_int = 0x0001;
 ///
 /// # Safety
 /// Once, before any other SDL call (the `&MainThread` is the proof of the thread); and `hooks`
-/// must be sound to call on that thread at those two points.
+/// must be sound to call on that thread at those two points (the third step, `after_context`, is
+/// [`crate::window::Window::open`]'s).
 pub unsafe fn init(_mt: &MainThread, hooks: &InitHooks) -> Result<(), InitFailed> {
     sys::SDL_SetMainReady();
     // DEAD END, measured 2026-07-31 — do not re-try this. The obvious answer to "a parked TV

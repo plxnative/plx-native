@@ -181,7 +181,9 @@ impl Shell for DesktopShell {
         unsafe { sdl_init(mt, &SDL) }
     }
     fn open(&self, mt: &host::MainThread, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
-        sdl_open(mt, &SDL, ask)
+        // SAFETY: `SDL` is this platform's own table (its `after_context` is `bind_core_profile_vao`, sound with the new
+        // context current), called on the main thread `mt` proves.
+        unsafe { sdl_open(mt, &SDL, ask) }
     }
     fn bind_window(&self, _win: *mut c_void) {}
     fn grab_surface(&self, _win: *mut c_void) {}

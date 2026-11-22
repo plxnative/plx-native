@@ -73,7 +73,12 @@ const SDL: InitHooks = InitHooks {
 /// panel at the canvas size unless a webOS 1-3 owner picked a smaller Interface resolution (or the debug
 /// drawable trigger asked for one), retried once at the canvas if the set refuses it.
 fn window(stored: Option<(c_int, c_int)>) -> WindowPlan {
-    let size = requested_drawable(stored).unwrap_or(CANVAS);
+    plan_for(requested_drawable(stored).unwrap_or(CANVAS))
+}
+
+/// The plan for a panel of `size`: the fallback is what keeps a stored size the set will not give from
+/// bricking the launch, so it is part of the plan, not a separate step the caller could forget.
+fn plan_for(size: (c_int, c_int)) -> WindowPlan {
     WindowPlan { title: c"plxnative", placement: Placement::Panel { size, fallback: window_fallback(size) } }
 }
 
@@ -145,7 +150,8 @@ impl Shell for WebosShell {
         unsafe { sdl_init(mt, &SDL) }
     }
     fn open(&self, mt: &MainThread, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
-        sdl_open(mt, &SDL, ask)
+        // SAFETY: `SDL` is this platform's own table (its `after_context` is the no-op step), called on the main thread `mt` proves.
+        unsafe { sdl_open(mt, &SDL, ask) }
     }
     fn bind_window(&self, win: *mut c_void) {
         crate::webos::bind_window(win);
@@ -306,6 +312,24 @@ mod tests {
         assert_eq!(window_fallback((1600, 900)), Some(super::CANVAS));
         assert_eq!(window_fallback((960, 540)), Some(super::CANVAS));
         assert_eq!(window_fallback(super::CANVAS), None, "the native canvas has no fallback");
+    }
+
+    /// The plan the platform hands the application carries that fallback: `Shell::window` returning
+    /// `fallback: None` for a smaller size would make a refused window fatal on a webOS 1-3 set.
+    #[test]
+    fn the_plan_for_a_smaller_panel_carries_the_native_fallback() {
+        for size in [(1600, 900), (1280, 720), (960, 540)] {
+            let plan = super::plan_for(size);
+            assert_eq!(plan.title, c"plxnative");
+            assert!(
+                matches!(plan.placement, super::Placement::Panel { size: s, fallback: Some(f) } if s == size && f == super::CANVAS),
+                "{size:?}"
+            );
+        }
+        assert!(matches!(
+            super::plan_for(super::CANVAS).placement,
+            super::Placement::Panel { fallback: None, .. }
+        ));
     }
 
     /// The webOS table states the storage helper as the canonical home of the session, the install's

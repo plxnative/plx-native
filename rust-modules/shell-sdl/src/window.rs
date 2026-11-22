@@ -112,7 +112,11 @@ impl Window {
     /// the application's and is pinned there. `hooks` is the platform's own, the one `init` ran:
     /// its `after_context` step runs right behind the context's creation, before anything is drawn
     /// or probed.
-    pub fn open(_mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Window, OpenFailed> {
+    ///
+    /// # Safety
+    /// `hooks.steps.after_context` must be sound to call on the SDL main thread (`mt` is the proof of
+    /// the thread) once, with the new GL context current: it is the one step run here.
+    pub unsafe fn open(_mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Window, OpenFailed> {
         // The television is placed at 0,0 at exactly canvas size (unless a webOS 1-3 owner picked a
         // smaller Interface resolution) and takes the panel. A desktop window is centred
         // (`SDL_WINDOWPOS_CENTERED`) at whatever fits — see `plan_desktop_window`. The density is not
@@ -166,6 +170,7 @@ impl Window {
         };
         // The platform's step behind the context, before the density fit, the probe and the renderer's
         // first call: a desktop core profile binds its vertex array object here.
+        // SAFETY: the caller's contract (see `# Safety`): the platform's step, on the main thread, behind the context.
         unsafe { (hooks.steps.after_context)() };
         // Correct the size for the display's density now: `surface::probe` below reads the drawable once.
         #[cfg(feature = "hostsim")]
@@ -481,7 +486,7 @@ mod open_order_tests {
     /// The body of `Window::open`, from its signature to the next method.
     fn open_body() -> &'static str {
         source()
-            .split_once(concat!("pub fn ", "open("))
+            .split_once(concat!("pub unsafe fn ", "open("))
             .expect("Window::open")
             .1
             .split_once(concat!("pub fn ", "raw("))

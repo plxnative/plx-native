@@ -184,7 +184,7 @@ fn assert_sync<T: Sync>(_: &T) {}
 /// being `pub`, or changed its shape, or lost its `cfg`, is a compile error.
 const _: fn() = || {
     let _: unsafe fn(&MainThread, &plxnative_modules::host::InitHooks) -> Result<(), Exit> = plxnative_modules::host::sdl_init;
-    let _: fn(&MainThread, &plxnative_modules::host::InitHooks, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
+    let _: unsafe fn(&MainThread, &plxnative_modules::host::InitHooks, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
     let _: MediaBoot = plxnative_modules::host::WEBOS_MEDIA;
     let _: MediaBoot = plxnative_modules::host::NO_MEDIA;
     #[cfg(feature = "hostsim")]
