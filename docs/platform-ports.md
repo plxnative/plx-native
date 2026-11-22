@@ -2028,7 +2028,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   plane; a window flag, so `Shell::opaque_route` stays a stated no-op); the straighten COPY program is its own source,
   `fs_straighten_copy.frag`, with no preprocessor directive (the suspect above: the shared file's `#extension` lines in branches not
   taken), the fetch file keeps the two fetch variants, a test pins the arithmetic equal; `PlxPlayer.PauseForHome` / `ResumeAfterHome`
-  (C#, video thread) pause what is playing at OnPause and start exactly that at OnResume; an accepted CLOSE retires its epoch at the
+  (C#, video thread) pause what is playing at OnPause (the OnResume start was dropped in the PR B1 review round: the library owns the resume); an accepted CLOSE retires its epoch at the
   door (`E_STALE` after). The shader file is shared with webOS: its fetch programs' preprocessed text is token-identical to before, and
   a `glGetProgramBinaryOES` before/after identity check on the LG set is OWED (not run here). Emulator run at `3d56d35b2`
   (2026-11-22, the Windows session): the `.tpk` built with MSBuild 0 warnings, 0 errors and `check-tizen-so` passed; no shader compile
@@ -2040,8 +2040,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `player/machine.rs` (a Sans-IO machine in `MACHINES`, no ledger line) and a thin executor `driver.rs`; a Busy-refused CLOSE is retried, a pause suspends the stall grace, SEEK_DONE
   `b = -2` (expired) is not a refusal (the seek may still land; POSITION is the authority); a position that stops advancing while Playing is a stall; a CLOSE the library cannot send after
   `plx_host_stop` (`Refusal::Stopping`) releases the attempt and `OnTerminate` closes the player before waiting for `on_stopped` (the C# is NOT compiled here); one library log line per player ABI event (positions and buffering
-  rate-limited); the EOS "off-route engine" line is guarded while a URI attempt is releasing. **NOT fixed: Home with a player open never resumes** (the library parks a URI attempt with
-  `Stop(Suspend)` at the background, then the restore's `begin_resume` answers `NoRoute` because a URI original plan installs no `url`; the fix is a shared foreground restore of a URI attempt, see `docs/tizen.md`).
+  rate-limited); the EOS "off-route engine" line is guarded while a URI attempt is releasing. **Home with a player open never resumed: fixed in code, emulator re-run pending** (the library parks a URI attempt with
+  `Stop(Suspend)` at the background, then the restore's `begin_resume` answered `NoRoute` because a URI original plan installs no `url`; a parked URI original is now re-resolved at the saved position through the foreground flight, `player::pump_uri_restore`, shared with webOS `play-uri`; the library owns the resume and the host never starts a player at OnResume; see `docs/tizen.md`).
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.

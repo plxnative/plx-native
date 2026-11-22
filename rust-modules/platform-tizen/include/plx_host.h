@@ -162,12 +162,12 @@
  *       b = -2   expired: no completion within 10 s. Expiry is not refusal: the seek MAY STILL LAND, so PLAYER_POSITION is the
  *                authority on where the player is. The next held seek is then sent while the expired one may still be pending, and a late
  *                completion is credited to the next seek's command ids (the player's callback carries no token).
- *   - HOME: the host forwards OnPause and OnResume as PLX_HOST_EVENT_PAUSE and _RESUME and also acts on the player itself, because the
- *     native player raises nothing of its own when the app goes to the background (emulator, 2026-11-22). At OnPause a player that is
- *     PLAYING is paused and PLAYER_PAUSED is posted; one asked to play before PREPARED has that start held back. At OnResume exactly
- *     that player is started again (PLAYER_STARTED, or at PREPARED for the held start). A player the library paused, closed or replaced
- *     in between is not touched, and a host pause is not a library decision: the library sees an ordinary PLAYER_PAUSED and then
- *     PLAYER_STARTED.
+ *   - HOME: ONE OWNER, the library. The host forwards OnPause and OnResume as PLX_HOST_EVENT_PAUSE and _RESUME, and pauses a PLAYING
+ *     player at OnPause (PLAYER_PAUSED is posted) so the picture and the sound stop at once, because the native player raises nothing
+ *     of its own when the app goes to the background (emulator, 2026-11-22). The host NEVER starts a player at OnResume. The library
+ *     parks its attempt at the background (it sends CLOSE, and the host answers CLOSED) and, at the foreground, re-opens the same source
+ *     at the saved position as a NEW epoch (a PLAYER_OPEN, then the usual PREPARED, seek and PLAY). A host start of the old epoch would
+ *     race that restore, so OnResume only logs why it resumed nothing.
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
  *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
  *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,

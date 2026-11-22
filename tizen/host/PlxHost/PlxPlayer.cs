@@ -630,9 +630,8 @@ namespace PlxHost
             });
         }
 
-        // OnResume. Starts what PauseForHome paused or held back, through the library's own PLAY path (so a start before PREPARED is still
-        // deferred to PREPARED and PLAYER_STARTED is posted once it runs). A player the library paused, closed or replaced meanwhile has
-        // lost the flag or is another session, and is left alone.
+        // OnResume. Starts NOTHING: the resume of a player is the library's (see plx_host.h, HOME). It only drops what PauseForHome remembered and
+        // logs why an OnResume resumed nothing, so a run's log names the path.
         internal void ResumeAfterHome()
         {
             if (!HasThreads()) return;
@@ -650,8 +649,10 @@ namespace PlxHost
                     PlxApp.Log("player: OnResume: epoch " + s.Epoch + " is closed or closing (the library parked it at the background); not resumed");
                     return;
                 }
-                PlxApp.Log("player: epoch " + s.Epoch + ": resumed after the Home screen");
-                DoPlay(s); // clears HostPaused
+                // The library owns the resume: it parks the attempt at the background (CLOSE) and re-opens the same source at the saved position at the
+                // foreground, as a new epoch. A host start here would race that restore, so the pause stays and the flag is dropped.
+                s.HostPaused = false;
+                PlxApp.Log("player: OnResume: epoch " + s.Epoch + " left as it is: the library's foreground restore owns the resume");
             });
         }
 

@@ -2150,6 +2150,14 @@ pub fn url(ps: &PlaybackSession) -> String {
 pub fn has_url(ps: &PlaybackSession) -> bool {
     !ps.url.is_empty()
 }
+/// **Is this a parked URI original, which a foreground restore must re-resolve?** A URI original plan installs no
+/// stream URL (`Plan::uri_source_ready`: the source travels in the qualified offer, which the driver consumed and a
+/// Stop(Suspend) closed), so `player::begin_resume` has no route to reopen. It does hold the request, the source
+/// selection and the item, which is everything a re-resolve at the saved position needs ([`retry_current_play`]).
+/// A Feed play always has its URL, so it never reads as owed.
+pub fn uri_restore_owed(ps: &PlaybackSession) -> bool {
+    ps.url.is_empty() && ps.source_selection.is_some() && ps.request.is_some() && !ps.preview
+}
 /// Whole-file transport requirement captured by the playback resolve. Diagnostics uses it for
 /// manual Original, where no adaptive controller exists to publish `dg_abr_kbps`.
 pub fn transport_kbps(ps: &PlaybackSession) -> i64 {
@@ -11106,6 +11114,36 @@ pub fn retry_declined_uri_source(ps: &mut PlaybackSession,
     request_play_with_queue(ps, meta, caps, request, Some(retry),
         Some(playback_trace_generation()), false,
         crate::player::report::AttemptOrigin::Recovery, None, true, None)
+}
+
+/// **A foreground restore of a parked URI original**: re-resolve the SAME item at the saved position. The park
+/// (`Stop(Suspend)`) closed the native session and left the attempt's start transaction `Prepared` and its logical
+/// Streaming Resource open; a new resolve cannot start under a standing transaction, and the old resource is not the
+/// new source's. So the transaction is ended as a failed start (as a declined source's is), the resource is retired,
+/// and the request goes through the common door as a NEW attempt of the same item (`begin_attempt`: the opened recipe
+/// is not spent for a title that is being reopened after a park, as a Retry press's is not). `false` when there is nothing to re-resolve or the
+/// request door refuses (the restore then answers `RebuildRejected` and the session stays parked).
+pub fn restore_uri_original(ps: &mut PlaybackSession,
+    meta: &mut plx_data::stores::metadata::MetadataStore, resume_ns: i64) -> bool {
+    if !uri_restore_owed(ps) { return false; }
+    let Some(request) = ps.request.clone() else { return false };
+    if let Some(ticket) = pending_route_start() {
+        if !abort_route_start(ticket, RouteStartResult::StartFailed) { return false; }
+    }
+    let active = worker_ticket();
+    let owned = if ps.tsession.is_empty() { ps.sess.clone() } else { ps.tsession.clone() };
+    if !owned.is_empty() && active.encoder() == owned && replace_active_encoder_for(&active, "").is_some() {
+        let mut identities = vec![owned.clone()];
+        if !ps.sess.is_empty() && ps.sess != owned { identities.push(ps.sess.clone()); }
+        retire_plan_resources(AbandonedPlanResources { sid: cur_sid(ps), identities });
+        ps.tsession.clear();
+    }
+    let mut retry = current_retry_context(ps, resume_ns.max(0));
+    retry.candidate_purpose = CandidatePurpose::NewCandidate;
+    let caps = ps.attempt_caps();
+    request_play_with_queue(ps, meta, caps, request, Some(retry),
+        Some(playback_trace_generation()), false,
+        crate::player::report::AttemptOrigin::Resume, None, false, None)
 }
 
 /// Re-resolve one failed URI attempt through an unspent recipe after its native registration

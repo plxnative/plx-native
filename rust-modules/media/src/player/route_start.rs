@@ -914,6 +914,9 @@ pub fn suspend_bufferfeed(ps: &mut crate::route::PlaybackSession, pa: &mut super
 /// disp_base. Call BEFORE start_bufferfeed, AFTER route::play_movie has run the decision (so the
 /// transcode session + flavor are set). Used for viewOffset resume.
 ///
+/// A parked URI original has no URL to resume, so its entry is a re-resolve at the saved position, performed by the frame
+/// ([`pump_uri_restore`]) and answered through the same [`land_resume`].
+///
 /// **There is one entry point, [`begin_resume`] / [`land_resume`], and it is a flight** (the cold
 /// resume of a freshly resolved play, and the foreground restore of a parked one): a transcode's
 /// rebuild at the saved position is planned on the frame thread and its PMS half runs on a worker.
@@ -943,6 +946,8 @@ enum ResumePrelude {
     Settled(ResumeOutcome),
     /// A transcode with a saved position: its encode must restart at the offset.
     Rebuild,
+    /// A parked URI original: re-resolved at the saved position by [`pump_uri_restore`].
+    UriRestore,
 }
 
 fn resume_prelude(
@@ -950,6 +955,11 @@ fn resume_prelude(
     pa: &mut super::adapter::PlayerAdapter,
     resume_ns: i64,
 ) -> ResumePrelude {
+    // A parked URI original has no URL to resume: its restore is a re-resolve at the saved position, even at 0.
+    if crate::route::uri_restore_owed(ps) {
+        pa.owe_uri_restore(resume_ns.max(0));
+        return ResumePrelude::UriRestore;
+    }
     if resume_ns <= 0 {
         return ResumePrelude::Settled(ResumeOutcome::Prepared);
     }
@@ -990,6 +1000,7 @@ pub fn begin_resume(
     }
     match resume_prelude(ps, pa, resume_ns) {
         ResumePrelude::Settled(outcome) => ResumeStart::Settled(outcome),
+        ResumePrelude::UriRestore => ResumeStart::Pending,
         ResumePrelude::Rebuild => match crate::route::dispatch_resume_rebase(ps, resume_ns) {
             crate::route::RecoveryDispatch::Flying { .. } => ResumeStart::Pending,
             // Nothing to rebuild or the worker could not start: a refusal.
@@ -1012,6 +1023,10 @@ pub fn land_resume(
     if super::accept_server_stop(ps) {
         return None;
     }
+    // A parked URI original's re-resolve answers here once [`pump_uri_restore`] has landed it.
+    if let Some(outcome) = pa.take_uri_restore_landing() {
+        return Some(outcome);
+    }
     crate::route::discard_stale_flight_landing();
     if !crate::route::resume_flight_outstanding() {
         return None;
@@ -1026,6 +1041,59 @@ pub fn land_resume(
         }
         crate::route::RecoveryVerdict::Refused => ResumeOutcome::RebuildRejected,
     })
+}
+
+/// **The frame's half of a parked URI original's restore** ([`ResumePrelude::UriRestore`]), once a frame while the
+/// foreground machine waits on its flight. The lifecycle has no metadata store, the frame has: the first call takes the
+/// owed request and re-resolves the same item at the saved position through `route::restore_uri_original`
+/// (the recovery door, origin `Resume`); the later ones drain that resolve's landing exactly as the cold play's
+/// landing does. A URI offer opens the driver again (the lifecycle's `Load` then starts it), a plan that fell to a Feed
+/// route hands over to the ordinary resume (`begin_resume`, whose flight `land_resume` drains), and a refusal answers
+/// `RebuildRejected`, which leaves the session parked for the next foreground with the read-out up.
+pub fn pump_uri_restore(
+    ps: &mut crate::route::PlaybackSession,
+    pa: &mut super::adapter::PlayerAdapter,
+    meta: &mut plx_data::stores::metadata::MetadataStore,
+) {
+    if let Some(resume_ns) = pa.take_uri_restore_request() {
+        log(&format!("resume(uri): re-resolving the parked source at {}s", resume_ns / 1_000_000_000));
+        if !crate::route::restore_uri_original(ps, meta, resume_ns) {
+            pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
+        }
+        return;
+    }
+    if !pa.uri_restore_flying() {
+        return;
+    }
+    let Some(landed) = crate::route::pump_play(ps, meta) else {
+        // Still resolving, or the resolve ended without a plan (a Back, a refusal the pump already published).
+        if !crate::route::play_pending() && crate::route::url(ps).is_empty() {
+            pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
+        }
+        return;
+    };
+    if let Some(offer) = landed.uri_offer {
+        let offer_id = offer.offer_id();
+        if pa.offer_qualified_uri(ps, offer).is_ok() {
+            pa.settle_uri_restore(ResumeOutcome::Prepared);
+        } else {
+            if let Some(ticket) = landed.route_start {
+                let _ = crate::route::retry_declined_uri_source(ps, meta, ticket, offer_id);
+            }
+            pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
+        }
+        return;
+    }
+    if crate::route::url(ps).is_empty() {
+        pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
+        return;
+    }
+    // The re-plan chose a Feed route: it has its URL now, so the ordinary resume owns the rest.
+    pa.clear_uri_restore();
+    match begin_resume(ps, pa, landed.resume_ns) {
+        ResumeStart::Settled(outcome) => pa.settle_uri_restore(outcome),
+        ResumeStart::Pending => {}
+    }
 }
 
 /// **The runner of [`super::release::NativeRelease`].** Once a frame (and at the head of a start):
@@ -1292,6 +1360,8 @@ pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAd
     for_reload: bool, reason: plx_playback_contract::StopReason) {
     engine::clear_failed_engine_release_arm();
     pa.cancel_uri_recovery(ps);
+    // A stop that is not a park ends a restore owed to a parked URI original (a Back while it re-resolves).
+    if !for_reload { pa.clear_uri_restore(); }
     if let Some(route_attempt) = pa.active_uri_attempt() {
         let at = pa.backend_tick();
         let _ = pa.backend_send_at(ps, plx_playback_contract::Intent::Stop {

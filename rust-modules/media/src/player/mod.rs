@@ -292,7 +292,7 @@ pub use engine::{
 /// ticks a scripted clock past the release deadline (`dev::uriprobe`'s tests).
 #[cfg(any(test, feature = "test-support"))]
 pub use route_start::exit_native_with;
-pub use route_start::{begin_resume, exit_native, land_resume, retire_if_server_stopped, stop_bufferfeed,
+pub use route_start::{begin_resume, exit_native, land_resume, pump_uri_restore, retire_if_server_stopped, stop_bufferfeed,
     stop_for_replacement, suspend_bufferfeed, BufferfeedStartOutcome, NativeExit, ResumeOutcome, ResumeStart,
     start_playback, start_playback_tracked, suspend_playback_if_attempt};
 pub use route_start::suspend_bufferfeed as suspend_playback;

@@ -1975,4 +1975,65 @@ mod uri_boot_tests {
         assert!(bus.shapes().is_empty());
         plx_os::tv::plane::installed().reset_for_test();
     }
+
+    /// **A Home round trip with a URI-original attempt reopens the same item at the saved position.** The
+    /// background parks the attempt (`park_playback`: Stop(Suspend), the native session is closed) and the
+    /// foreground's restore goes through the lifecycle machine's `Prepare`. A URI original plan installs no
+    /// `PlaybackSession::url` (`plan.uri_source_ready`), so `begin_resume` answered `NoRoute` and the restore
+    /// never opened anything: the Tizen emulator's "Home with a player open never resumes". The restore now
+    /// re-resolves the same source at the saved position through the foreground flight, and the Load that
+    /// follows opens the URI driver again.
+    #[test]
+    fn a_home_round_trip_reopens_a_uri_original_attempt_at_the_saved_position() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert_eq!(bus.shapes().len(), 1, "the first open");
+        assert!(plx_media::route::url(&rig.app.player.session).is_empty(),
+            "a URI original installs no stream URL: this is what `begin_resume` reads");
+        let saved = intended_pos(&mut rig.app.player.session);
+        assert_eq!(saved, 12_000_000_000, "the resume position is the saved one");
+        park_playback(&mut rig.app);
+        // The native session's close completes, as the hub's would.
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let activation = did_foreground_with_link(&mut rig.app);
+        // The restore's own position: the saved one less the foreground's rewind (the machine's `Prepare`).
+        let (ForegroundState::Prepared { resume_ns, .. } | ForegroundState::PreparePending { resume_ns, .. }) =
+            rig.app.player.lifecycle.state() else { panic!("the restore prepares at a position") };
+        let restore_ms = resume_ns / 1_000_000;
+        assert!(restore_ms > 0 && restore_ms <= 12_000, "{restore_ms}");
+        let mut frames = 0;
+        while bus.shapes().len() != 2 {
+            window_frame(&mut rig);
+            frames += 1;
+            std::thread::sleep(Duration::from_millis(2));
+            assert!(frames < 1500, "the foreground restore did not reopen the URI source: activation {:?}, machine {:?}, \
+                play_pending {}, restore outstanding {}, owed {}, source {:?}, url {:?}, control {}", activation,
+                rig.app.player.lifecycle.state(), plx_media::route::play_pending(),
+                rig.app.adapters.player.uri_restore_outstanding(),
+                plx_media::route::uri_restore_owed(&rig.app.player.session), rig.app.player.session.source_selection(),
+                plx_media::route::url(&rig.app.player.session), plx_media::route::control_phase_label());
+        }
+        assert!(rig.app.player.lifecycle.awaiting_load() || bus.shapes().len() == 2);
+        poll_until("the reopened source was not loaded", || {
+            window_frame(&mut rig);
+            bus.calls("load") == 2
+        });
+        bus.say("load", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m2"}"#);
+        window_frame(&mut rig);
+        bus.say("subscribe", r#"{"audioInfo":{"track":0,"immersive":"none","mediaId":"m2"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        bus.say("subscribe", r#"{"loadCompleted":{"mediaId":"m2"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert_eq!(bus.calls("seek"), 1, "the reopened source is sought to the restore's position before its first Play");
+        let sought: serde_json::Value = serde_json::from_str(&bus.last_payload("seek")).unwrap();
+        assert_eq!(sought["position"], restore_ms);
+        plx_os::tv::plane::installed().reset_for_test();
+    }
 }

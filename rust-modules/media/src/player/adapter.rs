@@ -457,6 +457,19 @@ pub struct StartHooks {
 fn inert_sink() -> &'static dyn VideoSink { &NoSink }
 
 /// Common coordinator and main-thread proof, as one owned value (`App.adapters.player`).
+/// **A foreground restore of a URI original** (`player::begin_resume`'s URI branch). A URI original plan installs no
+/// stream URL, so the parked session cannot be reopened from a route: it is re-resolved at the saved position through
+/// the same door a Retry press uses (`route::retry_current_play`), and the offer that lands opens the driver again.
+/// The machine below holds the request and the answer between the foreground lifecycle (which has no metadata store)
+/// and the frame (which has): `Owed` until the frame takes it, `Flying` while the resolve runs, `Landed` until
+/// `land_resume` hands the lifecycle its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UriRestore {
+    Owed { resume_ns: i64 },
+    Flying,
+    Landed(crate::player::ResumeOutcome),
+}
+
 pub struct PlayerAdapter {
     /// Proof, held rather than passed: see the module doc. It is a ZST, so this costs nothing and
     /// is what makes `&mut PlayerAdapter` mean "the main thread, exclusively".
@@ -489,6 +502,8 @@ pub struct PlayerAdapter {
     uri_route_attempt: Option<crate::route::RouteStartAttempt>,
     uri_offer_id: Option<crate::route::backend_policy::OfferId>,
     uri_recovery: Option<PendingUriRecovery>,
+    /// A foreground restore's re-resolve of a URI original (see [`UriRestore`]).
+    uri_restore: Option<UriRestore>,
     uri_route_settled: bool,
     uri_stop_requested: bool,
     uri_finalized: bool,
@@ -575,6 +590,7 @@ impl PlayerAdapter {
             uri_route_attempt: None,
             uri_offer_id: None,
             uri_recovery: None,
+            uri_restore: None,
             uri_route_settled: false,
             uri_stop_requested: false,
             uri_finalized: false,
@@ -1257,6 +1273,54 @@ impl PlayerAdapter {
         self.pending_uri_subtitle = None;
         self.refused_uri_audio = None;
         self.refused_uri_subtitle = None;
+    }
+
+    /// A foreground restore owes a re-resolve of the parked URI original at `resume_ns` (the Sans-IO request: the app's
+    /// frame, which holds the metadata store, performs it with [`Self::take_uri_restore_request`]).
+    pub(super) fn owe_uri_restore(&mut self, resume_ns: i64) {
+        self.uri_restore = Some(UriRestore::Owed { resume_ns });
+    }
+
+    /// The restore's re-resolve request, once: the state moves to `Flying` as it is handed out.
+    pub fn take_uri_restore_request(&mut self) -> Option<i64> {
+        match self.uri_restore {
+            Some(UriRestore::Owed { resume_ns }) => {
+                self.uri_restore = Some(UriRestore::Flying);
+                Some(resume_ns)
+            }
+            _ => None,
+        }
+    }
+
+    /// The re-resolve is in flight: its landing is owed to [`crate::player::pump_uri_restore`].
+    pub fn uri_restore_flying(&self) -> bool {
+        self.uri_restore == Some(UriRestore::Flying)
+    }
+
+    /// A restore is owed or in flight: the foreground machine keeps waiting on it, and the play it started is not a
+    /// successor that retires the machine.
+    pub fn uri_restore_outstanding(&self) -> bool {
+        matches!(self.uri_restore, Some(UriRestore::Owed { .. } | UriRestore::Flying))
+    }
+
+    pub(super) fn settle_uri_restore(&mut self, outcome: crate::player::ResumeOutcome) {
+        self.uri_restore = Some(UriRestore::Landed(outcome));
+    }
+
+    /// The restore's answer, once, when it has landed.
+    pub(super) fn take_uri_restore_landing(&mut self) -> Option<crate::player::ResumeOutcome> {
+        match self.uri_restore {
+            Some(UriRestore::Landed(outcome)) => {
+                self.uri_restore = None;
+                Some(outcome)
+            }
+            _ => None,
+        }
+    }
+
+    /// Nothing is owed any more (a flight of the ordinary kind took over, or the restore was withdrawn).
+    pub(super) fn clear_uri_restore(&mut self) {
+        self.uri_restore = None;
     }
 
     pub fn take_released_uri_recovery(&mut self) -> Option<UriRecoveryNotice> {

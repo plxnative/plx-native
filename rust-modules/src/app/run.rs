@@ -2329,6 +2329,10 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // pump to do it, and the landing's replacement encoder runs on the server until it is.
         plx_media::route::discard_stale_flight_landing();
         if app.window_activity.allow_present(true) && app.player.lifecycle.flight_pending() {
+            // A parked URI original's restore is a re-resolve the lifecycle (which has no metadata store) owes and
+            // this frame performs and drains (`player::begin_resume`'s URI branch).
+            plx_media::player::pump_uri_restore(&mut app.player.session, &mut app.adapters.player,
+                app.runtime.metadata_mut());
             // The foreground restore waits on a flight (its resume's rebuild or an Original
             // rollback): the lifecycle machine drains it, not the pump (there is no Engine) and not
             // the cold-resume drain (`playback_may_run` is false while the restore is parked).
@@ -2913,7 +2917,9 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         // Tell the machine at this transaction boundary (`Superseded(Playback)`): it retires the
         // parked owner and leaves a pending Load to its own settlement. A same-session Prepared
         // retry does not set play_pending and remains owned by drive_foreground.
-        if app.window_activity.allow_present(true) && plx_media::route::play_pending() {
+        // The re-resolve a parked URI original's restore started is the restore's own, not a successor.
+        if app.window_activity.allow_present(true) && plx_media::route::play_pending()
+            && !app.adapters.player.uri_restore_outstanding() {
             let _ = drive_foreground(
                 &mut app.player.lifecycle,
                 &mut app.player.session,
