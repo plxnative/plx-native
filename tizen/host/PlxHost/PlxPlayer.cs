@@ -270,6 +270,9 @@ namespace PlxHost
             if (threadsFailed) return false;
             lock (startGate)
             {
+                // Shutdown set this under the same lock: after it no thread starts and no request is taken, so a request that was already past the
+                // library's gate can neither create a video thread that nothing closes nor reach a native player that Shutdown has already swept.
+                if (shuttingDown) return false;
                 if (videoThread != null) return true;
                 try
                 {
@@ -322,6 +325,14 @@ namespace PlxHost
 
         private void DoOpen(uint epoch, string uri, int x, int y, int w, int h)
         {
+            // An open queued before Shutdown's CompleteAdding but after its close job would create a native player nothing closes: decline it. The
+            // epoch ends with its one PLAYER_CLOSED (no player was made), which the library still hears while its loop runs.
+            if (shuttingDown)
+            {
+                PlxApp.Log("player: epoch " + epoch + ": the open was declined, the host is shutting down");
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_CLOSED, epoch, 0, 0);
+                return;
+            }
             OpenSteps(epoch, uri, x, y, w, h);
         }
 
@@ -739,9 +750,12 @@ namespace PlxHost
         // could not close itself (a host-initiated stop).
         internal void Shutdown()
         {
-            shuttingDown = true;
             Thread video;
-            lock (startGate) { video = videoThread; }
+            lock (startGate)
+            {
+                shuttingDown = true; // under the gate EnsureThreads reads it under: a start that is not past it yet is refused, one that is has its thread in `video`
+                video = videoThread;
+            }
             if (video == null) return;
             try
             {
