@@ -237,6 +237,10 @@ pub(crate) struct App {
     /// once at boot with whether vsync is on). The desktop arms it on WSLg, whose X11/GLX swap accepts
     /// interval 1 without waiting; every other platform's swap paces the frame and this is `false`.
     frame_pacing: bool,
+    /// The platform's frame seam (`Shell::frame`), asked once at boot so the per-frame path calls
+    /// its hooks directly instead of making a `dyn Shell` call to find them first: the pacer's
+    /// `begin`/`end` and the simulator's compose-under and pre-swap present hooks (all empty on a TV).
+    frame: &'static platform::FrameSeam,
     /// Boot time (`SDL_GetTicks` at the end of boot): the origin of every dev-script delay AND
     /// the clock a replay restores from controlled initial inputs — a field BOTH sides
     /// write, so it stays here rather than on `dev::scenarios::Scenarios`.

@@ -814,7 +814,8 @@ pub(crate) unsafe fn construct(
     let dumping = false;
     let vsync_enabled = !dumping && (controlled || !crate::dev::scenarios::novsync_armed());
     surface.set_swap_interval(if vsync_enabled { 1 } else { 0 });
-    let frame_pacing = (platform.shell.frame().pacer.armed)(vsync_enabled);
+    let frame = platform.shell.frame();
+    let frame_pacing = (frame.pacer.armed)(vsync_enabled);
     {
         let r = glGetString(GL_RENDERER);
         let v = glGetString(GL_VERSION);
@@ -1651,6 +1652,7 @@ pub(crate) unsafe fn construct(
         remote,
         surface,
         frame_pacing,
+        frame,
         t0,
         instr,
         measure_fault_logged: false,

@@ -1883,9 +1883,11 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`host::SIM_PRESENT`: compose-under on a bound frame and the supersampled copy to the window), and ` sim=1`. The app's preview-admission `seam_absent` asks the sink
   (`VideoSink::lacks_video_path`, W8c-1). The two arms no CI configuration builds (`hostsim` without `play-feed`:
   `dev/scenarios.rs` autopause `at=`, `dev/scenarios/screenshot.rs` clockstop) are deleted. `feature = "hostsim"`
-  lines in `rust-modules`: 317 -> 300 (the application crate with `dev`, `host` and the desktop platform: 129 ->
-  112); the test lists of `plxnative-modules` (1491 default, 1766 `hostsim`) and `plx_platform_webos` (63) are
-  unchanged, `plx_platform_desktop`'s grows 5 -> 6. The `not(hostsim)` term of `src/lib.rs`'s `compile_error!` stays
+  lines in `rust-modules` fall by 17, all in the application crate (`dev`, `host` and the desktop platform). The
+  application reads the seam from `App::frame`, asked once at boot, so a TV's frame path makes no `dyn Shell` call
+  per frame, only the empty hooks. The test lists of `plxnative-modules` (default and `hostsim`) and
+  `plx_platform_webos` are unchanged; `plx_platform_desktop`'s `lib.rs` goes 6 -> 7 and its Linux-only
+  `pacer.rs` adds 3, so 6 -> 10 on a Linux build. The `not(hostsim)` term of `src/lib.rs`'s `compile_error!` stays
   for W8b.
   As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
   likewise (`shared.rs` hooks `any(test, test-support)`); `ffi_host` is two exclusive declarations of one file (`hostsim`;

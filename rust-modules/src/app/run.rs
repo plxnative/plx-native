@@ -141,7 +141,7 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
     fn pump(&mut self) {
         let app = &mut *self.app;
         plx_telemetry::telemetry::session::tick(matches!(app.route(), AppArg::Player));
-        self.pace = app.frame_pacing.then(app.platform.shell.frame().pacer.begin);
+        self.pace = app.frame_pacing.then(app.frame.pacer.begin);
         self.fr = begin_product_frame(app);
         let fr = &mut self.fr;
         app.instr.mark(plx_base::diag::heartbeat::Phase::Top); // also starts the visit's hang interval
@@ -912,7 +912,7 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         // screenshot seam below, so shots include it. The television's own compositor is the real one:
         // its platform states nothing here (`Present::NONE`).
         if app.player.video_plane_bound {
-            (app.platform.shell.frame().present.compose_under)();
+            (app.frame.present.compose_under)();
         }
         // Before the swap, never after: the back buffer is undefined once presented.
         // A dump decides here whether this frame is written (`dev::framedump`); otherwise the
@@ -940,7 +940,7 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
             let _present_scope = plx_base::task::watchdog::present_scope();
             // The simulator copies its supersampled offscreen frame to the window here
             // (`host::SIM_PRESENT`); the television states nothing.
-            (app.platform.shell.frame().present.before_swap)();
+            (app.frame.present.before_swap)();
             // dev (`/tmp/plxnative-framecb`): this frame's compositor callback, requested before
             // the swap that commits it. One latched bool unarmed.
             app.platform.diag.request();
@@ -986,7 +986,7 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         #[cfg(feature = "devtriggers")]
         plx_ui::card_motion_metrics::presented(fr.now);
         if let Some(started) = pace {
-            (app.platform.shell.frame().pacer.end)(started);
+            (app.frame.pacer.end)(started);
         }
     } else {
         if fr.deferred {
@@ -4102,6 +4102,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             remote: Default::default(),
             surface: crate::app::platform::detached_surface(),
             frame_pacing: false,
+            frame: platform.shell.frame(),
             t0: Default::default(),
             instr: plx_base::diag::heartbeat::Instruments::new(false, 22.0),
             scenarios: crate::dev::scenarios::Scenarios {
@@ -12828,7 +12829,7 @@ mod straighten_wiring_tests {
         let draw = at("let (_vx, _vy, _vw, _vh) = draw(app, fr);");
         let capture = at("crate::capture::tick(fr.now);");
         let pass = at(PASS.trim_start());
-        let compositor = at("(app.platform.shell.frame().present.compose_under)();\n        }");
+        let compositor = at("(app.frame.present.compose_under)();\n        }");
         let dump = at("crate::dev::framedump::after_draw(");
         let shot = at("crate::shot::maybe_capture(");
         let swap = at("app.surface.swap();");
@@ -12839,7 +12840,7 @@ mod straighten_wiring_tests {
         assert!(compositor < dump && compositor < shot, "no reader sees a straight, uncomposited frame");
         assert!(shot < swap && dump < swap, "…and the pass is done before the swap");
         // The compositor stand-in sits behind the same bit the pass is handed.
-        let guard = "        if app.player.video_plane_bound {\n            (app.platform.shell.frame().present.compose_under)();";
+        let guard = "        if app.player.video_plane_bound {\n            (app.frame.present.compose_under)();";
         assert!(src.contains(guard), "the simulator composites on exactly the frames the pass straightened");
     }
 }
