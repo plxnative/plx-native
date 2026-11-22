@@ -3134,7 +3134,7 @@ fn finish_landed_play(app: &mut App, resume_prepared: bool) {
             // A host Load of 0 with the clock sink off is "no video path", not an
             // admitted slot. Counting it spends the cycle and the later failure
             // opens the breaker, so every later title is skipped.
-            let seam_absent = plx_os::tv::sink::VideoSink::lacks_video_path(app.adapters.player.display_sink());
+            let seam_absent = app.adapters.player.lacks_video_path();
             if deferred {
                 // Admission is taken when the queued start launches (or refused if the deadline
                 // refuses it), by the runner that starts it.
