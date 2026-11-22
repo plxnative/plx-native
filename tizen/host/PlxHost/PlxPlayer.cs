@@ -38,9 +38,12 @@ namespace PlxHost
         private const int StallMs = 3000;
         private const int BindWaitMs = 3000;
         private const int CloseWaitMs = 3000;
-        // A native seek whose completion callback has not fired within this long is given up: its command ids get SEEK_DONE with the failure
-        // marker (b = -1) and the next held seek is sent (plx_host.h, PLAYER_SEEK_DONE).
+        // A native seek whose completion callback has not fired within this long is given up on: its command ids get SEEK_DONE with the expiry
+        // marker (b = -2: it MAY still land) and the next held seek is sent (plx_host.h, PLAYER_SEEK_DONE).
         private const int SeekWaitMs = 10000;
+        // PLAYER_SEEK_DONE's b when the seek did not land, and when it did not complete in time (plx_host.h).
+        private const long SeekRefused = -1;
+        private const long SeekExpired = -2;
 
         // The window the library made is the first Ecore_Wl2 window (id 1) on the connected display: the library makes exactly one. Measured on
         // the emulator to be the very pointer the library logs ("ecore: window_new(...) -> 0x..."); BindDisplay logs the pointer it found, so the
@@ -54,12 +57,16 @@ namespace PlxHost
             internal IntPtr Handle;
             internal bool Prepared;
             internal bool PlayPending;
+            internal bool OpenFailed; // an open step failed: the player will never prepare, so a seek is answered at once
             internal volatile bool Playing; // read by the poller
             internal volatile bool Closing; // read by the poller and the main-thread bind
             internal bool StallSent; // poller only
-            // At most ONE native seek is in flight (nothing measured says two overlap safely): `SeekNow` is it, `SeekLater` holds the newest request
+            // At most ONE native seek is waited on (nothing measured says two overlap safely): `SeekNow` is it, `SeekLater` holds the newest request
             // that arrived meanwhile (or before PREPARED). A seek is { target ms, the command ids it answers }; a request that replaces a held one folds
-            // the older command ids into it, and every one of them gets its PLAYER_SEEK_DONE (with the final target) when that seek lands.
+            // the older command ids into it, and every one of them gets its PLAYER_SEEK_DONE (with the final target) when that seek lands. After
+            // SeekWaitMs without a completion the seek is expired (its ids get b = -2) and the next held seek is sent while the expired one may
+            // still be pending in the native player: a late completion is credited to the NEXT seek's ids (the callback carries no token).
+            // Every command id is answered before its epoch ends: by landing, by refusal or expiry, or by Release / a failed open (b = -1).
             internal Seek SeekNow;
             internal Seek SeekLater;
             // Held by anything that calls into the native player on this handle off the video thread (position reads, the display bind). The
@@ -315,23 +322,42 @@ namespace PlxHost
             var s = new Session(epoch);
             current = s;
             published = s;
-            IntPtr user = UserOf(epoch);
+            bool opened = false;
+            try
+            {
+                opened = OpenPlayer(s, uri, x, y, w, h);
+            }
+            finally
+            {
+                if (!opened) // a failed step or a throw (VideoLoop reports it): verbs that follow are answered at once, none is held
+                {
+                    s.OpenFailed = true;
+                    AnswerSeeks(s);
+                }
+            }
+        }
+
+        // The open's steps; false after the first failure (already posted as PLAYER_ERROR).
+        private bool OpenPlayer(Session s, string uri, int x, int y, int w, int h)
+        {
+            IntPtr user = UserOf(s.Epoch);
             int rc = MediaPlayerNative.player_create(out s.Handle);
-            if (rc != 0 || s.Handle == IntPtr.Zero) { s.Handle = IntPtr.Zero; Fail(s, "player_create", rc); return; }
+            if (rc != 0 || s.Handle == IntPtr.Zero) { s.Handle = IntPtr.Zero; Fail(s, "player_create", rc); return false; }
             rc = MediaPlayerNative.player_set_uri(s.Handle, uri);
-            if (rc != 0) { Fail(s, "player_set_uri", rc); return; }
+            if (rc != 0) { Fail(s, "player_set_uri", rc); return false; }
             // The display is bound BEFORE prepare: measured on the emulator, a player with no display does not advance.
             rc = BindDisplay(s, x, y, w, h);
-            if (rc >= Native.PLX_HOST_PLAYER_FAIL_BASE) { FailHost(s, "bind the display", rc - Native.PLX_HOST_PLAYER_FAIL_BASE); return; }
-            if (rc != 0) { Fail(s, "player_set_ecore_wl_display", rc); return; }
+            if (rc >= Native.PLX_HOST_PLAYER_FAIL_BASE) { FailHost(s, "bind the display", rc - Native.PLX_HOST_PLAYER_FAIL_BASE); return false; }
+            if (rc != 0) { Fail(s, "player_set_ecore_wl_display", rc); return false; }
             rc = MediaPlayerNative.player_set_display_mode(s.Handle, MediaPlayerNative.DISPLAY_MODE_LETTER_BOX);
-            if (rc != 0) { Fail(s, "player_set_display_mode", rc); return; }
+            if (rc != 0) { Fail(s, "player_set_display_mode", rc); return false; }
             MediaPlayerNative.player_set_completed_cb(s.Handle, CompletedCb, user);
             MediaPlayerNative.player_set_error_cb(s.Handle, ErrorCb, user);
             MediaPlayerNative.player_set_buffering_cb(s.Handle, BufferingCb, user);
             MediaPlayerNative.player_set_interrupted_cb(s.Handle, InterruptedCb, user);
             rc = MediaPlayerNative.player_prepare_async(s.Handle, PreparedCb, user);
-            if (rc != 0) { Fail(s, "player_prepare_async", rc); return; }
+            if (rc != 0) { Fail(s, "player_prepare_async", rc); return false; }
+            return true;
         }
 
         // Find the library's window and bind the player to it as an OVERLAY. Ecore belongs to the main thread (plx_host.h, THREADS), so the two
@@ -372,7 +398,13 @@ namespace PlxHost
         private void DoVerb(uint epoch, int verb, long arg0, long arg1)
         {
             Session s = current;
-            if (s == null || s.Epoch != epoch || s.Handle == IntPtr.Zero || s.Closing) return;
+            if (s == null || s.Epoch != epoch) return;
+            if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed)
+            {
+                // A dead player still owes its seek an answer (the library waits for every command id).
+                if (verb == Native.PLX_HOST_PLAYER_VERB_SEEK) Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, arg1, SeekRefused);
+                return;
+            }
             switch (verb)
             {
                 case Native.PLX_HOST_PLAYER_VERB_PLAY: DoPlay(s); break;
@@ -425,7 +457,7 @@ namespace PlxHost
                 // next held seek (if any) is tried. Each pass consumes SeekLater, so this ends.
                 PlxApp.Log("player: epoch " + s.Epoch + ": player_set_play_position returned " + rc);
                 s.SeekNow = null;
-                FailSeek(s, seek);
+                FailSeek(s, seek, SeekRefused);
                 SendHeldSeek(s);
                 return;
             }
@@ -434,14 +466,26 @@ namespace PlxHost
             seek.Deadline = new Timer(_ => Enqueue(epoch, ss => OnSeekDeadline(ss, seek)), null, SeekWaitMs, Timeout.Infinite);
         }
 
-        // PLAYER_SEEK_DONE with b = -1 for every command id the seek answered: the seek did not land.
-        private static void FailSeek(Session s, Seek seek)
+        // PLAYER_SEEK_DONE with the marker (SeekRefused or SeekExpired) in b for every command id the seek answered.
+        private static void FailSeek(Session s, Seek seek, long marker)
         {
             DisarmSeek(seek);
             foreach (long command in seek.Commands)
             {
-                Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, -1);
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, marker);
             }
+        }
+
+        // Answers the command ids of the seek in flight and of the held one with b = -1 and forgets both: the epoch is ending (Release) or
+        // never prepared (a failed open), so nothing will land them.
+        private static void AnswerSeeks(Session s)
+        {
+            Seek now = s.SeekNow;
+            Seek later = s.SeekLater;
+            s.SeekNow = null;
+            s.SeekLater = null;
+            if (now != null) FailSeek(s, now, SeekRefused);
+            if (later != null) FailSeek(s, later, SeekRefused);
         }
 
         private static void DisarmSeek(Seek seek)
@@ -451,14 +495,15 @@ namespace PlxHost
             if (t != null) t.Dispose();
         }
 
-        // The video thread, SeekWaitMs after a seek was sent: still in flight means the callback is not coming. A completion that arrives
-        // after this is taken for the NEXT seek's (the callback carries no token), which is the cost of not waiting for ever.
+        // The video thread, SeekWaitMs after a seek was sent: no completion yet. Expiry is not refusal: the seek may still land, so its ids get
+        // b = -2 (the position is then authoritative) and the next held seek is sent. A completion that arrives after this is credited to the
+        // NEXT seek's ids (the callback carries no token), which is the cost of not waiting for ever.
         private void OnSeekDeadline(Session s, Seek seek)
         {
             if (s.SeekNow != seek) return;
             PlxApp.Log("player: epoch " + s.Epoch + ": a seek did not complete within " + SeekWaitMs + " ms");
             s.SeekNow = null;
-            FailSeek(s, seek);
+            FailSeek(s, seek, SeekExpired);
             SendHeldSeek(s);
         }
 
@@ -515,7 +560,7 @@ namespace PlxHost
         {
             s.Closing = true;
             s.Playing = false;
-            if (s.SeekNow != null) DisarmSeek(s.SeekNow);
+            AnswerSeeks(s); // every command id is answered before PLAYER_CLOSED (the caller posts it after this returns)
             if (s.Handle == IntPtr.Zero) return;
             // A position read or the display bind may be inside the handle: wait for it, with a bound. A read that never returns leaks the handle
             // (the process exit is its teardown) rather than destroying it under the read.

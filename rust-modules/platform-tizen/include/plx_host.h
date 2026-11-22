@@ -137,7 +137,7 @@
  *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
- *       PLAYER_SEEK_DONE(a = command id, b = ms, or -1 when the seek did not land)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
+ *       PLAYER_SEEK_DONE(a = command id, b = ms, or -1 refused, or -2 expired)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
  *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code, or PLX_HOST_PLAYER_FAIL_BASE + n)  PLAYER_INTERRUPTED(a = native code)
  *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)
  *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
@@ -145,10 +145,14 @@
  *     side (about every 250 ms while playing, off the request queue) and posted: there is no synchronous
  *     position call. A read that has not returned after 3 s posts ONE PLAYER_STALL; the host then stops waiting for it (it starts no
  *     second read on that player) and keeps polling the epoch that is current.
- *   - SEEK_DONE always arrives, once per command id, and b says how it went: b = the landed target in ms, or b = -1 when the seek
- *     did not land. A seek the native player refuses answers every command id it carried with b = -1 (no PLAYER_ERROR: the player is
- *     still there) and the next held seek is tried; a seek whose completion callback has not fired within 10 s is given up the same
- *     way, so a player that never answers cannot hold later seeks. A completion that arrives after that is taken for the next seek's.
+ *   - SEEK_DONE always arrives, once per command id, before PLAYER_CLOSED, and b says how it went:
+ *       b >= 0   the seek landed; b is the target in ms.
+ *       b = -1   refused: it did not land. The native player refused it (no PLAYER_ERROR: the player is still there and the next held
+ *                seek is tried), or the epoch ended or never prepared first (a close, or an open that failed, answers every command id
+ *                still held or in flight with b = -1, and a seek sent to a player that is gone is answered the same way).
+ *       b = -2   expired: no completion within 10 s. Expiry is not refusal: the seek MAY STILL LAND, so PLAYER_POSITION is the
+ *                authority on where the player is. The next held seek is then sent while the expired one may still be pending, and a late
+ *                completion is credited to the next seek's command ids (the player's callback carries no token).
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
  *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
  *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,
@@ -195,7 +199,7 @@ extern "C" {
 #define PLX_HOST_EVENT_PLAYER_STARTED 17     /* the host's Start() ran */
 #define PLX_HOST_EVENT_PLAYER_PAUSED 18      /* the host's Pause() ran */
 #define PLX_HOST_EVENT_PLAYER_POSITION 19    /* a = ms; latest wins */
-#define PLX_HOST_EVENT_PLAYER_SEEK_DONE 20   /* a = command id, b = ms; b = -1: it did not land (see player_verb) */
+#define PLX_HOST_EVENT_PLAYER_SEEK_DONE 20   /* a = command id, b = ms; -1 refused, -2 expired (see player_verb) */
 #define PLX_HOST_EVENT_PLAYER_BUFFERING 21   /* a = percent; latest wins */
 #define PLX_HOST_EVENT_PLAYER_VIDEO_SIZE 22  /* a = width, b = height */
 #define PLX_HOST_EVENT_PLAYER_COMPLETED 23   /* playback reached the end (the player's completed callback) */
