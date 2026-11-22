@@ -310,6 +310,7 @@ Citations in this section quote the tree at e9924f0f9 with its old names (see "N
   - `EGL_SONAMES: &[&str] = &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]` (`gfx/src/egl.rs:110`);
   - libcurl's `["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]`
     (`net/src/net/connect_only.rs:14`).
+  (As found, at the time of the review. W8b has since moved both into the platform's `libraries` group.)
 - F28. Branch `samsung/hello-tpk` now carries the hello-world. `git log --oneline
   origin/main..origin/samsung/hello-tpk` lists `72c5cd82a` ("tizen/hello: sign with a Samsung
   certificate profile, stream the log over UDP"), `ab0ba40ca` ("tizen/hello: log without eprint, ...")
@@ -869,14 +870,26 @@ split by who reads it (critic M4):
      and consent is neither read nor written, whatever the authority says; only the install's own preference
      file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
      layers chose their store by; the helper's wake-up (`storage::client::install_activator`) is not a member: its type is the helper's wire diagnostics and `tv` names no `storage` (L15), so it stays a `storage`-owned install point the webOS port calls;
-   - `layout { payload_dir, state_root }` (W9): two `fn() -> PathBuf` hooks, the package's read-only payload directory
-     and the directory the app's record files live under. The type is `plx_base::paths::Layout` (`paths` is below `tv`
+   - `layout { payload_dir, state_root, fallback_dir }` (W9, W8b): two `fn() -> PathBuf` hooks, the package's read-only
+     payload directory and the directory the app's record files live under, and the payload directory of last resort
+     (a `&'static str`: the platform's install prefix, for a process whose `/proc/self/exe` cannot be read; webOS states
+     the Developer Mode one, the desktop and Tizen the neutral `.`, `NO_FALLBACK_DIR`). The type is `plx_base::paths::Layout` (`paths` is below `tv`
      and cannot read it; `tv` re-exports it), and `Platform::install_services` publishes it into a publish-once slot in
      `paths` as its second line, after the `tv` install, so `app_dir()` and `persistent_state_root()` answer from it and
      fall back to the derivation (`current_exe` and the environment) when none was published. `Layout::DERIVED` states
-     "no layout of my own": webOS, the desktop and the host-test value say it, and their `appdir:` line is unchanged.
+     "no layout of my own": the desktop and the host-test value say it (webOS says it with its own `fallback_dir`), and their `appdir:` line is unchanged.
      A publish after `app_dir()` was read, or a second one, is refused (`paths` never logs, so `install_services` logs
      the refusal). The runtime root and the app id stay out: the webOS C shim freezes both before any Rust runs;
+   - `libraries { curl, egl }` (W8b): the OS-owned library names that differ per platform, two ordered `&[&str]` lists:
+     the three libcurl tables (`net`, `curlio`'s `curlmulti`, `connect_only`'s `raw`, declared `dynlib! { curl:
+     platform(curl) { .. } }`) and the EGL probe (`gfx/src/egl.rs`). The type is `plx_base::dynlib::Libraries`
+     (`dynlib` is below `tv`; `tv` re-exports it) and `Platform::install_services` publishes it as its third line,
+     through the same publish-once cell as the layout (`plx_base::choice::Choice`). webOS states curl
+     `["libcurl.so.4", "libcurl.so.5"]` and EGL `["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]`; the desktop the union
+     (adding the Mac's `libcurl.4.dylib`); Tizen `["libcurl.so.4"]` and `["libEGL.so.1"]`. `Libraries::NONE` is the
+     empty statement (a table then reports a missing library with its own log line); a process that published
+     nothing, a host test, reads `Libraries::HOST`, the union. Bundled `-plx` libraries, zlib, gst and a platform
+     crate's own tables (Tizen's Ecore and EGL chain loads before the install) stay literal;
    - `legacy_webos_media { sink, display_sink, uri_media }`: the Starfish, ACB and `com.webos.media` verbs (F31),
      named for what they are (critic M3). Every hook is required (Decision 2, C): a platform states each field,
      a named `NONE` being a statement and a `Default`-filled gap not allowed. The one exemption is this group:
@@ -1243,6 +1256,8 @@ Ecore names to `remote_token_key` pairs".
     own types beside `Exit` and `Release` and do NOT retire at W11a; a platform that is not hosted never names them;
   - `HOST_SINK` (`hostsim` and `play-feed`, the cfg of the module it lives in), the simulator's video sink the desktop's
     `Services` hold, re-exported under exactly that cfg so a television build never has it;
+  - `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile` (W8c-2, no `cfg`): the platform's window ask and the SDL values `InitHooks`
+    carries. They stay with the SDL helpers (no retirement at W11a);
   - `sdl_init`, `sdl_open` and `InitHooks`, which the webOS crate's `port.rs` and the desktop crate's `src/lib.rs` call. `sdl_open` stays in the
     application crate: `impl Surface for plx_shell_sdl::Window` can live only there (the orphan rule).
 
@@ -1850,7 +1865,11 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8b, one row per fact: the library name lists (F27) become per-platform lists supplied through the
   platform (`dynlib!` stays shared); `paths`'s fallback install prefix becomes a platform value; the
   storage helper is packaged only by `PLATFORM=webos`; `main.c` and `starfish.c` are webOS-only.
-  As landed (the Makefile PR): the goals that build the webOS package (`WEBOS_TV_GOALS` in the `Makefile`: `all`, `ipk`, `install`,
+  Rust half done: the first two rows (`tv::Services` states `libraries`, and `layout.fallback_dir`; see the
+  `libraries` and `layout` groups above) and the native-backend `compile_error!`, which moved from the application
+  crate to `plx_platform_webos` (a rule of the webOS build, not of every 32-bit ARM Linux one); the Makefile rows
+  follow.
+  As landed (the Makefile PR, the Makefile rows): the goals that build the webOS package (`WEBOS_TV_GOALS` in the `Makefile`: `all`, `ipk`, `install`,
   `deploy`, `test`, `pkg/plxnative`, the storage helper `pkg/plxnative-storage`, `src/%.o`, `symbols`, `symbols-libs`,
   `sentry-symbols`, `libass`, `sentry-native`) are refused at parse time, above the stamp reset, under an explicit
   `PLATFORM=desktop` or `tizen`; `SRCS` is untouched and no file moved (the keying is the goal, because the one C unit another
@@ -1860,6 +1879,19 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
+  As landed (W8c-2): the SDL shell's host differences are platform values. `Shell::sdl()` returns the platform's `InitHooks`
+    (`steps: InitSteps { before, after, after_context }`, `flavor: SdlFlavor`, `gl: GlProfile`) and `Shell::window()` its
+    `WindowPlan { title, placement }`. webOS states `Lg`, `Es2` and its panel placement (the stored-size ask moved into
+    `platform-webos`); the desktop states `Stock`, `Core41`, `Placement::Desktop` and the VAO bind as `after_context` (it owns the
+    two vertex-array externs, `glGenVertexArrays` and `glBindVertexArray`, which left `gfx`; `gfx` keeps its own `glGetString`); Tizen states `Lg`, `Es2`, no steps and the panel placement a Tizen build compiled
+    before (its own values to confirm on a device, W9). The flavour reaches the decoders as an argument (`decode_key`,
+    `decode_wheel_dy`, `encode_key`, `encode_key_repeat`, `text_off`, through `App::sdl_flavor()`), never a process-global, and the
+    window flags derive from `Placement` (`window_flags_of`); `surface::probe` takes a `DrawableNote` instead of reading a cfg. Both
+    layouts now run in the default test pass (`plx_shell_sdl` 46 -> 49 default tests). Lines naming `feature = "hostsim"`
+    (`git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`, at `221cb3dc0` and this branch's head): 235 -> 207, a delta of 28
+    (`shell-sdl` 30 -> 18, `src/app` 94 -> 79, `gfx.rs` 9 -> 7, `base/src/surface.rs` 14 -> 13). Left as they are (S lines):
+    supersample, compositor model, the dump switch, the desktop window fit, the three desktop-only SDL externs, `ENV_STEERABLE`.
+    `host` gained `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile`; like the SDL helpers beside them they do not retire at W11a.
   As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
   likewise (`shared.rs` hooks `any(test, test-support)`); `ffi_host` is two exclusive declarations of one file (`hostsim`;
   `any(test, test-support)` without it), because one `cfg` mixing `hostsim` with `test` is a production-visible fork the

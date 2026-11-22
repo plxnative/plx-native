@@ -125,7 +125,7 @@ base
 
 | layer | members | prod lines | an edit there recompiles |
 |---|---|---:|---:|
-| base | `eventlog paths task cbuf sha256 sha1 b64 spki dynlib checkpoint storage_worker fontcov surface tile hold detail_parts devtrig diag::{zlib,spans,heartbeat} testlock testnet testscratch testrace` | 9k | everything |
+| base | `eventlog choice paths task cbuf sha256 sha1 b64 spki dynlib checkpoint storage_worker fontcov surface tile hold detail_parts devtrig diag::{zlib,spans,heartbeat} testlock testnet testscratch testrace` | 9k | everything |
 | machine | `ui::{machine,present,idle,landgate,landing,motion}` | 4k | 97% |
 | os | `webos storage keymanager devcaps imgcache i18n labcfg tv` | 11k | 96% |
 | gfx | `gfx egl text rtl img svg gpu_timer hwcnt overdraw dump` | 15k | 68% |
@@ -203,9 +203,8 @@ gates as every other layer, and as machine code.
 
 `shell_sdl` is a twentieth layer, declared the same way. Its crate is `plx_shell_sdl` (`rust-modules/shell-sdl/`);
 its layer may use `base`, `machine` and `os` and the crate names `plx_base` alone. It is the SDL half of the shell that the
-television and the simulator share: `SDL_Init` and the GL request, the window (the panel's size and its smaller
-fallback, and under `hostsim` the desktop fit), the swap and its interval, the event poll and decode (LG's fork layout
-on the device, stock SDL2 under `hostsim`), the synthetic key, pointer, wheel and lifecycle events the remote FIFO, Lab Control, replay and the cursor-swap OK push back
+television and the simulator share: `SDL_Init` and the GL request, the window (the placement the platform asks for: the panel's size and its smaller
+fallback, or the desktop fit), the swap and its interval, the event poll and decode (the layout the platform states as its `SdlFlavor`: LG's fork on the device, stock SDL2 on the desktop), the synthetic key, pointer, wheel and lifecycle events the remote FIFO, Lab Control, replay and the cursor-swap OK push back
 into the queue (a text event is built as bytes and handed to the decode, never pushed: pushing one crashes the Mac's SDL), and the text-input calls. The LG half does not move: the `SDL_SysWMinfo` buffer, the `wl_proxy_marshal`
 opaque region and the LS2 pump stay in `system.rs` (now `platform-webos/src/system.rs`), a member of `[platform webos]`, and a pin in the crate's `lib.rs` fails
 if the crate names the query that overruns it. The application reaches it through `app/platform.rs`, whose `Shell` opens a
@@ -366,7 +365,7 @@ L15's 44 entries, 205 references of which 95 were in production code. The port's
 their layers, so none of this held up the split.
 
 L15 moved every one of those references behind an interface in `os`'s new `tv` module that
-the port fills at boot. `tv::Services` is a table of function pointers and stated values in six groups (`identity`, `secure`, `system`, `storage`, `layout` and `legacy_webos_media`; `layout` is `plx_base::paths`'s type, which `install_services` publishes into `paths` rather than keeping in `tv`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
+the port fills at boot. `tv::Services` is a table of function pointers and stated values in seven groups (`identity`, `secure`, `system`, `storage`, `layout`, `libraries` and `legacy_webos_media`; `layout` is `plx_base::paths`'s type and `libraries` is `plx_base::dynlib`'s, which `install_services` publishes into those modules rather than keeping in `tv`, both through the one publish-once cell `plx_base::choice::Choice`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
 that reads it. With nothing installed (host unit
 tests, where nothing calls `plex_run`) `tv::Services::HOST_TEST` answers what the host arms answered before; a
 shipping build that reaches it logs `tv: port not installed - using the no-port defaults` once.
