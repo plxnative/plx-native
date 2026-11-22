@@ -1647,6 +1647,9 @@ impl PlayerAdapter {
             plx_playback_contract::Observation::Failed(failure) => {
                 facts.status = Some(plx_playback_contract::readout::PlaybackState::Error);
                 facts.runtime_failure = Some(match failure {
+                    // A timeout of a title that was playing is a stall (a frozen picture), not a load that never answered.
+                    Failure::TimedOut if facts.playing_observed == Some(true) =>
+                        plx_playback_contract::readout::RuntimeFailure::PlaybackInterrupted,
                     Failure::TimedOut => plx_playback_contract::readout::RuntimeFailure::LoadTimeout,
                     Failure::ReleaseUncertain => plx_playback_contract::readout::RuntimeFailure::ReleaseTimeout,
                     Failure::Refused | Failure::Unsupported | Failure::Backend =>
@@ -2422,6 +2425,31 @@ mod uri_stop_refusal_tests {
         adapter.publish_uri_observation(&mut ps, attempt, say(Playback::Playing));
         assert_eq!(facts(&ps), (Some(S::Playing), Some(false)),
             "a Playing report after a lost bufferingEnd ends the rebuffer");
+    }
+
+    /// **A stall of a URI title that was playing reads as "stopped", not as a load that never answered.** The driver reports a
+    /// stalled picture as `Failed(TimedOut)` (the same observation as a start that never completed), and the read-out used to map it
+    /// to `LoadTimeout` whichever phase it came in: "the television did not answer in time" about a title the viewer had been watching.
+    /// After `Playing` was observed it is `PlaybackInterrupted`; before it, a start that never completed, it stays `LoadTimeout`.
+    #[test]
+    fn a_uri_stall_after_playing_reads_as_stopped_and_a_start_that_never_completed_as_a_timeout() {
+        use plx_playback_contract::readout::RuntimeFailure as R;
+        let _serial = plx_base::testlock::serial();
+        let mut adapter = PlayerAdapter::new_fed(unsafe { MainThread::assume() });
+        let route = crate::route::RouteStartAttempt::fixture();
+        adapter.uri_route_attempt = Some(route);
+        let attempt = route.contract_id();
+        let failed = Observation::Failed(Failure::TimedOut);
+        let mut ps = crate::route::PlaybackSession::default();
+        ps.begin_attempt_view(route, super::super::attempt_view::Backend::Uri);
+        adapter.publish_uri_observation(&mut ps, attempt, failed);
+        assert_eq!(ps.attempt_view().facts().runtime_failure, Some(R::LoadTimeout), "a start that never completed");
+        let mut ps = crate::route::PlaybackSession::default();
+        ps.begin_attempt_view(route, super::super::attempt_view::Backend::Uri);
+        adapter.publish_uri_observation(&mut ps, attempt, Observation::Playback(Observed {
+            value: Playback::Playing, from: EvidenceSource::BackendReport }));
+        adapter.publish_uri_observation(&mut ps, attempt, failed);
+        assert_eq!(ps.attempt_view().facts().runtime_failure, Some(R::PlaybackInterrupted), "a stall of a playing title");
     }
 
     #[test]

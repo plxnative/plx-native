@@ -1108,6 +1108,50 @@ mod backend_offer_session_tests {
         restore_quality(Quality::Original);
     }
 
+    /// **A failed URI original is not re-resolved when no composed backend could play what the re-resolve would offer.** The
+    /// stall on a Tizen title (no Feed, a provider that certifies no converted output) used to count the still-unknown PMS offers as
+    /// "a backend remains", close the player, re-resolve with the original spent and end in `NoQualifiedBackend`: the viewer saw
+    /// "The server cannot play or convert this file" about a title that had been playing, ~30 s after the real stall. Now the
+    /// prospect is false for that composition (the failure is the terminal read-out) and unchanged for a Feed or a converting
+    /// provider.
+    #[test]
+    fn a_failed_uri_original_is_not_retried_when_no_composed_backend_could_carry_the_retry() {
+        use super::super::uri_preflight::{CarrierQualifier, ProductEvidence, ResolvePort};
+        let caps = plx_playback_contract::Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false,
+            pause: true, seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: false };
+        let evidence = ProductEvidence {
+            display: plx_playback_contract::uri::DisplayEvidence::ready("test"),
+            callable: caps,
+            certified: caps,
+        };
+        let mut session = PlaybackSession::IDLE;
+        session.install_backends(plx_playback_contract::BackendSet::URI);
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(DefaultStreamOnly)));
+        session.request = Some(PlaybackRequest { sid: ServerId::UNSET, rk: "42".into(),
+            part: "/library/parts/7".into(), vcodec: "h264".into(), acodec: "aac".into(),
+            title: "Film".into(), ctx: String::new(), preview: false, version: None,
+            show_rk: String::new() });
+        let mut policy = super::super::backend_policy::BackendPolicy::for_request(false);
+        policy.qualify(BackendKind::Uri, OfferId::URI_ORIGINAL, Qualification::Qualified);
+        assert!(policy.admitted(BackendKind::Uri, OfferId::URI_ORIGINAL));
+        assert!(policy.has_remaining_backend(BackendKind::Uri), "the PMS offers are unknown, which is the overcount");
+        session.backend_policy = Some(policy);
+        let attempt = RouteStartAttempt::fixture();
+        session.begin_attempt_view(attempt, crate::player::attempt_view::Backend::Uri);
+        for phase in [UriFailurePhase::Startup, UriFailurePhase::Runtime] {
+            assert!(!session.can_retry_uri_after_release(attempt, OfferId::URI_ORIGINAL, phase, Some(42_000_000_000)),
+                "{phase:?}: nothing composed could play the converted output the retry would offer");
+        }
+        // A provider that certifies a converted output, or a Feed, keeps the retry (webOS behaviour is unchanged).
+        session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
+        assert!(session.can_retry_uri_after_release(attempt, OfferId::URI_ORIGINAL, UriFailurePhase::Runtime,
+            Some(42_000_000_000)));
+        session.install_uri_preflight_port(None);
+        session.install_backends(plx_playback_contract::BackendSet::BOTH);
+        assert!(session.can_retry_uri_after_release(attempt, OfferId::URI_ORIGINAL, UriFailurePhase::Runtime,
+            Some(42_000_000_000)));
+    }
+
     #[test]
     fn qualified_original_feed_precedes_uri_conversion_then_uri_precedes_feed_conversion() {
         let mut session = PlaybackSession::IDLE;
@@ -1349,6 +1393,14 @@ impl PlaybackSession {
             .then_some(self.uri_recovery_pending).flatten()
     }
 
+    /// Whether a URI retry, once the failed original is spent, could end in a play. Every URI offer still remaining at that
+    /// point is a conversion by the server (the PMS remux or transcode), which only a provider that certifies a converted output
+    /// can qualify; on a composition without a Feed whose provider certifies none (Tizen) the remaining offers stay
+    /// unknown for ever and the re-resolve ends in `NoQualifiedBackend`, a refusal of a title that was playing. (The policy lists
+    /// the Feed's offers whether or not a Feed is composed, so the Feed arm of the prospect also asks the composition.) It is
+    /// the same provider flag as [`Self::source_track_change_carriable`], read for the same reason.
+    fn uri_retry_can_convert(&self) -> bool { self.source_track_change_carriable() }
+
     /// Prospect only. The adapter still owns exact URI Release; this does not start a resolve,
     /// spend an offer or retire a PMS resource while the native object might be live.
     pub fn can_retry_uri_after_release(&self, attempt: RouteStartAttempt,
@@ -1359,8 +1411,9 @@ impl PlaybackSession {
             && self.attempt_view.attempt() == Some(attempt)
             && self.request.as_ref().is_some_and(|request| !request.preview)
             && policy.can_reopen(plx_playback_contract::BackendKind::Uri, offer_id)
-            && (policy.has_remaining_backend(plx_playback_contract::BackendKind::Feed)
-                || policy.has_remaining_backend(plx_playback_contract::BackendKind::Uri))
+            && ((self.backends.feed && policy.has_remaining_backend(plx_playback_contract::BackendKind::Feed))
+                || (policy.has_remaining_backend(plx_playback_contract::BackendKind::Uri)
+                    && self.uri_retry_can_convert()))
             && match phase {
                 UriFailurePhase::Startup => self.requested_resume_ns >= 0,
                 UriFailurePhase::Runtime => known_position_ns.is_some_and(|ns| ns >= 0),
@@ -11579,6 +11632,7 @@ pub fn pump_play(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata
             if pms_offer_prepared {
                 ps.pms_decline = Some(super::uri_preflight::PmsDecline::StaleOrMismatched);
             }
+            crate::player::log(&super::plan::no_backend_text(None, ps.pms_decline));
         }
         return None;
     }

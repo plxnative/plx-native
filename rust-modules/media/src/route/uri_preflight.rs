@@ -498,6 +498,25 @@ pub enum PmsDecline {
     UnexecutableSelection,
 }
 
+impl PmsDecline {
+    /// The reason as a short phrase for the refused-play log line. No parentheses: the line wraps it in one.
+    pub fn log_name(self) -> &'static str {
+        match self {
+            Self::UnsupportedIntent => "the requested output is not one a URI player carries",
+            Self::MissingSourceFacts => "the source's facts are missing",
+            Self::UnavailableCapability => "no composed backend can play a server-converted output",
+            Self::MissingOutputEvidence => "no certificate for a server-converted output",
+            Self::UnknownCertificate => "the converted output's certificate is unknown",
+            Self::ProviderRefused => "the URI provider refused the converted output",
+            Self::AppFixedControllerUnavailable => "the app-fixed controller is unavailable",
+            Self::UnmappedClock => "the converted output's clock is not mapped to the source",
+            Self::NoReleaseProof => "no proof the converted output can be released",
+            Self::StaleOrMismatched => "the prepared offer went stale or no longer matched",
+            Self::UnexecutableSelection => "the track selection cannot be executed on the converted output",
+        }
+    }
+}
+
 /// The caller supplies the actual Part URL and selected source tracks. An implementation may
 /// perform bounded IO only with the worker's OffFrame proof; it must not infer a URI certificate
 /// from Feed's codec table, MDE answer or native ACK. [`OriginalRequest::standard`] is no certificate
