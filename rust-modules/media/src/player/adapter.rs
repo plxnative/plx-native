@@ -1381,6 +1381,9 @@ impl PlayerAdapter {
         }, released: false });
     }
 
+    /// The attempt's final `stopped` has not been handed over yet ([`Self::finalize_uri_once`] has not run).
+    pub(super) fn uri_final_report_owed(&self) -> bool { !self.uri_finalized }
+
     pub(super) fn finalize_uri_once(&mut self) -> bool {
         if self.uri_finalized { false } else {
             self.uri_finalized = true;

@@ -1057,7 +1057,15 @@ pub fn pump_uri_restore(
 ) {
     if let Some(resume_ns) = pa.take_uri_restore_request() {
         log(&format!("resume(uri): re-resolving the parked source at {}s", resume_ns / 1_000_000_000));
-        if !crate::route::restore_uri_original(ps, meta, resume_ns, parked_final_report(ps)) {
+        // A report already handed over (an earlier restore the door refused) is not owed again: the attempt is finalized.
+        let report = if pa.uri_final_report_owed() { parked_final_report(ps) } else { None };
+        let door = crate::route::restore_uri_original(ps, meta, resume_ns, report);
+        if door.reported {
+            // The stop went out before the door was asked (the second resolve waits behind it), so the attempt owes nothing
+            // more whether or not the door took the re-resolve: a refusal leaves it parked, and its exit must not report it again.
+            pa.finalize_uri_once();
+        }
+        if !door.started {
             pa.settle_uri_restore(ResumeOutcome::RebuildRejected);
         }
         return;

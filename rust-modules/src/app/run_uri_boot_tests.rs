@@ -2139,6 +2139,47 @@ mod uri_boot_tests {
         plx_os::tv::plane::installed().reset_for_test();
     }
 
+    /// **A restore the request door refuses has already reported the parked attempt stopped, and the exit does not report it
+    /// again.** The restore sends A's `stopped` BEFORE the door is asked (the replacement's resolve waits behind it), but nothing
+    /// marked A finalized, so a door that refused left A parked and owing the stop it had sent: the exit's
+    /// `parked_uri_owes_stop` (or the next foreground's restore) reported A stopped a second time.
+    #[test]
+    fn a_refused_restore_leaves_the_parked_attempt_reported_once_and_its_exit_does_not_report_it_again() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        play_uri_to_twelve_seconds(&mut rig, bus);
+        park_playback(&mut rig.app);
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let stops = |rig: &Rig| rig.requests.lock().unwrap().iter()
+            .filter(|r| r.contains("/:/timeline") && r.contains("state=stopped")).cloned().collect::<Vec<_>>();
+        // A route transition owns the player: the request door refuses the restore's re-resolve.
+        plx_media::route::force_applying_for_test(4242);
+        did_foreground_with_link(&mut rig.app);
+        poll_until("the restore never reported A stopped", || {
+            window_frame(&mut rig);
+            plx_media::route::drain_scrobble();
+            !stops(&rig).is_empty()
+        });
+        poll_until("the refused restore never settled", || {
+            window_frame(&mut rig);
+            !rig.app.adapters.player.uri_restore_outstanding()
+        });
+        assert_eq!(bus.shapes().len(), 1, "the door refused: no second native session was opened");
+        assert_eq!(stops(&rig).len(), 1, "the restore reported A stopped once");
+        super::end_playback_for_exit(&mut rig.app.player.session, &mut rig.app.adapters.player);
+        plx_media::route::drain_scrobble();
+        let all = rig.requests.lock().unwrap().clone();
+        assert_eq!(stops(&rig).len(), 1, "the exit does not report the already reported attempt again: {all:?}");
+        plx_os::tv::plane::installed().reset_for_test();
+    }
+
     /// **An ended URI attempt with no player page is stopped once, not on every frame of its release.** The EOS orphan
     /// branch (`playback_tick`) stops an engine nothing owns, and a URI attempt's release is a close the host confirms
     /// several frames later while the attempt still reads "needing teardown" (the Tizen emulator logged the line five times

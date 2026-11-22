@@ -11243,15 +11243,18 @@ pub fn retry_declined_uri_source(ps: &mut PlaybackSession,
 /// Streaming Resource open; a new resolve cannot start under a standing transaction, and the old resource is not the
 /// new source's. So the transaction is ended as a failed start (as a declined source's is), the resource is retired,
 /// (with the parked attempt's own `stopped` timeline, at its own position, sent first when `parked_final_report` carries one) and the request goes through the common door as a NEW attempt of the same item (`begin_attempt`: the opened recipe
-/// is not spent for a title that is being reopened after a park, as a Retry press's is not). `false` when there is nothing to re-resolve or the
-/// request door refuses (the restore then answers `RebuildRejected` and the session stays parked).
+/// is not spent for a title that is being reopened after a park, as a Retry press's is not). The answer says whether the re-resolve
+/// started (`started`; when the door refuses, the restore answers `RebuildRejected` and the session stays parked) and whether the
+/// parked attempt's report was handed to the stop worker (`reported`): the caller marks the attempt finalized on it, because the
+/// stop goes out BEFORE the door is asked (the second resolve waits behind it) and a refused door must not leave the attempt owing it again.
 pub fn restore_uri_original(ps: &mut PlaybackSession,
     meta: &mut plx_data::stores::metadata::MetadataStore, resume_ns: i64,
-    parked_final_report: Option<(String, i64, i64)>) -> bool {
-    if !uri_restore_owed(ps) { return false; }
-    let Some(request) = ps.request.clone() else { return false };
+    parked_final_report: Option<(String, i64, i64)>) -> UriRestoreStart {
+    let mut answer = UriRestoreStart { started: false, reported: false };
+    if !uri_restore_owed(ps) { return answer; }
+    let Some(request) = ps.request.clone() else { return answer };
     if let Some(ticket) = pending_route_start() {
-        if !abort_route_start(ticket, RouteStartResult::StartFailed) { return false; }
+        if !abort_route_start(ticket, RouteStartResult::StartFailed) { return answer; }
     }
     let active = worker_ticket();
     let owned = if ps.tsession.is_empty() { ps.sess.clone() } else { ps.tsession.clone() };
@@ -11262,6 +11265,7 @@ pub fn restore_uri_original(ps: &mut PlaybackSession,
         // (`report_timeline`) would post A's stop late, at the REPLACEMENT's position. Nothing else owns the encoder of a parked
         // session, so the worker takes it whether or not the ticket still names it.
         scrobble_stop(ps, parked_final_report, None);
+        answer.reported = true;
     } else if !owned.is_empty() && active.encoder() == owned && replace_active_encoder_for(&active, "").is_some() {
         let mut identities = vec![owned.clone()];
         if !ps.sess.is_empty() && ps.sess != owned { identities.push(ps.sess.clone()); }
@@ -11271,9 +11275,19 @@ pub fn restore_uri_original(ps: &mut PlaybackSession,
     let mut retry = current_retry_context(ps, resume_ns.max(0));
     retry.candidate_purpose = CandidatePurpose::NewCandidate;
     let caps = ps.attempt_caps();
-    request_play_with_queue(ps, meta, caps, request, Some(retry),
+    answer.started = request_play_with_queue(ps, meta, caps, request, Some(retry),
         Some(playback_trace_generation()), false,
-        crate::player::report::AttemptOrigin::Resume, None, false, None)
+        crate::player::report::AttemptOrigin::Resume, None, false, None);
+    answer
+}
+
+/// What [`restore_uri_original`] did (see there).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UriRestoreStart {
+    /// The re-resolve of the item began.
+    pub started: bool,
+    /// The parked attempt's `stopped` report was handed to the ordered stop worker.
+    pub reported: bool,
 }
 
 /// Re-resolve one failed URI attempt through an unspent recipe after its native registration
