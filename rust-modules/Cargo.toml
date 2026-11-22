@@ -176,10 +176,13 @@ placeholder-sentinel = ["plx_ui/placeholder-sentinel"]
 # this one, so feature unification can never enable it behind someone's back. Do not give it
 # a mutually-exclusive partner feature; the television is the DEFAULT, and the simulator opts in.
 #
-# What it changes, and nothing else: the media seam (29 symbols that exist only on a television) and the
+# What it changes: the media seam (29 symbols that exist only on a television) and the
 # simulator's own video sink and compositor stand-in, the supersampled present, the frame-dump switch, the
-# environment-steerable runtime root (`paths::ENV_STEERABLE`), and the desktop window fit with its three
-# desktop-only SDL calls in `plx_shell_sdl`. The GL context request (macOS has no GLES2 driver), the window
+# environment-steerable runtime root (`paths::ENV_STEERABLE`), the desktop window fit with its three
+# desktop-only SDL calls in `plx_shell_sdl`, the font-slot and glyph-cache sizes (`gfx/src/text.rs`:
+# `FONT_SLOTS` and `TCACHE`, larger for a desktop) and the environment locale and clock overrides
+# (`PLXNATIVE_FORMAT_LOCALE`, `PLXNATIVE_CLOCK`, `PLXNATIVE_LOCALE`, in `os/src/i18n/mod.rs`), besides the
+# simulator-only developer tooling and its tests. The GL context request (macOS has no GLES2 driver), the window
 # flags and the keyboard, wheel and text layouts (LG's SDL fork shifts SDL_KeyboardEvent; stock SDL2 does
 # not) are NOT its: since W8c-2 they are values the platform states (`Shell::sdl()`, `Shell::window()`), so
 # the desktop platform's table carries them. Since W7 nothing else of the platform is its either: the desktop

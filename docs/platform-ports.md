@@ -1897,7 +1897,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   the simulator's sink and compositor stand-in, the supersampled present, the dump switch, the steerable runtime root, the desktop window fit):
   the GL context request, the window flags and the key, wheel and text layouts are platform values and are not its. The two readonly
   certificates (`ci/proofs/serde-json-immutable.json`, `ci/proofs/platform-generated-enums.json`) pin the manifests and `os/build_support/catalog.rs`,
-  `os/src/i18n/mod.rs` and the application's `src/lib.rs`, all of which this rename touches, so they are re-sealed by the owner in a following commit.
+  `os/src/i18n/mod.rs` and the application's `src/lib.rs`, all of which this rename touches, so they are re-sealed in this change (owner-approved), as its last commit.
   As landed (W8c-3, the frame seam): `Shell::frame` is a required hook returning a `FrameSeam { pacer: Pacer,
   present: Present }` (each group has a `NONE`), `FrameProbe::heartbeat_tag` a required method and
   all reachable through `host`. The webOS and Tizen platforms state `FrameSeam::NONE` and `""`; the desktop states the WSLg-aware pacer
