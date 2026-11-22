@@ -1242,6 +1242,8 @@ Ecore names to `remote_token_key` pairs".
     own types beside `Exit` and `Release` and do NOT retire at W11a; a platform that is not hosted never names them;
   - `HOST_SINK` (`hostsim` and `play-feed`, the cfg of the module it lives in), the simulator's video sink the desktop's
     `Services` hold, re-exported under exactly that cfg so a television build never has it;
+  - `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile` (W8c-2, no `cfg`): the platform's window ask and the SDL values `InitHooks`
+    carries. They stay with the SDL helpers (no retirement at W11a);
   - `sdl_init`, `sdl_open` and `InitHooks`, which the webOS crate's `port.rs` and the desktop crate's `src/lib.rs` call. `sdl_open` stays in the
     application crate: `impl Surface for plx_shell_sdl::Window` can live only there (the orphan rule).
 
@@ -1852,6 +1854,18 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
+  - As landed (W8c-2): the SDL shell's host differences are platform values. `Shell::sdl()` returns the platform's `InitHooks`
+    (`steps: InitSteps { before, after, after_context }`, `flavor: SdlFlavor`, `gl: GlProfile`) and `Shell::window()` its
+    `WindowPlan { title, placement }`. webOS states `Lg`, `Es2` and its panel placement (the stored-size ask moved into
+    `platform-webos`); the desktop states `Stock`, `Core41`, `Placement::Desktop` and the VAO bind as `after_context` (it owns the
+    three GL externs, so `gfx` names none of them); Tizen states `Lg`, `Es2`, no steps and the panel placement a Tizen build compiled
+    before (its own values to confirm on a device, W9). The flavour reaches the decoders as an argument (`decode_key`,
+    `decode_wheel_dy`, `encode_key`, `encode_key_repeat`, `text_off`, through `App::sdl_flavor()`), never a process-global, and the
+    window flags derive from `Placement` (`window_flags_of`); `surface::probe` takes a `DrawableNote` instead of reading a cfg. Both
+    layouts now run in the default test pass (`plx_shell_sdl` 46 -> 49 default tests). `feature = "hostsim"` lines in `.rs` files:
+    317 -> 289 (`shell-sdl` 30 -> 18, `src/app` 94 -> 79, `gfx.rs` 9 -> 7, `base/src/surface.rs` 14 -> 13). Left as they are (S lines):
+    supersample, compositor model, the dump switch, the desktop window fit, the three desktop-only SDL externs, `ENV_STEERABLE`.
+    `host` gained `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile`; like the SDL helpers beside them they do not retire at W11a.
 - Verify: the F9/F12 grep count before and after; `ci/check-ledger-ratchet.py` at or below every family
   total (a host difference that needs IO becomes a runner, never a `forks/` line); fw-compat-reviewer on
   W8b; a build-bench table for W8b. Risk: size. W8c blocks nothing Tizen needs; only W8a does.
