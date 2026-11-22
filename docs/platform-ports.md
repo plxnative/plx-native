@@ -1260,6 +1260,8 @@ Ecore names to `remote_token_key` pairs".
     supersampled copy to the window. They draw (`plx_gfx`, the decoded picture), so they stay in the application and the desktop's
     `FrameSeam` states them beside the pacer it owns. It retires with the simulator's picture (`adapters::hostsim`) at W11a;
     `FrameSeam`, `Pacer` and `Present` themselves do not retire;
+  - `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile` (W8c-2, no `cfg`): the platform's window ask and the SDL values `InitHooks`
+    carries. They stay with the SDL helpers (no retirement at W11a);
   - `sdl_init`, `sdl_open` and `InitHooks`, which the webOS crate's `port.rs` and the desktop crate's `src/lib.rs` call. `sdl_open` stays in the
     application crate: `impl Surface for plx_shell_sdl::Window` can live only there (the orphan rule).
 
@@ -1883,12 +1885,26 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`host::SIM_PRESENT`: compose-under on a bound frame and the supersampled copy to the window), and ` sim=1`. The app's preview-admission `seam_absent` asks the sink
   (`VideoSink::lacks_video_path`, W8c-1). The two arms no CI configuration builds (`hostsim` without `play-feed`:
   `dev/scenarios.rs` autopause `at=`, `dev/scenarios/screenshot.rs` clockstop) are deleted. `feature = "hostsim"`
-  lines in `rust-modules` fall by 17, all in the application crate (`dev`, `host` and the desktop platform). The
+  lines in `rust-modules` (`git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`, at `65e2044cd` and this
+  branch's head): 207 -> 188, a delta of 19. The
   application reads the seam from `App::frame`, asked once at boot, so a TV's frame path makes no `dyn Shell` call
   per frame, only the empty hooks. The test lists of `plxnative-modules` (default and `hostsim`) and
   `plx_platform_webos` are unchanged; `plx_platform_desktop`'s `lib.rs` goes 6 -> 7 and its Linux-only
   `pacer.rs` adds 3, so 6 -> 10 on a Linux build. The `not(hostsim)` term of `src/lib.rs`'s `compile_error!` stays
   for W8b.
+  As landed (W8c-2): the SDL shell's host differences are platform values. `Shell::sdl()` returns the platform's `InitHooks`
+    (`steps: InitSteps { before, after, after_context }`, `flavor: SdlFlavor`, `gl: GlProfile`) and `Shell::window()` its
+    `WindowPlan { title, placement }`. webOS states `Lg`, `Es2` and its panel placement (the stored-size ask moved into
+    `platform-webos`); the desktop states `Stock`, `Core41`, `Placement::Desktop` and the VAO bind as `after_context` (it owns the
+    two vertex-array externs, `glGenVertexArrays` and `glBindVertexArray`, which left `gfx`; `gfx` keeps its own `glGetString`); Tizen states `Lg`, `Es2`, no steps and the panel placement a Tizen build compiled
+    before (its own values to confirm on a device, W9). The flavour reaches the decoders as an argument (`decode_key`,
+    `decode_wheel_dy`, `encode_key`, `encode_key_repeat`, `text_off`, through `App::sdl_flavor()`), never a process-global, and the
+    window flags derive from `Placement` (`window_flags_of`); `surface::probe` takes a `DrawableNote` instead of reading a cfg. Both
+    layouts now run in the default test pass (`plx_shell_sdl` 46 -> 49 default tests). Lines naming `feature = "hostsim"`
+    (`git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`, at `221cb3dc0` and this branch's head): 235 -> 207, a delta of 28
+    (`shell-sdl` 30 -> 18, `src/app` 94 -> 79, `gfx.rs` 9 -> 7, `base/src/surface.rs` 14 -> 13). Left as they are (S lines):
+    supersample, compositor model, the dump switch, the desktop window fit, the three desktop-only SDL externs, `ENV_STEERABLE`.
+    `host` gained `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile`; like the SDL helpers beside them they do not retire at W11a.
   As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
   likewise (`shared.rs` hooks `any(test, test-support)`); `ffi_host` is two exclusive declarations of one file (`hostsim`;
   `any(test, test-support)` without it), because one `cfg` mixing `hostsim` with `test` is a production-visible fork the
