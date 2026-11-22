@@ -159,7 +159,9 @@ class SimulatorBackend(unittest.TestCase):
             if m:
                 target = m.group(1)
             if target in ("screenshots-sim", "site-video-sim"):
-                by_target.setdefault(target, set()).update(feature_flags(re.split(r"\s+", line))[1])
+                flags = feature_flags(re.split(r"\s+", line))[1]
+                if "sim" in flags:  # one cargo line that names the feature, not any line of the recipe
+                    by_target.setdefault(target, set()).update(flags)
         for target in ("screenshots-sim", "site-video-sim"):
             with self.subTest(target):
                 self.assertIn("play-feed", by_target.get(target, set()), f"make {target} lacks play-feed")
