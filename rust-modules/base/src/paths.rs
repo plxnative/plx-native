@@ -48,11 +48,11 @@ use std::sync::OnceLock;
 /// on a television.
 ///
 /// This used to be two different gates for the same kind of override — `devtriggers` for the
-/// runtime root, `hostsim` for the app dir. `devtriggers` is on in every dev TV build, so the
-/// split-brain above was reachable on the device; and a `--no-default-features --features hostsim`
+/// runtime root, `sim` for the app dir. `devtriggers` is on in every dev TV build, so the
+/// split-brain above was reachable on the device; and a `--no-default-features --features sim`
 /// build had the opposite hole, writing its event log to a shared `/tmp` while the simulator
 /// binary truncated one inside the instance root.
-pub const ENV_STEERABLE: bool = cfg!(feature = "hostsim");
+pub const ENV_STEERABLE: bool = cfg!(feature = "sim");
 
 /// The app id this project ships to users, and the one every install falls back to.
 ///
@@ -1571,7 +1571,7 @@ mod tests {
 /// does not gets [`test_default_persistent_state_root`] — a directory keyed by this process's pid,
 /// the same idiom `session::fallback_file()` already uses for `auth.json`. Before this existed, an
 /// un-redirected test reached `runtime_dir().join("state")`, i.e. the real, shared `/tmp/state`
-/// (`ENV_STEERABLE` is `cfg!(feature = "hostsim")`, so this was every `hostsim` test) — writable by
+/// (`ENV_STEERABLE` is `cfg!(feature = "sim")`, so this was every `sim` test) — writable by
 /// every worktree, every concurrent `cargo test` run and any running `make sim` on the same
 /// machine, and readable by an unrelated test's `session::prepare_load`/`ReadState` mapping as a
 /// real signed-in record. That cross-run pollution is what made

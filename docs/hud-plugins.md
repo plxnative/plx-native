@@ -249,7 +249,7 @@ Other subsystems the plan touches
   reader exists, private (`ui/src/rec/strict_json.rs`, `mod strict_json;` at `ui/src/rec.rs:40`); no JSON
   Schema crate (`grep -c 'name = "schemars"\|name = "jsonschema"' Cargo.lock` prints 0); `plx_ui` already
   depends on `serde_json` (`ui/Cargo.toml:50`). The lint host is the existing `plxnative-sim` bin
-  (`Cargo.toml:64-67`, `required-features = ["hostsim"]`); dev triggers are the default `devtriggers`
+  (`Cargo.toml:64-67`, `required-features = ["sim"]`); dev triggers are the default `devtriggers`
   feature, absent from the shipping `--no-default-features` set (`Cargo.toml:73`, `:88`).
 
 ## Decisions (with reasons)
