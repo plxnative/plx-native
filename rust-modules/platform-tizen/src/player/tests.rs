@@ -376,6 +376,38 @@ fn a_paused_player_a_seek_in_flight_and_host_buffering_are_not_a_frozen_picture(
     assert!(!events.iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Rebuffering(_), .. })), "{events:?}");
 }
 
+/// A host buffering period is not part of the frozen-picture clock: the position the host reports holds while it buffers,
+/// so leaving the period starts the baseline afresh (as a pause, a play and a seek do). Without that, Buffering(100) after
+/// the grace re-armed a stall at once and the readout flapped between Rebuffering(false) and Rebuffering(true).
+#[test]
+fn leaving_host_buffering_starts_the_frozen_picture_clock_afresh() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared(&mut driver, &fake, 1);
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    poll(&mut driver);
+    fake.post(epoch, PlayerKind::Buffering, 40, 0);
+    let events = poll(&mut driver);
+    assert!(events.contains(&observation(a, Observation::Rebuffering(seen(true)))), "{events:?}");
+    // Buffered for longer than the frozen grace with the position holding; then the host reports the buffer full.
+    fake.advance(150);
+    fake.post(epoch, PlayerKind::Buffering, 100, 0);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    let events = poll(&mut driver);
+    assert_eq!(events.iter().filter(|e| matches!(e, DriverEvent::Observation { observation: Observation::Rebuffering(_), .. })).count(), 1,
+        "only the exit of the buffering period is reported, no stall is re-armed from the old baseline: {events:?}");
+    assert!(events.contains(&observation(a, Observation::Rebuffering(seen(false)))), "{events:?}");
+    // A picture that then really holds is a stall after a full grace of its own.
+    fake.advance(90);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    let events = poll(&mut driver);
+    assert!(!events.contains(&observation(a, Observation::Rebuffering(seen(true)))), "{events:?}");
+    fake.advance(20);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    let events = poll(&mut driver);
+    assert!(events.contains(&observation(a, Observation::Rebuffering(seen(true)))), "{events:?}");
+}
+
 #[test]
 fn a_close_refused_as_busy_is_asked_again_and_other_refusals_wait_for_the_deadline() {
     let (mut driver, fake) = rig();
@@ -890,8 +922,12 @@ fn a_selected_subtitle_is_not_offered() {
 }
 
 /// **A track pick the Tizen driver cannot carry does not replace the playing title.** Through the Tizen composition's
-/// own resolver and a session whose backend set has no Feed (the Tizen composition), the shared reconfigure door refuses
-/// a source audio or subtitle pick with a typed reason, spends nothing and leaves the playing request as it was.
+/// own resolver and a session whose backend set has no Feed (the Tizen composition), with a source selection bound, the
+/// shared reconfigure door refuses a source audio or subtitle pick with a typed reason and spends nothing. The red-first
+/// reproduction (a playing URI attempt that holds a request, which the old door re-planned and retired) lives in
+/// `plx_media`'s `a_source_track_pick_no_composed_backend_can_carry_is_refused_before_the_title_is_replaced`: a request and an
+/// attempt view can only be seated there (`RouteStartAttempt::fixture` is `plx_media`'s `test-support`, which this crate's
+/// tests do not enable). This one pins that the Tizen resolver's own answer is what reaches that gate.
 #[test]
 fn a_track_pick_the_driver_cannot_carry_is_refused_by_the_session_and_the_title_keeps_playing() {
     use plx_media::route::{request_viewer_reconfigure, viewer_reconfigure_refusal, PlaybackSession, SubMode,
@@ -901,6 +937,9 @@ fn a_track_pick_the_driver_cannot_carry_is_refused_by_the_session_and_the_title_
     session.install_backends(BackendSet::URI);
     session.install_uri_preflight_port(resolver());
     assert!(!session.source_track_change_carriable());
+    let selection = plx_media::route::SourceSelection { server: plx_plex::plex::ServerId::UNSET, part_id: 7,
+        audio_sid: 31342, subtitle_sid: 0, audio_contract: plx_plex::plex::AudioEnhancements::NONE };
+    session.bind_source_selection(selection);
     let mut meta = plx_data::stores::metadata::MetadataStore::default();
     for pick in [ViewerReconfigure::SourceAudio(31343),
         ViewerReconfigure::SourceSubtitle { sid: 9, mode: SubMode::Track, forced_lang: None },
@@ -909,6 +948,7 @@ fn a_track_pick_the_driver_cannot_carry_is_refused_by_the_session_and_the_title_
         assert!(!request_viewer_reconfigure(&mut session, &mut meta, pick, Some(5_000_000_000), Some(false)));
     }
     assert_eq!(session.metric_request(), None, "no replacement request was begun");
+    assert_eq!(session.source_selection(), Some(selection), "the playing source selection is untouched");
     // With a Feed in the set (webOS) the same pick is not refused here.
     session.install_backends(BackendSet::BOTH);
     assert!(session.source_track_change_carriable());

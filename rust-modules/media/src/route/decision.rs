@@ -1032,16 +1032,30 @@ mod backend_offer_session_tests {
             vcodec: "h264".into(), acodec: "ac3".into(), title: "Film".into(),
             ctx: String::new(), preview: false, version: None, show_rk: String::new(),
         };
+        // The session the bug needs: a playing URI attempt, a held request, a bound source selection and a playing
+        // item that lists the picked streams, so that without the gate every pick below re-plans (retiring the
+        // request) instead of returning false for want of a selection.
         session.request = Some(request.clone());
+        session.begin_attempt_view(RouteStartAttempt::fixture(), crate::player::attempt_view::Backend::Uri);
+        session.bind_source_selection(SourceSelection { server: ServerId::UNSET, part_id: 7, audio_sid: 71,
+            subtitle_sid: 0, audio_contract: plx_plex::plex::AudioEnhancements::NONE });
+        let stream = |id: i64| plx_data::metadata::Stream { id, ..Default::default() };
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        assert!(meta.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(Some(
+            plx_data::metadata::PlayingItem {
+                audio: vec![stream(71), stream(72)], subs: vec![stream(81)],
+                ..plx_data::metadata::PlayingItem::with_subs(Vec::new())
+            }))));
+        let metric_before = session.metric_request();
         for pick in &picks {
             assert_eq!(viewer_reconfigure_refusal(&session, pick), Some(ViewerReconfigureRefusal::NoBackendCarriesTrack),
                 "{pick:?}");
-            assert!(!request_viewer_reconfigure(&mut session, &mut meta, pick.clone(), Some(42_000_000_000), Some(false)));
+            assert!(!request_viewer_reconfigure(&mut session, &mut meta, pick.clone(), Some(42_000_000_000), Some(false)),
+                "{pick:?}: refused, not re-planned");
+            assert_eq!(session.request, Some(request.clone()), "{pick:?}: the playing title's request is untouched");
+            assert_eq!(session.metric_request(), metric_before, "{pick:?}: no new request was begun");
         }
-        assert_eq!(session.request, Some(request), "the playing title's request is untouched");
         assert_eq!(session.reconfigure_pause_goal(), None);
-        assert_eq!(session.metric_request(), None, "no new request was begun");
         assert!(session.backend_policy.is_none(), "a refused pick spends no recipe or episode");
         // What is not a source-track pick is not this gate's business.
         assert_eq!(viewer_reconfigure_refusal(&session, &ViewerReconfigure::Speed(1500)), None);

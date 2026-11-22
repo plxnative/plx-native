@@ -140,7 +140,7 @@ struct Active {
     rebuffering: bool,
     stalled_since: Option<u64>,
     /// The last position the host reported while playing and when it first reported THAT value: a value that stays
-    /// the same is a frozen picture ([`Timing::frozen_grace_ms`]). Reset by a pause, a play and a seek.
+    /// the same is a frozen picture ([`Timing::frozen_grace_ms`]). Reset by a pause, a play, a seek and a change of the host's buffering state.
     last_position: Option<(i64, u64)>,
     /// A frozen position was surfaced as a rebuffer and has not moved since.
     frozen: bool,
@@ -471,6 +471,9 @@ impl Machine {
                 let rebuffering = event.a < 100;
                 if rebuffering != active.rebuffering {
                     active.rebuffering = rebuffering;
+                    // The position holds while the host buffers: entering or leaving the period starts the frozen-picture
+                    // clock afresh (as a pause, a play and a seek do), or the exit would re-arm a stall from the old value.
+                    active.last_position = None;
                     note(out, attempt, Observation::Rebuffering(observed(rebuffering)));
                 }
             }
