@@ -639,8 +639,17 @@ namespace PlxHost
             TryEnqueueInternal(() =>
             {
                 Session s = current;
-                if (s == null || !s.HostPaused) return;
-                if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed) { s.HostPaused = false; return; }
+                if (s == null || !s.HostPaused)
+                {
+                    PlxApp.Log("player: OnResume: nothing to resume (" + (s == null ? "no player" : "epoch " + s.Epoch + ": the host did not pause it, or the library's own play, pause or close decided since") + ")");
+                    return;
+                }
+                if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed)
+                {
+                    s.HostPaused = false;
+                    PlxApp.Log("player: OnResume: epoch " + s.Epoch + " is closed or closing (the library parked it at the background); not resumed");
+                    return;
+                }
                 PlxApp.Log("player: epoch " + s.Epoch + ": resumed after the Home screen");
                 DoPlay(s); // clears HostPaused
             });

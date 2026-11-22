@@ -2395,6 +2395,11 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
             crate::dev::scenarios::maybe_replay_after_eos(app, handed_off_to_up_next);
         } else if playback_may_run(app)
             && plx_media::player::ended(&app.player.session) == Some(true)
+            // **Once.** A URI attempt's stop is a CLOSE the host confirms a few frames later, and the attempt stays
+            // "needing teardown" until its `PLAYER_CLOSED`: without this, every frame of that wait asked for the same
+            // stop again and logged the line below (5 times at the Tizen emulator's EOS). A stop already underway is
+            // the release machine's to finish.
+            && app.adapters.player.backend_snapshot().phase != plx_playback_contract::Phase::Releasing
             && super::content::off_route_orphan(
                 app.adapters.player.playback_needs_teardown(&app.player.session),
                 plx_media::route::is_preview(&app.player.session),

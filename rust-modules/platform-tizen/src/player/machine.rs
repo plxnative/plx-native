@@ -34,7 +34,7 @@ use crate::host_abi::{PlayerEvent, PlayerKind, PLAYER_FAIL_BASE};
 use plx_playback_contract::uri::{native_index, NativeTrackIndex, UriSource};
 use plx_playback_contract::{AttemptId, Capabilities, CommandId, ContentTime, DispatchResult, DriverEvent,
     EvidenceSource, ExitDisposition, Failure, Observation, Observed, Operation, Playback, ReleaseStatus, Requirements,
-    SourceKey, SourceKind, TrackChoice, TrackKind, TrackSelection};
+    SourceKey, SourceKind, StopReason, TrackChoice, TrackKind, TrackSelection};
 use std::collections::VecDeque;
 
 /// What the driver can call: a progressive source, pause and seek. No HLS, no track disable, no packet feed, no
@@ -64,6 +64,11 @@ pub struct Timing {
     /// How long after a `PLAYER_STALL` (a position read hung) a PLAYING player may stay silent before it is failed.
     /// The grace does not run while the player is reported paused.
     pub stall_grace_ms: u64,
+    /// How long the position the host reports may stay the SAME while the player is reported playing before it is
+    /// treated as a stall: the picture is frozen although the position reads keep answering (an A/V clip that stalls
+    /// on the emulator, an underrun on a set), so no `PLAYER_STALL` is ever raised. Surfaced as a rebuffer, and then
+    /// failed through the same `stall_grace_ms` as a hung read.
+    pub frozen_grace_ms: u64,
     /// How long a staged source waits for its Start.
     pub source_ttl_ms: u64,
 }
@@ -71,7 +76,7 @@ pub struct Timing {
 impl Timing {
     /// The shipped values. The host's own seek expiry is 10 s and its stall report 3 s (`plx_host.h`), so these sit above.
     pub const PRODUCT: Timing = Timing { startup_timeout_ms: 20_000, release_allowance_ms: 10_000,
-        control_timeout_ms: 15_000, stall_grace_ms: 7_000, source_ttl_ms: 30_000 };
+        control_timeout_ms: 15_000, stall_grace_ms: 7_000, frozen_grace_ms: 3_000, source_ttl_ms: 30_000 };
 }
 
 /// A request the executor performs for the machine, in order.
@@ -134,6 +139,11 @@ struct Active {
     ended: bool,
     rebuffering: bool,
     stalled_since: Option<u64>,
+    /// The last position the host reported while playing and when it first reported THAT value: a value that stays
+    /// the same is a frozen picture ([`Timing::frozen_grace_ms`]). Reset by a pause, a play and a seek.
+    last_position: Option<(i64, u64)>,
+    /// A frozen position was surfaced as a rebuffer and has not moved since.
+    frozen: bool,
     controls: Vec<Pending>,
 }
 
@@ -164,12 +174,17 @@ pub struct Machine {
     pending: VecDeque<DriverEvent>,
     /// Host events dropped for an epoch that is not the active one, since the machine was built.
     stale_dropped: usize,
+    /// When a position or buffering event was last logged ([`EVENT_LOG_EVERY_MS`]).
+    last_noisy_log_ms: Option<u64>,
 }
+
+/// Position and buffering events arrive several times a second: one of them is logged at most this often.
+const EVENT_LOG_EVERY_MS: u64 = 10_000;
 
 impl Machine {
     pub fn new(timing: Timing) -> Self {
         Self { timing, staged: None, active: None, last_started: None, next_epoch: 0, pending: VecDeque::new(),
-            stale_dropped: 0 }
+            stale_dropped: 0, last_noisy_log_ms: None }
     }
 
     /// How many host events were dropped because their epoch was not the active one.
@@ -252,7 +267,8 @@ impl Machine {
         self.last_started = Some(attempt);
         self.active = Some(Active { attempt, epoch, phase: Phase::Opening, tracks,
             start_deadline_ms: now_ms.saturating_add(self.timing.startup_timeout_ms), prepared: false, started_once: false,
-            paused: false, ended: false, rebuffering: false, stalled_since: None, controls: Vec::new() });
+            paused: false, ended: false, rebuffering: false, stalled_since: None, last_position: None, frozen: false,
+            controls: Vec::new() });
         fx.push(Fx::Open { epoch, url, area: FULL_WINDOW });
         DispatchResult::Queued
     }
@@ -271,8 +287,18 @@ impl Machine {
 
     /// The host refused `verb` on `epoch`. A refused play, pause or seek takes back the control it queued and the
     /// command answers with the refusal; a refused CLOSE has no command to answer, so it is returned as `None`
-    /// after the machine decided what it means (see the module note).
+    /// after the machine decided what it means (see the module note; a close refused because the library is stopping
+    /// is a release the host owns).
     pub fn verb_refused(&mut self, epoch: u32, verb: Verb, refusal: Refusal, fx: &mut Vec<Fx>) -> Option<DispatchResult> {
+        if verb == Verb::Close && refusal == Refusal::Stopping && self.active.as_ref().is_some_and(|a| a.epoch == epoch) {
+            // The library was told to stop and its gate to the host is shut: the close can never be asked. The host
+            // closes its own player when it terminates (`plx_host.h`, STOP), so the release is the host's to make and
+            // the library must not hold the stop for a confirmation that cannot come.
+            let attempt = self.active.take().map(|a| a.attempt)?;
+            fx.push(Fx::Log("tizen-uri: the library is stopping, so the close cannot be asked; the host closes its own player at terminate".to_owned()));
+            self.pending.push_back(DriverEvent::Release { attempt, status: ReleaseStatus::Released });
+            return None;
+        }
         let active = self.active.as_mut().filter(|a| a.epoch == epoch)?;
         match verb {
             Verb::Close => {
@@ -354,13 +380,15 @@ impl Machine {
     }
 
     /// A Stop of `attempt`: close, and wait for the host's confirmation.
-    pub fn stop(&mut self, now_ms: u64, attempt: AttemptId, fx: &mut Vec<Fx>) -> DispatchResult {
+    pub fn stop(&mut self, now_ms: u64, attempt: AttemptId, reason: StopReason, fx: &mut Vec<Fx>) -> DispatchResult {
         let Some(active) = self.active.as_ref().filter(|a| a.attempt == attempt) else {
             return DispatchResult::Refused(Failure::Stale);
         };
         if active.phase == Phase::Quarantined {
             return DispatchResult::Refused(Failure::ReleaseUncertain);
         }
+        // Why the library closes the player (Suspend is the app's park at the background), for the next run's log.
+        fx.push(Fx::Log(format!("tizen-uri: stop requested ({reason:?}); the host is asked to close the player")));
         self.begin_close(now_ms, fx);
         DispatchResult::Queued
     }
@@ -384,6 +412,7 @@ impl Machine {
             PlayerKind::Started if live && active.prepared => {
                 active.started_once = true;
                 active.paused = false;
+                active.last_position = None;
                 // A pause's stall belongs to the pause: playing again starts the grace afresh (a new STALL re-arms it).
                 active.stalled_since = None;
                 if let Some(at) = active.controls.iter().position(|c| c.operation == Operation::Play) {
@@ -396,6 +425,7 @@ impl Machine {
             PlayerKind::Paused if live && active.prepared => {
                 // A paused player is silent on purpose: the stall grace is suspended while it is.
                 active.paused = true;
+                active.last_position = None;
                 active.stalled_since = None;
                 if let Some(at) = active.controls.iter().position(|c| c.operation == Operation::Pause) {
                     let control = active.controls.remove(at);
@@ -405,7 +435,15 @@ impl Machine {
                 out.push_back(DriverEvent::Observation { attempt, observation: Observation::Playback(observed(Playback::Paused)) });
             }
             PlayerKind::Position if live && active.prepared => {
-                active.stalled_since = None;
+                let advanced = active.last_position.map_or(true, |(seen, _)| seen != event.a);
+                if advanced {
+                    // The position moved: the picture is not frozen and the read is not hung.
+                    active.last_position = Some((event.a, now_ms));
+                    active.stalled_since = None;
+                    if std::mem::take(&mut active.frozen) && !active.rebuffering {
+                        note(out, attempt, Observation::Rebuffering(observed(false)));
+                    }
+                }
                 if let Ok(ms) = u64::try_from(event.a) {
                     out.push_back(DriverEvent::Observation { attempt,
                         observation: Observation::Position(observed(ContentTime::from_millis(ms))) });
@@ -416,6 +454,7 @@ impl Machine {
                     && i64::try_from(c.command.get()) == Ok(event.a));
                 if let Some(at) = at {
                     let control = active.controls.remove(at);
+                    active.last_position = None; // the position jumps: a new baseline
                     out.push_back(match event.b {
                         ms if ms >= 0 => DriverEvent::SeekLanded { attempt, command: control.command,
                             position: u64::try_from(ms).ok().map(|ms| observed(ContentTime::from_millis(ms))) },
@@ -461,7 +500,19 @@ impl Machine {
             Phase::Opening | Phase::Open => {
                 if !active.prepared && now_ms >= active.start_deadline_ms {
                     fail = true;
-                } else if !active.paused
+                }
+                // A position that stays the same while the player plays is a stall the host cannot see (its position
+                // reads keep returning): surfaced as a rebuffer, then failed by the stall grace. Not while the host
+                // itself reports buffering, nor with a seek in flight (the position is about to jump).
+                if !fail && active.started_once && !active.paused && !active.ended && !active.rebuffering && !active.frozen
+                    && !active.controls.iter().any(|c| matches!(c.operation, Operation::Seek(_)))
+                    && active.last_position.is_some_and(|(_, since)| now_ms.saturating_sub(since) >= self.timing.frozen_grace_ms) {
+                    active.frozen = true;
+                    active.stalled_since.get_or_insert(now_ms);
+                    fx.push(Fx::Log("tizen-uri: the position has not moved while playing; treated as a stall".to_owned()));
+                    self.pending.push_back(DriverEvent::Observation { attempt, observation: Observation::Rebuffering(observed(true)) });
+                }
+                if !fail && !active.paused
                     && active.stalled_since.is_some_and(|since| now_ms.saturating_sub(since) >= self.timing.stall_grace_ms) {
                     fail = true;
                 }
@@ -508,6 +559,16 @@ impl Machine {
             }
         }
         for event in events.iter().copied() {
+            // One line per player event, so a run can show what the host said (SEEK_DONE's b, the Home sequence, a
+            // STALL, an ERROR code). The two kinds that repeat many times a second are logged on a 10 s clock. No event
+            // carries the URL or the token.
+            let noisy = matches!(event.kind, PlayerKind::Position | PlayerKind::Buffering);
+            if !noisy || self.last_noisy_log_ms.map_or(true, |at| now_ms.saturating_sub(at) >= EVENT_LOG_EVERY_MS) {
+                if noisy {
+                    self.last_noisy_log_ms = Some(now_ms);
+                }
+                fx.push(Fx::Log(format!("tizen-uri: player event {:?} epoch={} a={} b={}", event.kind, event.epoch, event.a, event.b)));
+            }
             if event.kind == PlayerKind::Error {
                 let who = if event.a >= PLAYER_FAIL_BASE { "the host" } else { "the native player" };
                 fx.push(Fx::Log(format!("tizen-uri: {who} reported an error (code {})", event.a)));

@@ -86,7 +86,7 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
                 self.machine.control(now, attempt, command, operation, &mut fx),
             Operation::SelectTrack { kind: TrackKind::Audio, choice } => self.machine.select_audio(attempt, command, choice),
             Operation::SelectTrack { kind: TrackKind::Subtitle, .. } => self.machine.select_subtitle(attempt),
-            Operation::Stop(_) => self.machine.stop(now, attempt, &mut fx),
+            Operation::Stop(reason) => self.machine.stop(now, attempt, reason, &mut fx),
         };
         self.perform(result, fx)
     }

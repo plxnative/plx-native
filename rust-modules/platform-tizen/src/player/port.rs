@@ -22,6 +22,8 @@ pub enum Refusal {
     Args,
     /// A verb for an epoch the host no longer holds.
     Stale,
+    /// The library was told to stop (`plx_host_stop`): its gate to the host is closed and the host was not asked.
+    Stopping,
 }
 
 impl Refusal {
@@ -32,6 +34,7 @@ impl Refusal {
             Refusal::Busy => Failure::Busy,
             Refusal::Args => Failure::Refused,
             Refusal::Stale => Failure::Stale,
+            Refusal::Stopping => Failure::Unavailable,
         }
     }
 
@@ -40,6 +43,7 @@ impl Refusal {
             host_abi::PLAYER_E_BUSY => Refusal::Busy,
             host_abi::PLAYER_E_ARGS => Refusal::Args,
             host_abi::PLAYER_E_STALE => Refusal::Stale,
+            host_abi::PLAYER_E_STOPPING => Refusal::Stopping,
             _ => Refusal::Unavailable,
         }
     }

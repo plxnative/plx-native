@@ -2036,6 +2036,12 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (Home, detail, back); a clean stop and 0 log gaps; a Home round trip resumes the same pid and comes back drawn; the unbound player route
   as above. Still UNVERIFIED: Home with a player open (`PauseForHome` / `ResumeAfterHome` never exercised, no player existed), a picture
   through the real URI driver (PR B1), anything on a retail set (H6 OPEN).
+- As landed (PR B1 review round; the first Windows-emulator run of the driver at `126d1f04c` found these; emulator and mock data only, nothing here is "verified" on a set): the driver is split into a pure
+  `player/machine.rs` (a Sans-IO machine in `MACHINES`, no ledger line) and a thin executor `driver.rs`; a Busy-refused CLOSE is retried, a pause suspends the stall grace, SEEK_DONE
+  `b = -2` (expired) is not a refusal (the seek may still land; POSITION is the authority); a position that stops advancing while Playing is a stall; a CLOSE the library cannot send after
+  `plx_host_stop` (`Refusal::Stopping`) releases the attempt and `OnTerminate` closes the player before waiting for `on_stopped` (the C# is NOT compiled here); one library log line per player ABI event (positions and buffering
+  rate-limited); the EOS "off-route engine" line is guarded while a URI attempt is releasing. **NOT fixed: Home with a player open never resumes** (the library parks a URI attempt with
+  `Stop(Suspend)` at the background, then the restore's `begin_resume` answers `NoRoute` because a URI original plan installs no `url`; the fix is a shared foreground restore of a URI attempt, see `docs/tizen.md`).
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.

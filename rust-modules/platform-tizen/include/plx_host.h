@@ -69,6 +69,12 @@
  *   is not part of that promise: after a host-initiated stop the library does not release it (it lives until
  *   the process ends, see run_on_host); it is released only when the application ended by itself and the
  *   host ran the teardown the library queued.
+ *   **A player that is open at a stop belongs to the host.** plx_host_stop closes the library's gate to the host AT ONCE, so the
+ *   library can no longer send the player CLOSE verb (it answers the request itself, the host is not asked) and no PLAYER_CLOSED
+ *   can come back. The library therefore treats a CLOSE refused that way as a release the host makes: its stop is not held for a
+ *   confirmation that cannot come, and on_stopped can be clean = 1 with a player open. The host MUST close its native player itself
+ *   in OnTerminate, before it waits for on_stopped (PlxPlayer.Shutdown, bounded), so that the native player is released on every
+ *   terminate path, including a wait that ends in the platform's own kill.
  *   After on_stopped no callback is made again. on_stopped may be called on the loop thread, the deadline
  *   thread, the host thread (a refused start, or inside plx_host_stop as above); it must return promptly
  *   and make no call into the library. A host must therefore not hold, across plx_host_stop, a lock that

@@ -38,6 +38,10 @@ pub const PLAYER_E_BUSY: i32 = -2;
 pub const PLAYER_E_ARGS: i32 = -3;
 /// `PLX_HOST_PLAYER_E_STALE`: a verb for an epoch that is not the host's current one.
 pub const PLAYER_E_STALE: i32 = -4;
+/// Not an ABI code (the host never returns it and `plx_host.h` has no name for it): the LIBRARY's own answer when its
+/// gate is closed because `plx_host_stop` was called. The host was not asked. `plx_host.h`, STOP: from then on the host
+/// closes its own player (`OnTerminate`), so a CLOSE refused this way is a release the host owns, not one nobody can make.
+pub const PLAYER_E_STOPPING: i32 = -100;
 
 /// `PLX_HOST_EVENT_PAUSE`: `OnPause`, the app went to the background.
 pub const EVENT_PAUSE: u32 = 1;

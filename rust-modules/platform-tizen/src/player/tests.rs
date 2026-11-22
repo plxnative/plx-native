@@ -88,7 +88,7 @@ impl HostPlayer for Fake {
 }
 
 const TIMING: Timing = Timing { startup_timeout_ms: 1_000, release_allowance_ms: 500, control_timeout_ms: 300,
-    stall_grace_ms: 200, source_ttl_ms: 5_000 };
+    stall_grace_ms: 200, frozen_grace_ms: 100, source_ttl_ms: 5_000 };
 
 fn mt() -> MainThread {
     // SAFETY: a host test thread stands in for the loop thread, as the contract's own fakes' tests do.
@@ -307,6 +307,76 @@ fn a_pause_suspends_the_stall_grace_and_playing_again_starts_it_afresh() {
 }
 
 #[test]
+fn a_position_that_stays_the_same_while_playing_is_a_stall_the_host_cannot_see() {
+    // The emulator's A/V clip: the picture freezes, the position reads keep answering the same value, so no
+    // PLAYER_STALL is ever raised and the library kept reporting "playing t=15s" every 10 s.
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared(&mut driver, &fake, 1);
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.post(epoch, PlayerKind::Position, 14_900, 0);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    poll(&mut driver);
+    for _ in 0..3 {
+        fake.advance(30);
+        fake.post(epoch, PlayerKind::Position, 15_000, 0);
+        let events = poll(&mut driver);
+        assert!(!events.iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Rebuffering(_), .. })), "not yet");
+    }
+    fake.advance(30);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::Position(seen(ContentTime::from_millis(15_000)))),
+        observation(a, Observation::Rebuffering(seen(true))),
+    ], "the frozen position is surfaced as a rebuffer after the grace");
+    // Moving again clears it and the stall.
+    fake.advance(100);
+    fake.post(epoch, PlayerKind::Position, 15_250, 0);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::Rebuffering(seen(false))),
+        observation(a, Observation::Position(seen(ContentTime::from_millis(15_250)))),
+    ]);
+    fake.advance(1_000);
+    fake.post(epoch, PlayerKind::Position, 15_500, 0);
+    assert!(!poll(&mut driver).iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Failed(_), .. })));
+    // Frozen for good: the same stall grace as a hung read fails the attempt.
+    fake.advance(100);
+    fake.post(epoch, PlayerKind::Position, 15_500, 0);
+    poll(&mut driver);
+    fake.advance(200);
+    fake.post(epoch, PlayerKind::Position, 15_500, 0);
+    let events = poll(&mut driver);
+    assert!(events.contains(&observation(a, Observation::Failed(Failure::TimedOut))), "{events:?}");
+    assert_eq!(fake.verbs(), [Verb::Close]);
+}
+
+#[test]
+fn a_paused_player_a_seek_in_flight_and_host_buffering_are_not_a_frozen_picture() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared(&mut driver, &fake, 1);
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    poll(&mut driver);
+    // Paused: the position holds on purpose.
+    fake.post(epoch, PlayerKind::Paused, 0, 0);
+    poll(&mut driver);
+    for _ in 0..5 {
+        fake.advance(200);
+        fake.post(epoch, PlayerKind::Position, 15_000, 0);
+        let events = poll(&mut driver);
+        assert!(!events.iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Rebuffering(_) | Observation::Failed(_), .. })), "{events:?}");
+    }
+    // A seek in flight: the position is about to jump.
+    fake.post(epoch, PlayerKind::Started, 0, 0);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    poll(&mut driver);
+    assert_eq!(dispatch(&mut driver, a, 9, Operation::Seek(ContentTime::from_millis(60_000))), DispatchResult::Queued);
+    fake.advance(250);
+    fake.post(epoch, PlayerKind::Position, 15_000, 0);
+    let events = poll(&mut driver);
+    assert!(!events.iter().any(|e| matches!(e, DriverEvent::Observation { observation: Observation::Rebuffering(_), .. })), "{events:?}");
+}
+
+#[test]
 fn a_close_refused_as_busy_is_asked_again_and_other_refusals_wait_for_the_deadline() {
     let (mut driver, fake) = rig();
     let (a, epoch) = prepared(&mut driver, &fake, 1);
@@ -413,6 +483,18 @@ fn a_close_the_host_refuses_leaves_the_player_held_and_quarantines_at_the_deadli
     fake.advance(400);
     assert_eq!(poll(&mut driver), [DriverEvent::Release { attempt: a, status: ReleaseStatus::Quarantined }]);
     assert_eq!(driver.exit_disposition(), ExitDisposition::PreserveNativeOwnership);
+}
+
+#[test]
+fn a_close_refused_because_the_library_is_stopping_is_the_hosts_to_make_and_does_not_hold_the_exit() {
+    let (mut driver, fake) = rig();
+    let (a, _) = prepared(&mut driver, &fake, 1);
+    fake.with(|s| s.refuse_verb = Some(Refusal::Stopping));
+    assert_eq!(dispatch(&mut driver, a, 5, Operation::Stop(StopReason::Exit)), DispatchResult::Queued);
+    assert_eq!(poll(&mut driver), [DriverEvent::Release { attempt: a, status: ReleaseStatus::Released }],
+        "no deadline wait: the close can never be asked");
+    assert_eq!(driver.exit_disposition(), ExitDisposition::Clean);
+    assert!(!driver.plane_owned());
 }
 
 #[test]
@@ -535,9 +617,11 @@ fn the_tizen_driver_conforms_to_the_shared_uri_suite() {
 /// the host's `player_open` with the URL it copied, the host's events (posted through `plx_host_post`) come back
 /// through the library's player queue as the contract's observations, a Stop is the host's CLOSE verb and the
 /// host's `CLOSED` the release; then, after the host stopped the library, a request is refused without calling the
-/// host, the host's late completion is refused at the door, and the close is quarantined, never released.
+/// host (as `Stopping`), the host's late completion is refused at the door, and the close, which can no longer be asked,
+/// is the host's to make at terminate: the release is reported and the exit is clean (a stop with a player open ends
+/// `on_stopped` clean).
 #[test]
-fn the_driver_over_the_hosted_contract_round_trips_and_a_stop_leaves_the_close_unconfirmed() {
+fn the_driver_over_the_hosted_contract_round_trips_and_a_close_after_the_library_stopped_is_the_hosts_to_make() {
     use crate::hosted::testing::{complete, loop_until_quit, seen as host_saw, World};
     let w = World::new();
     assert_eq!(w.start(|_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
@@ -577,9 +661,10 @@ fn the_driver_over_the_hosted_contract_round_trips_and_a_stop_leaves_the_close_u
     assert_eq!(host_saw(|s| s.verbs.len()), verbs_before, "the host was not called after the stop");
     let late = crate::host_abi::PlxHostEvent { size: host_abi::EVENT_V2_SIZE, kind: host_abi::EVENT_PLAYER_CLOSED, epoch: second, reserved: 0, a: 0, b: 0 };
     assert_eq!(w.hosted.post(&late), host_abi::E_STATE);
-    std::thread::sleep(std::time::Duration::from_millis(60));
-    assert_eq!(poll_any(&mut driver), [DriverEvent::Release { attempt: b, status: ReleaseStatus::Quarantined }]);
-    assert_eq!(driver.exit_disposition(), ExitDisposition::PreserveNativeOwnership);
+    // The library cannot ask for the close any more (its gate is shut), and the host closes its own player at terminate
+    // (`plx_host.h`, STOP): the stop is not held for a confirmation that cannot come, so the exit is clean.
+    assert_eq!(poll_any(&mut driver), [DriverEvent::Release { attempt: b, status: ReleaseStatus::Released }]);
+    assert_eq!(driver.exit_disposition(), ExitDisposition::Clean);
     w.wait_stopped(1);
 }
 
@@ -827,4 +912,36 @@ fn a_track_pick_the_driver_cannot_carry_is_refused_by_the_session_and_the_title_
     // With a Feed in the set (webOS) the same pick is not refused here.
     session.install_backends(BackendSet::BOTH);
     assert!(session.source_track_change_carriable());
+}
+
+/// One log line per player event with its payload (so an emulator or retail run shows SEEK_DONE's b, the Home sequence,
+/// a STALL, an ERROR code), the repeating kinds on a 10 s clock. Read from the pure step's own `Fx::Log`.
+#[test]
+fn every_player_event_is_logged_once_and_positions_and_buffering_are_rate_limited() {
+    use super::machine::{Fx, Machine};
+    let mut machine = Machine::new(TIMING);
+    let mut fx = Vec::new();
+    let key = SourceKey::new(1);
+    machine.stage(0, attempt(1), key, UriSource::new(URL.into(), vec![])).unwrap();
+    machine.start(0, true, attempt(1), key, plain_requirements(), &mut fx);
+    fx.clear();
+    let ev = |kind, a, b| PlayerEvent { epoch: 1, kind, a, b };
+    let lines = |machine: &mut Machine, now: u64, events: &[PlayerEvent]| {
+        let mut fx = Vec::new();
+        machine.poll(now, events, false, &mut fx);
+        fx.into_iter().filter_map(|f| if let Fx::Log(line) = f { Some(line) } else { None }).collect::<Vec<_>>()
+    };
+    let got = lines(&mut machine, 10, &[ev(PlayerKind::Prepared, 600_000, 0), ev(PlayerKind::Started, 0, 0),
+        ev(PlayerKind::Position, 1_000, 0), ev(PlayerKind::Position, 1_250, 0), ev(PlayerKind::SeekDone, 7, -2),
+        ev(PlayerKind::Stall, 0, 0)]);
+    assert_eq!(got, [
+        "tizen-uri: player event Prepared epoch=1 a=600000 b=0",
+        "tizen-uri: player event Started epoch=1 a=0 b=0",
+        "tizen-uri: player event Position epoch=1 a=1000 b=0",
+        "tizen-uri: player event SeekDone epoch=1 a=7 b=-2",
+        "tizen-uri: player event Stall epoch=1 a=0 b=0",
+    ], "the second position inside 10 s is not logged");
+    assert!(lines(&mut machine, 5_000, &[ev(PlayerKind::Position, 2_000, 0)]).is_empty());
+    assert_eq!(lines(&mut machine, 10_010, &[ev(PlayerKind::Position, 3_000, 0)]),
+        ["tizen-uri: player event Position epoch=1 a=3000 b=0"], "once every 10 s");
 }

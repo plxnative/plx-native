@@ -265,7 +265,7 @@ impl Hosted {
         }
         let Ok(uri) = std::ffi::CString::new(uri) else { return Err(host_abi::PLAYER_E_ARGS) };
         let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
-        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_STOPPING) };
         self.player.opened(epoch);
         // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean; `uri` is a
         // NUL-terminated string valid for the call, which the host copies before returning.
@@ -285,7 +285,7 @@ impl Hosted {
             return Err(host_abi::PLAYER_E_ARGS);
         }
         let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
-        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_STOPPING) };
         // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean.
         let code = unsafe { (calls.verb)(epoch, verb, arg0, arg1) };
         if code == host_abi::PLAYER_OK {
@@ -1265,8 +1265,9 @@ mod tests {
         assert_eq!(hosted.gate.in_flight(), 1);
         // New requests after the stop never reach the host, and the player's late events are refused.
         let calls_before = seen(|s| s.opens.len() + s.verbs.len());
-        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
-        assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_STOPPING));
+        assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_STOPPING),
+            "a stop closes the gate: the library cannot close the host's player any more, and says why");
         assert_eq!(seen(|s| s.opens.len() + s.verbs.len()), calls_before, "the host was not asked");
         assert_eq!(hosted.post(&player_ev(9, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::E_STATE, "a late completion");
         release_tx.send(()).unwrap();
