@@ -7630,8 +7630,9 @@ pub(super) enum RpuDv {
 ///
 /// The file's own declaration and the stored Auto Original candidate follow when they carry no record
 /// either, so a trip to HLS and back to Original keeps the node, as [`withdraw_dv_presentation`]
-/// keeps it off. A Profile 5 also forbids a video copy from then on, as the plan does when it sends a
-/// Profile 5 with a record to the server: a later re-encode must not hand the set its base layer.
+/// keeps it off. The adopted record is also what makes a Profile 5 forbid a video copy from then on
+/// ([`is_no_video_copy`]), as for a Profile 5 with a record: a later re-encode must not hand the set
+/// its base layer.
 pub fn declare_rpu_dovi(ps: &mut PlaybackSession, rpu: plx_playback_contract::feed::RpuDovi) -> bool {
     let RpuDv::Open { mode } = ps.rpu_dv else {
         return false;
@@ -7655,9 +7656,6 @@ pub fn declare_rpu_dovi(ps: &mut PlaybackSession, rpu: plx_playback_contract::fe
     ps.rpu_dv = RpuDv::Declared;
     ps.stream_dovi = dovi;
     ps.stream_dv_decision = decision;
-    if dovi.base_layer_unusable() {
-        ps.cur_contract.no_video_copy = true;
-    }
     // The record replaces silence only: a slot that carries one keeps it.
     let adopt = |slot: &mut plx_data::metadata::Dovi, decided: &mut plx_data::metadata::DvDecision, vcodec: &str| {
         if !slot.present {
@@ -8411,10 +8409,14 @@ pub fn cur_enhancement_label(ps: &PlaybackSession) -> Option<&'static str> {
         EnhancementOutcome::Refused => Some("refused"),
     }
 }
-/// Did this playback forbid the server a video stream COPY? Read by the seek and audio-switch
-/// rebuilds so the constraint survives them — see [`PlaybackSession::cur_contract`].
+/// Did this playback forbid the server a video stream COPY? Read by the seek, audio-switch and
+/// quality rebuilds so the constraint survives them — see [`PlaybackSession::cur_contract`]. A
+/// source whose base layer is unusable (Dolby Vision Profile 5, from its record or from the RPUs
+/// [`declare_rpu_dovi`] adopted) forbids it whatever the contract says: the contract is rebuilt by
+/// every route change (an Original recovery resets it to the direct play's), and a copy of that
+/// video is the wrong picture one container down.
 pub(super) fn is_no_video_copy(ps: &PlaybackSession) -> bool {
-    ps.cur_contract.no_video_copy
+    ps.cur_contract.no_video_copy || ps.src_dovi.base_layer_unusable()
 }
 /// The quality ceiling THIS playback was resolved under — read by the two query rebuilds
 /// ([`plan_rebase`], [`retranscode`]) so a rung picked mid-film cannot reshape the encode
@@ -12401,8 +12403,8 @@ fn original_remux_shape(ps: &PlaybackSession) -> bool {
         && ps.cur_contract.ceiling.is_none()
         && cur_delivery(ps) == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
         && !is_no_video_copy(ps)
-        // A direct-played Dolby Vision Profile 5 never set `no_video_copy` (the declaration made
-        // the direct play right); a copy of it, one container down, carries no declaration.
+        // The candidate's own record too, not only the file's ([`is_no_video_copy`]): a copy of a
+        // Dolby Vision Profile 5, one container down, carries no declaration.
         && ps.auto_original.as_ref().is_some_and(|c| !c.dovi.base_layer_unusable())
 }
 
@@ -14593,6 +14595,10 @@ pub(crate) mod flight_rig;
 #[cfg(test)]
 #[path = "decision_trial_flight_tests.rs"]
 mod trial_flight_tests;
+
+#[cfg(test)]
+#[path = "decision_dv_copy_flight_tests.rs"]
+mod dv_copy_flight_tests;
 
 #[cfg(test)]
 #[path = "decision_next_episode_tests.rs"]

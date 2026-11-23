@@ -177,8 +177,10 @@ direct play declares, and not during an Original trial that has not shown a pict
 seek waits for it too): a server remux's `start.mkv` begins at its offset, so the reload's seek would
 land wrong, and its report leaves the play open. Off and a set without confirmed support decline and
 close it. A declaration rewrites the installed route, the file's own declaration and the stored Auto
-Original candidate; a Profile 5 also forbids a video copy from then on (`no_video_copy`, as the plan
-sets when it sends a Profile 5 with a record to the server), so a later re-encode never hands the set its base layer. The play
+Original candidate. A source whose base layer is unusable forbids a video copy on every rebuild
+(`is_no_video_copy` reads the file's declaration, not only the route's contract, which a return to
+Original resets), so an inferred Profile 5, like one with a record, never has its base layer handed to
+the set by a later re-encode. The play
 reloads once at the newest tap, else where the Engine was aimed. The reloaded Load carries the node and
 the landing guard (#1166) arms as for any declared direct play; a withdrawal later in the play closes
 it, so it is not undone.
