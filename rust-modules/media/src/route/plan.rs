@@ -1663,7 +1663,7 @@ pub struct Plan {
     /// are what a later rebuild that copies the video hands on again.
     pub src_dovi: plx_data::metadata::Dovi,
     pub src_dv_decision: plx_data::metadata::DvDecision,
-    /// [`super::decision::RpuDv`], frozen here: Closed for a file with a record and on the URI engine.
+    /// [`super::decision::RpuDv`], frozen here: Closed for a file with a record and for a URI Original.
     pub(super) rpu_dv: super::decision::RpuDv,
     /// Does the direct-played audio track carry Dolby Atmos, for the Load payload's
     /// `contents.immersive` node. Set on the DIRECT-PLAY branch only, for the same reason `dovi`

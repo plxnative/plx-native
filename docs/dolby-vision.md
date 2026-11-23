@@ -179,8 +179,9 @@ land wrong, and its report leaves the play open. Off and a set without confirmed
 close it. A declaration rewrites the installed route, the file's own declaration and the stored Auto
 Original candidate. A source whose base layer is unusable forbids a video copy on every rebuild
 (`is_no_video_copy` reads the file's declaration, not only the route's contract, which a return to
-Original resets), so an inferred Profile 5, like one with a record, never has its base layer handed to
-the set by a later re-encode. The play
+Original resets), so an inferred Profile 5, like one with a record, is never offered to the server for a
+copy. That does not give an inferred Profile 5 a correct server route: the server has no record either,
+so its encode is of the base layer and nothing declares it, the same picture the copy gave. The play
 reloads once at the newest tap, else where the Engine was aimed. The reloaded Load carries the node and
 the landing guard (#1166) arms as for any declared direct play; a withdrawal later in the play closes
 it, so it is not undone.

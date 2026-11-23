@@ -512,10 +512,12 @@ pub struct PlaybackSession {
     /// what Dolby Vision Off would have planned and keeps the probed capability, and by
     /// [`declare_rpu_dovi`], which declares the RPUs of a stream whose container has no record.
     stream_dv_decision: plx_data::metadata::DvDecision,
-    /// The FILE's own Dolby Vision record and the declaration it would make as a direct play,
-    /// frozen at the resolve whatever route was taken. `stream_dovi` above is what is being fed;
-    /// a rebuild that copies the video (an audio switch, a seek, Original recovery) hands this on
-    /// again instead of losing it with the first re-encode.
+    /// The FILE's own Dolby Vision record and the declaration it would make as a direct play, set
+    /// at the resolve whatever route was taken. `stream_dovi` above is what is being fed; a rebuild
+    /// that copies the video (an audio switch, a seek, Original recovery) hands this on again
+    /// instead of losing it with the first re-encode, and [`is_no_video_copy`] reads it. Rewritten
+    /// only by [`declare_rpu_dovi`] (a record found in the RPUs, adopted where none was set) and,
+    /// for the decision, [`withdraw_dv_presentation`].
     src_dovi: plx_data::metadata::Dovi,
     src_dv_decision: plx_data::metadata::DvDecision,
     /// Whether this play may still declare the Dolby Vision the demuxer finds in the RPUs of a stream
@@ -7612,7 +7614,7 @@ pub(super) enum RpuDv {
     /// Declared from the RPUs.
     Declared,
     /// Nothing to declare: the file has a record, the route declined (Dolby Vision Off, a set
-    /// without confirmed support), the declaration was withdrawn, or the play is on the URI engine.
+    /// without confirmed support), the declaration was withdrawn, or the play is a URI Original.
     #[default]
     Closed,
 }
@@ -7630,9 +7632,10 @@ pub(super) enum RpuDv {
 ///
 /// The file's own declaration and the stored Auto Original candidate follow when they carry no record
 /// either, so a trip to HLS and back to Original keeps the node, as [`withdraw_dv_presentation`]
-/// keeps it off. The adopted record is also what makes a Profile 5 forbid a video copy from then on
-/// ([`is_no_video_copy`]), as for a Profile 5 with a record: a later re-encode must not hand the set
-/// its base layer.
+/// keeps it off. The adopted record also makes a Profile 5 forbid a video copy from then on
+/// ([`is_no_video_copy`]), as for a Profile 5 with a record. That keeps the request the same shape,
+/// but it does not make a server route right for an inferred Profile 5: the server has no record
+/// either, so its encode is of the base layer, which no route then declares.
 pub fn declare_rpu_dovi(ps: &mut PlaybackSession, rpu: plx_playback_contract::feed::RpuDovi) -> bool {
     let RpuDv::Open { mode } = ps.rpu_dv else {
         return false;
@@ -8414,7 +8417,8 @@ pub fn cur_enhancement_label(ps: &PlaybackSession) -> Option<&'static str> {
 /// source whose base layer is unusable (Dolby Vision Profile 5, from its record or from the RPUs
 /// [`declare_rpu_dovi`] adopted) forbids it whatever the contract says: the contract is rebuilt by
 /// every route change (an Original recovery resets it to the direct play's), and a copy of that
-/// video is the wrong picture one container down.
+/// video is the wrong picture one container down. For a record the server knows, the encode is its
+/// own Profile 5 handling; for one inferred from the RPUs it is not (see [`declare_rpu_dovi`]).
 pub(super) fn is_no_video_copy(ps: &PlaybackSession) -> bool {
     ps.cur_contract.no_video_copy || ps.src_dovi.base_layer_unusable()
 }
