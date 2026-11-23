@@ -515,9 +515,8 @@ pub struct PlaybackSession {
     /// The FILE's own Dolby Vision record and the declaration it would make as a direct play, set
     /// at the resolve whatever route was taken. `stream_dovi` above is what is being fed; a rebuild
     /// that copies the video (an audio switch, a seek, Original recovery) hands this on again
-    /// instead of losing it with the first re-encode, and [`is_no_video_copy`] reads it. Rewritten
-    /// only by [`declare_rpu_dovi`] (a record found in the RPUs, adopted where none was set) and,
-    /// for the decision, [`withdraw_dv_presentation`].
+    /// instead of losing it with the first re-encode, and [`is_no_video_copy`] reads it. Not frozen:
+    /// [`declare_rpu_dovi`] adopts a record found in the RPUs where none was set.
     src_dovi: plx_data::metadata::Dovi,
     src_dv_decision: plx_data::metadata::DvDecision,
     /// Whether this play may still declare the Dolby Vision the demuxer finds in the RPUs of a stream
@@ -7496,7 +7495,7 @@ pub fn stream_audio(ps: &PlaybackSession) -> Option<crate::player::recovery::Str
 /// video codec is declared, and for a raster the server never measured (the width or height is 0,
 /// which names no facet). Beside [`stream_audio`] so the session keeps its fields private.
 pub fn stream_video(ps: &PlaybackSession) -> Option<crate::player::recovery::StreamVideo> {
-    let fed_whole = !is_transcoding(ps) || (ps.cur_contract.remux && !ps.cur_contract.no_video_copy);
+    let fed_whole = !is_transcoding(ps) || (ps.cur_contract.remux && !is_no_video_copy(ps));
     let codec = stream_vcodec(ps);
     let (_, width, height) = ps.cur_src;
     (fed_whole && !codec.is_empty()).then(|| crate::player::recovery::StreamVideo {
@@ -8412,13 +8411,10 @@ pub fn cur_enhancement_label(ps: &PlaybackSession) -> Option<&'static str> {
         EnhancementOutcome::Refused => Some("refused"),
     }
 }
-/// Did this playback forbid the server a video stream COPY? Read by the seek, audio-switch and
-/// quality rebuilds so the constraint survives them — see [`PlaybackSession::cur_contract`]. A
-/// source whose base layer is unusable (Dolby Vision Profile 5, from its record or from the RPUs
-/// [`declare_rpu_dovi`] adopted) forbids it whatever the contract says: the contract is rebuilt by
-/// every route change (an Original recovery resets it to the direct play's), and a copy of that
-/// video is the wrong picture one container down. For a record the server knows, the encode is its
-/// own Profile 5 handling; for one inferred from the RPUs it is not (see [`declare_rpu_dovi`]).
+/// Did this playback forbid the server a video stream COPY? Read by every rebuild so the constraint
+/// survives it — see [`PlaybackSession::cur_contract`]. A source whose base layer is unusable
+/// (`src_dovi`: Dolby Vision Profile 5) forbids it whatever the contract says, since a route change
+/// resets the contract; the Original candidate's record is the file's, so this covers it too.
 pub(super) fn is_no_video_copy(ps: &PlaybackSession) -> bool {
     ps.cur_contract.no_video_copy || ps.src_dovi.base_layer_unusable()
 }
@@ -12407,9 +12403,6 @@ fn original_remux_shape(ps: &PlaybackSession) -> bool {
         && ps.cur_contract.ceiling.is_none()
         && cur_delivery(ps) == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
         && !is_no_video_copy(ps)
-        // The candidate's own record too, not only the file's ([`is_no_video_copy`]): a copy of a
-        // Dolby Vision Profile 5, one container down, carries no declaration.
-        && ps.auto_original.as_ref().is_some_and(|c| !c.dovi.base_layer_unusable())
 }
 
 /// The largest Part (whole-file bitrate, kbps) the app reads a second time beside a remux. The
@@ -13201,7 +13194,7 @@ fn live_is_original_burn(ps: &PlaybackSession) -> bool {
         && !ps.cur_contract.remux
         && ps.cur_contract.delivery == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
         && ps.cur_contract.ceiling.is_none()
-        && !ps.cur_contract.no_video_copy
+        && !is_no_video_copy(ps)
         && ps.cur_sub_sid != 0
         && !sidecar_drawn_by_client(ps)
 }
@@ -14018,13 +14011,15 @@ pub fn enhancement_test_session(route: EnhTestFixture) -> (PlaybackSession, Serv
         sample_rate: 0,
         bit_depth: 0,
     });
+    // The candidate's record is the file's, as a resolve plans it.
+    ps.src_dovi = if route.dv_base_unusable {
+        plx_data::metadata::Dovi { present: true, profile: 5, bl_compat: 0, ..plx_data::metadata::Dovi::NONE }
+    } else {
+        plx_data::metadata::Dovi::NONE
+    };
     ps.auto_original = route.base_present.then(|| AutoOriginalCandidate {
         direct: route.remux.is_none(),
-        dovi: if route.dv_base_unusable {
-            plx_data::metadata::Dovi { present: true, profile: 5, bl_compat: 0, ..plx_data::metadata::Dovi::NONE }
-        } else {
-            plx_data::metadata::Dovi::NONE
-        },
+        dovi: ps.src_dovi,
         dv_decision: if route.dv_declared {
             plx_data::metadata::DvDecision {
                 capability: plx_os::devcaps::dv::DvCapability::Supported,

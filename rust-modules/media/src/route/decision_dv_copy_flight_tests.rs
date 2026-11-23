@@ -18,7 +18,7 @@ const P81: plx_playback_contract::feed::RpuDovi = plx_playback_contract::feed::R
 /// the RPUs' declaration, which then declares `rpu` as the demuxer's report does.
 fn direct_play_declaring(rpu: plx_playback_contract::feed::RpuDovi) -> (PlaybackSession, FlightRig) {
     let mut ps = PlaybackSession::IDLE;
-    let rig = FlightRig::start_direct(&mut ps, Duration::from_millis(5));
+    let rig = FlightRig::start_direct(&mut ps, Duration::ZERO);
     assert!(set_stream_declaration_for_test(
         &mut ps, "hevc", "ac3", 23.976, plx_data::metadata::Dovi::NONE, false, DvCapability::Supported,
     ));
@@ -56,6 +56,15 @@ fn audio_conversion_request(ps: &mut PlaybackSession, rig: &FlightRig) -> String
     decisions.last().cloned().expect("the rebuild's /decision")
 }
 
+/// Whether `request` gave the server permission to copy the video (`directStream=1`).
+fn copies_video(request: &str) -> bool {
+    match super::test_support::query_param(request, "directStream") {
+        Some("1") => true,
+        Some("0") => false,
+        other => panic!("directStream={other:?}: {request}"),
+    }
+}
+
 fn cleanup(ps: &mut PlaybackSession, rig: FlightRig) {
     let _serial = rig.close();
     drop(take_pending_original());
@@ -70,25 +79,25 @@ fn an_inferred_profile_5_back_on_original_never_lets_an_audio_conversion_copy_it
     lower_then_back_to_original(&mut ps);
     assert_eq!(stream_dv_presentation(&ps).declared().map(|n| n.profile_id), Some(5), "Original keeps the node");
     let request = audio_conversion_request(&mut ps, &rig);
-    assert!(request.contains("directStream=0"), "a Profile 5 base layer was offered for a copy: {request}");
+    assert!(!copies_video(&request), "a Profile 5 base layer was offered for a copy: {request}");
     cleanup(&mut ps, rig);
 }
 
 #[test]
 fn a_profile_5_with_a_record_never_lets_an_audio_conversion_copy_its_video() {
     let mut ps = PlaybackSession::IDLE;
-    let rig = FlightRig::start_direct(&mut ps, Duration::from_millis(5));
+    let rig = FlightRig::start_direct(&mut ps, Duration::ZERO);
     let p5 = plx_data::metadata::Dovi { present: true, profile: 5, bl_present: true, rpu_present: true, ..plx_data::metadata::Dovi::NONE };
     assert!(set_stream_declaration_for_test(&mut ps, "hevc", "ac3", 23.976, p5, false, DvCapability::Supported));
     let decision = crate::route::stream_dv_decision(&ps);
     set_source_declaration_for_test(&mut ps, p5, decision);
     assert!(!ps.cur_contract.no_video_copy, "the premise: a direct play's contract forbids nothing");
     let request = audio_conversion_request(&mut ps, &rig);
-    assert!(request.contains("directStream=0"), "a Profile 5 base layer was offered for a copy: {request}");
+    assert!(!copies_video(&request), "a Profile 5 base layer was offered for a copy: {request}");
     // The same after a trip to a lower quality and back to Original.
     lower_then_back_to_original(&mut ps);
     let request = audio_conversion_request(&mut ps, &rig);
-    assert!(request.contains("directStream=0"), "a Profile 5 base layer was offered for a copy: {request}");
+    assert!(!copies_video(&request), "a Profile 5 base layer was offered for a copy: {request}");
     cleanup(&mut ps, rig);
 }
 
@@ -99,6 +108,6 @@ fn an_inferred_profile_81_back_on_original_still_copies_its_video_for_an_audio_c
     let (mut ps, rig) = direct_play_declaring(P81);
     lower_then_back_to_original(&mut ps);
     let request = audio_conversion_request(&mut ps, &rig);
-    assert!(request.contains("directStream=1"), "a usable base layer lost its copy: {request}");
+    assert!(copies_video(&request), "a usable base layer lost its copy: {request}");
     cleanup(&mut ps, rig);
 }
