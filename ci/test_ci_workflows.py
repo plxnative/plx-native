@@ -88,6 +88,25 @@ class CacheCleanup(unittest.TestCase):
         self.assertIn("--delete", body)
 
 
+class PullfrogIssuePreview(unittest.TestCase):
+    def test_preview_neither_runs_the_paid_labeler_nor_can_write_to_issues(self):
+        name = "issue-labels.yml"
+        preview = job_body(name, "pullfrog-preview")
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.pullfrog_preview", preview)
+        self.assertIn("github.event_name != 'workflow_dispatch' || !inputs.pullfrog_preview", job_body(name, "label"))
+        self.assertIn("needs: label", job_body(name, "fallback"))
+        self.assertIn('"$DRY_RUN" != true', preview)
+        self.assertRegex(preview, r"permissions:\n      contents: read\n      issues: read\n"
+                                  r"      pull-requests: read\n      id-token: write\n")
+        self.assertIn("GH_TOKEN: ${{ github.token }}", preview)
+        self.assertIn("persist-credentials: false", preview)
+        self.assertNotIn("secrets.", preview)
+        self.assertIn("push: disabled", preview)
+        self.assertIn("shell: disabled", preview)
+        self.assertRegex(preview, r"uses: pullfrog/pullfrog@[0-9a-f]{40}\b")
+        self.assertIn("PULLFROG_FORCE_LOCAL_CLI: '1'", preview)
+
+
 class SentryUpload(unittest.TestCase):
     def test_only_a_pull_requests_nightly_run_skips_the_upload(self):
         nightly = code("nightly.yml")

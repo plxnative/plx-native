@@ -48,6 +48,11 @@ on:
         required: false
         type: boolean
         default: true
+      pullfrog_preview:
+        description: Preview sponsored Pullfrog triage for one issue number (requires dry_run).
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -61,6 +66,7 @@ concurrency:
 jobs:
   label:
     name: label issues
+    if: github.event_name != 'workflow_dispatch' || !inputs.pullfrog_preview
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -145,3 +151,73 @@ jobs:
             esac
           done
           python3 ci/label-issue.py "${args[@]}"
+
+  pullfrog-preview:
+    name: preview Pullfrog issue triage
+    if: github.event_name == 'workflow_dispatch' && inputs.pullfrog_preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare issue and repository label context
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issues }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" != true || ! "$ISSUE" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::Pullfrog preview needs dry_run and exactly one issue number.'
+            exit 1
+          fi
+          python3 ci/label-issue.py --issue "$ISSUE" --pullfrog prepare > "$RUNNER_TEMP/pullfrog-issue.txt"
+      - name: Classify and triage with Pullfrog
+        id: pullfrog
+        uses: pullfrog/pullfrog@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+        env:
+          PULLFROG_FORCE_LOCAL_CLI: '1'
+          # The pinned action uses this token for Git and all GitHub tools. Push disabled alone
+          # would still mint an installation token that can write issues and PRs.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          prompt_file: ${{ runner.temp }}/pullfrog-issue.txt
+          model: openai/gpt-luna
+          effort: high
+          timeout: 6m
+          shell: disabled
+          push: disabled
+          progress_comments: disabled
+          output_schema: |
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["labels", "related", "follow_up"],
+              "properties": {
+                "labels": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 50}},
+                "related": {
+                  "type": "array", "maxItems": 2,
+                  "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["number", "reason"],
+                    "properties": {
+                      "number": {"type": "integer", "minimum": 1},
+                      "reason": {"type": "string", "minLength": 1, "maxLength": 250}
+                    }
+                  }
+                },
+                "follow_up": {"type": ["string", "null"], "minLength": 1, "maxLength": 300}
+              }
+            }
+      - name: Show validated labels, related reports and follow-up
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issues }}
+          PULLFROG_RESULT: ${{ steps.pullfrog.outputs.result }}
+        run: python3 ci/label-issue.py --issue "$ISSUE" --pullfrog preview
