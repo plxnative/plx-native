@@ -51,6 +51,7 @@
   "browse.detail.converts": "Konverzija na poslužitelju",
   "browse.detail.direct_play": "Izravna reprodukcija",
   "browse.detail.direct_stream": "Izravni prijenos",
+  "browse.detail.no_playback": "Reprodukcija nije moguća",
   "browse.detail.original_audio_converted": "Izvorno · zvuk konvertiran",
   "browse.detail.hardware_needs": "potrebna je hardverska pretvorba",
   "browse.detail.tonemap_needs": "potrebno je mapiranje tonova",
