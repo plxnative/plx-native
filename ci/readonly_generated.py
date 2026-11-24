@@ -13,7 +13,7 @@ import re
 from readonly_dependencies import _local_sha, _sha, _json, _manifest_paths, _configs, _workspace_hashes, WORKSPACE_HASHING
 
 CERTIFICATE_PATH = Path(__file__).with_name('proofs') / 'platform-generated-enums.json'
-CERTIFICATE_SHA256 = '9de326db3aeca0a6401c2981ef0e7d1fa5906681811959b7417ca66cf0ad0593'
+CERTIFICATE_SHA256 = 'f8632cdd70bf458542088bea42a13893f8ee87dc356d498bfe57649c482cede3'
 SOURCES = ['os/Cargo.toml', 'os/src/lib.rs', 'os/src/i18n/mod.rs',
            'os/build.rs', 'os/build_support/catalog.rs', 'build_support/install_identities.rs',
            'machine/src/lib.rs', 'machine/src/machine.rs']
@@ -35,7 +35,8 @@ MACHINE_LIB_SOURCES = ['105afdbb05fb762e6752cef260b6d928b1d828993350aaa71651f96c
 
 I18N_SOURCES = ['40a13d07a43c772b10587e510a69502684abfa1f582ce355b22fd935a8c46f45',
                 '867bb41013e0016d186e699698c762685325aa02f01ebe92d39797c0a41a37e1',
-                '82ee1803e4a6339772a175da2f256a7d6a313619e242f76f47c345cdd8199e92']
+                '82ee1803e4a6339772a175da2f256a7d6a313619e242f76f47c345cdd8199e92',
+                '32ea9330863811c414db94443f9f0db8d6904f33b36fb83d4c7f700b2fc86533']
 
 def source_hashes(root):
     sources = {p: _local_sha((root / p).read_bytes()) for p in SOURCES}
@@ -49,7 +50,7 @@ def source_hashes(root):
     # Owned-present migration changes sibling/test modules, never the canonical machine child.
     if sources['machine/src/lib.rs'] not in MACHINE_LIB_SOURCES: raise ValueError('unreviewed machine namespace')
     sources['machine/src/lib.rs'] = MACHINE_LIB_SOURCES
-    # Existing consumer variants differ in clock formatting, not include/enum identity.
+    # Existing consumer variants differ in clock formatting, sim cfg or month-name tables, not include/enum identity.
     if sources['os/src/i18n/mod.rs'] not in I18N_SOURCES: raise ValueError('unreviewed include namespace')
     sources['os/src/i18n/mod.rs'] = I18N_SOURCES
     return sources
