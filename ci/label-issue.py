@@ -165,7 +165,7 @@ def write_summary(preview):
             output.writelines(f"    {line}\n" for line in report.split("\n"))
 
 
-def publish_support(issue_url, token, preview, mode, comment_id, revision, conversation):
+def publish_support(issue_url, token, preview, mode, comment_id, revision, conversation, *, comment_token):
     support = preview.get("support")
     if mode != "public" or not support or not support["reply"]:
         return "withheld"
@@ -174,7 +174,10 @@ def publish_support(issue_url, token, preview, mode, comment_id, revision, conve
     if (issue_revision(issue) == revision and thread_revision(issue, comments) == conversation
             and support_turn(issue, comments, mode, comment_id)
             and not has_exposed_credential(issue, comments)):
-        request("POST", f"{issue_url}/comments", token, {"body": support["reply"]})
+        if not comment_token:
+            print("::error::Pullfrog installation token unavailable; support reply was not posted.")
+            return "unavailable"
+        request("POST", f"{issue_url}/comments", comment_token, {"body": support["reply"]})
         print(f"Support: posted one {support['topic']} diagnostic.")
         return "posted"
     print("::notice::Issue or conversation changed; skipped the stale support reply.")
@@ -268,12 +271,17 @@ def main():
     if not args.dry_run and preview["would_add"]:
         request("POST", f"{issue_url}/labels", token, {"labels": preview["would_add"]})
         preview["labels_added"] = preview["would_add"]
+    publication = "withheld"
     if preview["support"]:
-        preview["support"]["publication"] = (
+        publication = (
             "withheld" if args.dry_run else
-            publish_support(issue_url, token, preview, mode, comment_id, revision, conversation)
+            publish_support(issue_url, token, preview, mode, comment_id, revision, conversation,
+                            comment_token=os.environ.get("PULLFROG_COMMENT_TOKEN"))
         )
+        preview["support"]["publication"] = publication
     write_summary(preview)
+    if publication == "unavailable":
+        return 1
     if raw or sensitive:
         return 0
     print("::error::Pullfrog returned no result; only the deterministic user-report label was evaluated.")
@@ -399,14 +407,18 @@ def selftest():
             reply = {"support": {"reply": "Checked-in question", "topic": "playback_error"}}
             new_comment = {"id": 1, "body": "Playback works now", "user": {"id": 7, "type": "User"}}
             with patch(__name__ + ".request", return_value=report) as api, \
-                    patch(__name__ + ".paged", side_effect=[[], [new_comment], []]), redirect_stdout(StringIO()):
-                publish_support(url, "token", reply, "shadow", 0, revision, thread_revision(report, []))
+                    patch(__name__ + ".paged", side_effect=[[], [new_comment], [], []]), redirect_stdout(StringIO()):
+                conversation = thread_revision(report, [])
+                publish_support(url, "token", reply, "shadow", 0, revision, conversation, comment_token="app")
                 api.assert_not_called()
-                publish_support(url, "token", reply, "public", 0, "edited", thread_revision(report, []))
-                publish_support(url, "token", reply, "public", 0, revision, thread_revision(report, []))
-                publish_support(url, "token", reply, "public", 0, revision, thread_revision(report, []))
+                publish_support(url, "token", reply, "public", 0, "edited", conversation, comment_token="app")
+                publish_support(url, "token", reply, "public", 0, revision, conversation, comment_token="app")
+                self.assertEqual(publish_support(url, "token", reply, "public", 0, revision, conversation,
+                                                 comment_token=None), "unavailable")
+                self.assertEqual(publish_support(url, "token", reply, "public", 0, revision, conversation,
+                                                 comment_token="app"), "posted")
             self.assertEqual([c for c in api.call_args_list if c.args[0] == "POST"], [
-                call("POST", f"{url}/comments", "token", {"body": "Checked-in question"}),
+                call("POST", f"{url}/comments", "app", {"body": "Checked-in question"}),
             ])
 
     return 0 if unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(T)).wasSuccessful() else 1

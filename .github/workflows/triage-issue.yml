@@ -90,6 +90,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,9 +99,16 @@ jobs:
             ci/label-issue.py
             ci/issue_support.py
           sparse-checkout-cone-mode: false
-      - name: Apply validated labels
+      - name: Get Pullfrog token for public replies
+        id: pullfrog_comment
+        if: inputs.support_mode == 'public' && needs.classify.outputs.sensitive != 'true' && needs.classify.outputs.result != ''
+        # A failed token exchange must not prevent labels from being applied.
+        continue-on-error: true
+        uses: pullfrog/pullfrog/get-installation-token@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+      - name: Apply validated triage
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PULLFROG_COMMENT_TOKEN: ${{ steps.pullfrog_comment.outputs.token }}
           ISSUE: ${{ inputs.number }}
           ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
           ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
