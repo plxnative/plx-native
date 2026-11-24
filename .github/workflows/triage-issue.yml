@@ -105,6 +105,8 @@ jobs:
         # A failed token exchange must not prevent labels from being applied.
         continue-on-error: true
         uses: pullfrog/pullfrog/get-installation-token@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+        env:
+          PULLFROG_FORCE_LOCAL_CLI: '1'
       - name: Apply validated triage
         env:
           GITHUB_TOKEN: ${{ github.token }}

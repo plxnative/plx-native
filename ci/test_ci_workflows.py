@@ -121,6 +121,7 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertNotIn("PULLFROG_COMMENT_TOKEN", classify)
         self.assertIn("id-token: write", apply)
         self.assertRegex(apply, r"uses: pullfrog/pullfrog/get-installation-token@[0-9a-f]{40}\b")
+        self.assertIn("PULLFROG_FORCE_LOCAL_CLI: '1'", apply)
         self.assertIn("if: inputs.support_mode == 'public' && needs.classify.outputs.sensitive != 'true'", apply)
         self.assertIn("PULLFROG_COMMENT_TOKEN: ${{ steps.pullfrog_comment.outputs.token }}", apply)
         action = (ROOT / ".github/actions/classify-issue/action.yml").read_text()
