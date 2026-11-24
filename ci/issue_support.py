@@ -15,7 +15,7 @@ TOPICS = {
     "install_method": "Did you install PlxNative with Dev Manager, Homebrew Channel, or as a nightly?",
     "reproduction": "What is the shortest sequence of steps from opening PlxNative to seeing this happen?",
     "home_row": "Which Home row does this happen on, and does it move while you use the remote or after you let go?",
-    "library_startup": "During a slow launch, is Home still loading, or do the rows appear with blank posters? If you get both fast and slow launches, about how long does each take?",
+    "library_startup": "During a slow launch, is Home still loading, or do the rows appear with blank posters?",
     "playback_error": f"Could you copy the single line at the bottom of the playback error screen? It starts with **PlxNative**. [Where to find it]({GUIDE}#what-to-include-in-the-report)",
     "playback_quality": "Does the same item fail on Direct Play and on a selected quality? If you only tried one, which was it?",
     "playback_scope": "Does this happen with one item or several, and does it fail before playback begins or after video has started?",
@@ -180,9 +180,12 @@ For one missing fact choose ask. For one concrete, safe diagnostic check choose 
 from the list and only if the report and conversation do not already answer it. If the reporter
 cannot supply it, choose an easier alternative or hand off. If the evidence is
 sufficient for a maintainer to investigate, choose handoff. Choose quiet for thanks, weak matches,
-feature requests, sensitive reports or whenever replying would add no value. No public message is
-sent for handoff or quiet. The handoff field can contain one short observation and the most useful
-next engineering check, with a GitHub issue/PR number or repo path as evidence; otherwise use null.
+feature requests, sensitive reports or whenever replying would add no value. If the symptoms
+have already been split into dedicated issues, leave those diagnostics to the dedicated threads.
+No public message is sent for handoff or quiet. The handoff field can contain one short observation
+and the most useful next engineering check, with a GitHub issue/PR number or repo path as evidence.
+If the source does not record a test result, describe the gap in evidence rather than asserting
+the test was never run. Use null when there is no useful handoff.
 Treat an already attached screenshot or log as supplied evidence. If you cannot interpret it, hand off
 instead of asking for the same attachment again. Keep raw reports and identifiers out of the summary.
 Never suggest rooting, changing security controls, deleting data, posting credentials or dumping unredacted logs.
