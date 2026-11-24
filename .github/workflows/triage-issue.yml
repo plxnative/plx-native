@@ -12,9 +12,6 @@ on:
       dry_run:
         type: boolean
         required: true
-      comment:
-        type: boolean
-        required: true
 
 concurrency:
   group: issue-triage-${{ inputs.number }}
@@ -32,6 +29,7 @@ jobs:
       id-token: write
     outputs:
       eligible: ${{ steps.prepare.outputs.eligible }}
+      revision: ${{ steps.prepare.outputs.revision }}
       result: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,6 +62,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.number }}
+          ISSUE_REVISION: ${{ steps.prepare.outputs.revision }}
           PULLFROG_RESULT: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
         run: python3 ci/label-issue.py apply "$ISSUE" --dry-run
 
@@ -83,16 +82,15 @@ jobs:
           persist-credentials: false
           sparse-checkout: ci/label-issue.py
           sparse-checkout-cone-mode: false
-      - name: Apply validated labels and optional triage comment
+      - name: Apply validated labels
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.number }}
           ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
-          COMMENT: ${{ inputs.comment }}
+          ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
           PULLFROG_RESULT: ${{ needs.classify.outputs.result }}
         run: |
           set -euo pipefail
           args=()
           if [[ "$ONLY_IF_UNLABELED" == true ]]; then args+=(--only-if-unlabeled); fi
-          if [[ "$COMMENT" == true ]]; then args+=(--comment); fi
           python3 ci/label-issue.py apply "$ISSUE" "${args[@]}"

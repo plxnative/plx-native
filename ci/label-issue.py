@@ -8,6 +8,7 @@ issue form and maintainers own the Type field. Dry runs only read and report.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -25,7 +26,6 @@ USER_REPORT = "user-report"
 MAX_AREAS = 3
 USER_ASSOCIATIONS = {"NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR"}
 BODY_LIMIT = 4000
-TRIAGE_MARKER = "<!-- plxnative-issue-triage -->"
 
 
 def candidates(repo_labels):
@@ -50,6 +50,11 @@ def approved_labels(issue, repo_labels, proposed):
 
 def issue_matches(issue, only_if_unlabeled):
     return "pull_request" not in issue and (not only_if_unlabeled or not issue.get("labels"))
+
+
+def issue_revision(issue):
+    report = json.dumps([issue["title"], issue.get("body") or ""])
+    return hashlib.sha256(report.encode()).hexdigest()
 
 
 def select_issues(spec, only_if_unlabeled, unlabelled):
@@ -123,28 +128,6 @@ def result_preview(issue, repo_labels, result, lookup):
     }
 
 
-def comment_body(preview):
-    def plain(text):
-        # Render model text as text and prevent GitHub mention/issue auto-linking.
-        text = " ".join(text.split()).replace("@", "@\u200b").replace("#", "#\u200b")
-        text = re.sub(r"(?i)\b(?:https?://|www\.)\S+", "[link omitted]", text)
-        return re.sub(r"([\\\x60*_{}\[\]()<>&|~!])", r"\\\1", text)
-
-    blocks = []
-    if preview["related"]:
-        links = "\n".join(f"- [#{item['number']}]({item['url']}) — {plain(item['reason'])}"
-                          for item in preview["related"])
-        blocks.append(f"**Related reports**\n\n{links}")
-    if preview["follow_up"]:
-        blocks.append(plain(preview["follow_up"]))
-    return "\n\n".join([TRIAGE_MARKER, *blocks]) if blocks else ""
-
-
-def already_commented(comments):
-    return any((comment.get("user") or {}).get("login") == "github-actions[bot]"
-               and (comment.get("body") or "").startswith(TRIAGE_MARKER) for comment in comments)
-
-
 def request(method, url, token, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
@@ -167,21 +150,15 @@ def paged(url, token):
             return result
 
 
-def apply_result(issue_url, token, preview, dry_run, comment):
+def apply_result(issue_url, token, preview, dry_run):
     report = json.dumps(preview, indent=2, ensure_ascii=False)
     print(report)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as output:
             output.writelines(f"    {line}\n" for line in report.split("\n"))
-    if dry_run:
-        return
-    if preview["would_add"]:
+    if not dry_run and preview["would_add"]:
         request("POST", f"{issue_url}/labels", token, {"labels": preview["would_add"]})
-    if comment:
-        body = comment_body(preview)
-        if body and not already_commented(paged(f"{issue_url}/comments", token)):
-            request("POST", f"{issue_url}/comments", token, {"body": body})
 
 
 def set_output(name, value):
@@ -202,8 +179,6 @@ def main():
         stage.add_argument("number", type=int)
         stage.add_argument("--only-if-unlabeled", action="store_true")
         stage.add_argument("--dry-run", action="store_true")
-        if command == "apply":
-            stage.add_argument("--comment", action="store_true")
     args = ap.parse_args()
     token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
@@ -228,6 +203,7 @@ def main():
     repo_labels = paged(f"{base}/labels", token)
     if args.command == "prepare":
         print(pullfrog_prompt(repo, issue, repo_labels, args.dry_run), end="")
+        set_output("revision", issue_revision(issue))
         set_output("eligible", "true")
         return 0
 
@@ -240,9 +216,12 @@ def main():
             return None
 
     raw = os.environ.get("PULLFROG_RESULT")
-    result = json.loads(raw) if raw else {"labels": [], "related": [], "follow_up": None}
+    fresh = os.environ["ISSUE_REVISION"] == issue_revision(issue)
+    if not fresh:
+        print(f"::warning::#{args.number} changed during classification; skipped the stale model result.")
+    result = json.loads(raw) if raw and fresh else {"labels": [], "related": [], "follow_up": None}
     preview = result_preview(issue, repo_labels, result, lookup)
-    apply_result(issue_url, token, preview, args.dry_run, args.comment)
+    apply_result(issue_url, token, preview, args.dry_run)
     if raw:
         return 0
     print("::error::Pullfrog returned no result; only the deterministic user-report label was evaluated.")
@@ -309,29 +288,26 @@ def selftest():
             url = f"{API}/repos/owner/repo/issues/42"
             with patch(__name__ + ".request") as api, redirect_stdout(StringIO()), \
                     patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}):
-                apply_result(url, "token", preview, True, True)
+                apply_result(url, "token", preview, True)
                 api.assert_not_called()
-                apply_result(url, "token", preview, False, True)
+                apply_result(url, "token", preview, False)
                 api.assert_called_once_with("POST", f"{url}/labels", "token", {"labels": [USER_REPORT]})
 
-        def test_comment_is_idempotent_and_does_not_ping_model_mentions(self):
-            result = {"labels": [], "related": [], "follow_up": "Can @someone confirm #42 from https://example.test?"}
-            preview = result_preview(dict(issue, labels=[{"name": USER_REPORT}]), labels, result, Mock())
+        def test_edited_report_discards_stale_model_labels(self):
+            result = {"labels": ["ui"], "related": [], "follow_up": None}
             url = f"{API}/repos/owner/repo/issues/42"
-            impostor = {"user": {"login": "someone"}, "body": TRIAGE_MARKER}
-            bot = dict(impostor, user={"login": "github-actions[bot]"})
-            with patch(__name__ + ".request") as api, redirect_stdout(StringIO()), \
-                    patch(__name__ + ".paged", side_effect=[[impostor], [bot]]), \
-                    patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}):
-                apply_result(url, "token", preview, False, True)
-                apply_result(url, "token", preview, False, True)
-            api.assert_called_once()
-            self.assertEqual(api.call_args.args[:3], ("POST", f"{url}/comments", "token"))
-            body = api.call_args.args[3]["body"]
-            self.assertTrue(body.startswith(TRIAGE_MARKER))
-            self.assertNotIn("@someone", body)
-            self.assertNotIn("#42", body)
-            self.assertNotIn("https://example.test", body)
+            env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo",
+                   "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": "old-revision",
+                   "PULLFROG_RESULT": json.dumps(result)}
+            with patch.object(sys, "argv", ["label-issue.py", "apply", "42"]), \
+                    patch(__name__ + ".request", return_value=issue) as api, \
+                    patch(__name__ + ".paged", return_value=labels), \
+                    patch.dict(os.environ, env), redirect_stdout(StringIO()):
+                self.assertEqual(main(), 0)
+            self.assertEqual(api.call_args_list, [
+                call("GET", url, "token"),
+                call("POST", f"{url}/labels", "token", {"labels": [USER_REPORT]}),
+            ])
 
     return 0 if unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(T)).wasSuccessful() else 1
 

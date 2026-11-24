@@ -96,7 +96,7 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertIn('"$DRY_RUN" != true && "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH"', caller)
         self.assertIn('select "$ISSUE" --only-if-unlabeled', caller)
         self.assertIn("uses: ./.github/workflows/triage-issue.yml", caller)
-        self.assertIn("comment: ${{ github.event_name == 'issues' && github.event.action == 'opened' }}", caller)
+        self.assertNotIn("comment:", caller)
         self.assertIn("group: issue-triage-${{ inputs.number }}", code("triage-issue.yml"))
 
     def test_model_token_is_read_only_and_the_apply_job_cannot_run_in_a_dry_run(self):
@@ -105,10 +105,12 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertNotIn("issues: write", classify)
         self.assertEqual(classify.count("uses: ./.github/actions/classify-issue"), 2)
         self.assertIn("if: steps.initial.outcome == 'failure'", classify)
+        self.assertIn("revision: ${{ steps.prepare.outputs.revision }}", classify)
         self.assertIn('apply "$ISSUE" --dry-run', classify)
         apply = job_body("triage-issue.yml", "apply")
         self.assertIn("!inputs.dry_run && needs.classify.outputs.eligible == 'true'", apply)
         self.assertIn("issues: write", apply)
+        self.assertIn("ISSUE_REVISION: ${{ needs.classify.outputs.revision }}", apply)
         self.assertNotIn("classify-issue", apply)
         self.assertNotIn("id-token: write", apply)
         action = (ROOT / ".github/actions/classify-issue/action.yml").read_text()
