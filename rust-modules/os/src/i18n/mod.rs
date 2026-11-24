@@ -204,13 +204,14 @@ impl LocaleContext {
     /// for the shipped German, Portuguese and Belarusian once the month names are ours), except
     /// where CLDR spells the skeleton with the STAND-ALONE month (`LLL`) and that differs from the
     /// form after a day: Russian and Belarusian write "май 2024 г." where a day makes it "9 мая"
-    /// ([`standalone_abbreviated`]). Every other shipped language's yMMM is `MMM y`, or `LLL y`
-    /// over stand-alone names identical to its format ones (Polish).
+    /// ([`standalone_abbreviated`]). Croatian writes `LLL y.` with a period after the year.
+    /// The remaining languages use `MMM y` or `LLL y` with the same format and stand-alone names.
     pub fn month_year(&self, year: i32, month: u8) -> Option<String> {
         icu_calendar::Date::try_new_gregorian(year, month, 1).ok()?;
         let name = self.month_short(month)?;
         Some(match self.language {
             Language::Hu => format!("{year}. {name}"),
+            Language::Hr => format!("{name} {year}."),
             Language::Ca | Language::Pt => format!("{name} de {year}"),
             Language::Ru | Language::Be => format!("{name} {year}\u{a0}г."),
             _ => format!("{name} {year}"),

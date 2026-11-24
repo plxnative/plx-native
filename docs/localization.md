@@ -1,12 +1,12 @@
 # Help translate PlxNative
 
-PlxNative's interface is available in English, Spanish, French, Italian, European Portuguese, German, Hungarian, Russian, Polish, Dutch and Belarusian
-(official Cyrillic orthography). Help improve a translation or contribute another language through a pull request
+PlxNative's interface is available in English, Spanish, French, Italian, European Portuguese, German, Hungarian, Russian, Polish, Dutch,
+Belarusian (official Cyrillic orthography) and Croatian. Help improve a translation or contribute another language through a pull request
 at https://github.com/plxnative/plx-native.
 
 ## Translate a message
 
-Catalogs live in `locales/en`, `locales/es`, `locales/fr`, `locales/it`, `locales/pt`, `locales/de`, `locales/hu`, `locales/ru`, `locales/pl`, `locales/nl`,`locales/be` and `locales/hr`, split by UI area. English is the
+Catalogs live in `locales/en`, `locales/es`, `locales/fr`, `locales/it`, `locales/pt`, `locales/de`, `locales/hu`, `locales/ru`, `locales/pl`, `locales/nl`, `locales/be` and `locales/hr`, split by UI area. English is the
 source: each scoped, stable key has a `value`, translator `description`, and optional typed
 `args`. The other languages contain the same keys, except the English-only ones (described
 below), with translated string or plural values.
@@ -133,7 +133,8 @@ or Hebrew UI language needs a mirrored layout before it can be offered.
 ## Runtime behavior
 
 Settings → Language defaults to the television's UI language. Explicit English, Spanish, French, Italian,
-Portuguese, German, Hungarian, Russian, Polish, Dutch and Belarusian choices apply the next time the app starts. The running UI and Plex request language
+Portuguese, German, Hungarian, Russian, Polish, Dutch, Belarusian and Croatian choices apply the next time the app starts.
+The running UI and Plex request language
 remain unchanged until then; playback is not interrupted. The contribution action displays this
 guide's URL and QR code for opening on another device.
 
