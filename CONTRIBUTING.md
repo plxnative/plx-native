@@ -29,8 +29,9 @@ The Issue labels workflow calls Pullfrog once per eligible turn on GitHub-hosted
 one retry on failure. The same run can classify the issue and select a diagnostic. The pinned
 action gets a read-only GitHub token, no provider secrets and no shell. Issue text and comments
 reach the model as GitHub tool results, which can include media hosted by GitHub. A separate
-Python step applies labels with the workflow token and sends public replies as `pullfrog[bot]`
-with a short-lived Pullfrog App token.
+Python step applies labels and sends public replies as `pullfrog[bot]` with a short-lived
+Pullfrog App token. If that token is unavailable, pending writes are withheld and the run
+reports the failure in Actions.
 
 - In the [Pullfrog console](https://pullfrog.com/console), turn off **Enrich issues** and
   **Label issues** so the workflow owns intake. Keep **Review PRs**, **Address reviews** and

@@ -165,7 +165,7 @@ def write_summary(preview):
             output.writelines(f"    {line}\n" for line in report.split("\n"))
 
 
-def publish_support(issue_url, token, preview, mode, comment_id, revision, conversation, *, comment_token):
+def publish_support(issue_url, token, preview, mode, comment_id, revision, conversation, *, write_token):
     support = preview.get("support")
     if mode != "public" or not support or not support["reply"]:
         return "withheld"
@@ -174,10 +174,10 @@ def publish_support(issue_url, token, preview, mode, comment_id, revision, conve
     if (issue_revision(issue) == revision and thread_revision(issue, comments) == conversation
             and support_turn(issue, comments, mode, comment_id)
             and not has_exposed_credential(issue, comments)):
-        if not comment_token:
+        if not write_token:
             print("::error::Pullfrog installation token unavailable; support reply was not posted.")
             return "unavailable"
-        request("POST", f"{issue_url}/comments", comment_token, {"body": support["reply"]})
+        request("POST", f"{issue_url}/comments", write_token, {"body": support["reply"]})
         print(f"Support: posted one {support['topic']} diagnostic.")
         return "posted"
     print("::notice::Issue or conversation changed; skipped the stale support reply.")
@@ -268,18 +268,23 @@ def main():
                              followup=bool(comment_id))
     preview["mode"] = "dry_run" if args.dry_run else mode
     preview["labels_added"] = []
-    if not args.dry_run and preview["would_add"]:
-        request("POST", f"{issue_url}/labels", token, {"labels": preview["would_add"]})
+    write_token = os.environ.get("PULLFROG_WRITE_TOKEN")
+    labels_pending = not args.dry_run and bool(preview["would_add"])
+    if labels_pending and write_token:
+        request("POST", f"{issue_url}/labels", write_token, {"labels": preview["would_add"]})
         preview["labels_added"] = preview["would_add"]
     publication = "withheld"
     if preview["support"]:
         publication = (
             "withheld" if args.dry_run else
             publish_support(issue_url, token, preview, mode, comment_id, revision, conversation,
-                            comment_token=os.environ.get("PULLFROG_COMMENT_TOKEN"))
+                            write_token=write_token)
         )
         preview["support"]["publication"] = publication
     write_summary(preview)
+    if labels_pending and not write_token:
+        print("::error::Pullfrog installation token unavailable; issue labels were not applied.")
+        return 1
     if publication == "unavailable":
         return 1
     if raw or sensitive:
@@ -346,7 +351,8 @@ def selftest():
         def test_dry_run_never_writes_and_failed_model_can_add_only_user_report(self):
             url = f"{API}/repos/owner/repo/issues/42"
             env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo", "SUPPORT_MODE": "off",
-                   "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": issue_revision(issue), "PULLFROG_RESULT": ""}
+                   "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": issue_revision(issue), "PULLFROG_RESULT": "",
+                   "PULLFROG_WRITE_TOKEN": "app"}
             with patch.object(sys, "argv", ["label-issue.py", "apply", "42", "--dry-run"]), \
                     patch(__name__ + ".request", return_value=issue) as api, patch(__name__ + ".paged", return_value=labels), \
                     patch.dict(os.environ, env), redirect_stdout(StringIO()):
@@ -357,7 +363,26 @@ def selftest():
                 self.assertEqual(main(), 1)
                 self.assertEqual(api.call_args_list, [
                     call("GET", url, "token"),
-                    call("POST", f"{url}/labels", "token", {"labels": [USER_REPORT]}),
+                    call("POST", f"{url}/labels", "app", {"labels": [USER_REPORT]}),
+                ])
+
+        def test_shadow_labels_use_the_app_token_and_never_fall_back_to_the_workflow_token(self):
+            url = f"{API}/repos/owner/repo/issues/42"
+            env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo", "SUPPORT_MODE": "shadow",
+                   "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": issue_revision(issue),
+                   "PULLFROG_RESULT": json.dumps({"labels": ["ui"], "related": [], "support": None}),
+                   "PULLFROG_WRITE_TOKEN": ""}
+            with patch.object(sys, "argv", ["label-issue.py", "apply", "42"]), \
+                    patch(__name__ + ".request", return_value=issue) as api, patch(__name__ + ".paged", return_value=labels), \
+                    patch.dict(os.environ, env), redirect_stdout(StringIO()):
+                self.assertEqual(main(), 1)
+                api.assert_called_once_with("GET", url, "token")
+                api.reset_mock()
+                os.environ["PULLFROG_WRITE_TOKEN"] = "app"
+                self.assertEqual(main(), 0)
+                self.assertEqual(api.call_args_list, [
+                    call("GET", url, "token"),
+                    call("POST", f"{url}/labels", "app", {"labels": ["ui", USER_REPORT]}),
                 ])
 
         def test_edited_report_discards_stale_model_labels(self):
@@ -365,7 +390,7 @@ def selftest():
             url = f"{API}/repos/owner/repo/issues/42"
             env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo",
                    "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": "old-revision",
-                   "PULLFROG_RESULT": json.dumps(result)}
+                   "PULLFROG_RESULT": json.dumps(result), "PULLFROG_WRITE_TOKEN": "app"}
             with patch.object(sys, "argv", ["label-issue.py", "apply", "42"]), \
                     patch(__name__ + ".request", return_value=issue) as api, \
                     patch(__name__ + ".paged", return_value=labels), \
@@ -373,7 +398,7 @@ def selftest():
                 self.assertEqual(main(), 0)
             self.assertEqual(api.call_args_list, [
                 call("GET", url, "token"),
-                call("POST", f"{url}/labels", "token", {"labels": [USER_REPORT]}),
+                call("POST", f"{url}/labels", "app", {"labels": [USER_REPORT]}),
             ])
 
         def test_credential_notice_keeps_deterministic_label_without_inference(self):
@@ -381,7 +406,7 @@ def selftest():
             url = f"{API}/repos/owner/repo/issues/42"
             env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo", "SUPPORT_MODE": "off",
                    "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": issue_revision(report),
-                   "PULLFROG_RESULT": ""}
+                   "PULLFROG_RESULT": "", "PULLFROG_WRITE_TOKEN": "app"}
             with patch.object(sys, "argv", ["label-issue.py", "prepare", "42"]), \
                     patch(__name__ + ".request", return_value=report) as api, \
                     patch(__name__ + ".paged", return_value=labels) as pages, \
@@ -397,7 +422,7 @@ def selftest():
                 self.assertEqual(main(), 0)
                 self.assertEqual(api.call_args_list, [
                     call("GET", url, "token"),
-                    call("POST", f"{url}/labels", "token", {"labels": [USER_REPORT]}),
+                    call("POST", f"{url}/labels", "app", {"labels": [USER_REPORT]}),
                 ])
 
         def test_only_public_fresh_support_can_post(self):
@@ -409,14 +434,14 @@ def selftest():
             with patch(__name__ + ".request", return_value=report) as api, \
                     patch(__name__ + ".paged", side_effect=[[], [new_comment], [], []]), redirect_stdout(StringIO()):
                 conversation = thread_revision(report, [])
-                publish_support(url, "token", reply, "shadow", 0, revision, conversation, comment_token="app")
+                publish_support(url, "token", reply, "shadow", 0, revision, conversation, write_token="app")
                 api.assert_not_called()
-                publish_support(url, "token", reply, "public", 0, "edited", conversation, comment_token="app")
-                publish_support(url, "token", reply, "public", 0, revision, conversation, comment_token="app")
+                publish_support(url, "token", reply, "public", 0, "edited", conversation, write_token="app")
+                publish_support(url, "token", reply, "public", 0, revision, conversation, write_token="app")
                 self.assertEqual(publish_support(url, "token", reply, "public", 0, revision, conversation,
-                                                 comment_token=None), "unavailable")
+                                                 write_token=None), "unavailable")
                 self.assertEqual(publish_support(url, "token", reply, "public", 0, revision, conversation,
-                                                 comment_token="app"), "posted")
+                                                 write_token="app"), "posted")
             self.assertEqual([c for c in api.call_args_list if c.args[0] == "POST"], [
                 call("POST", f"{url}/comments", "app", {"body": "Checked-in question"}),
             ])
