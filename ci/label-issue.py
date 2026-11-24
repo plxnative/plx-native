@@ -139,8 +139,8 @@ def sanitize(picked, cands):
     return areas
 
 
-def decide(issue, repo_labels, ask_model):
-    """`(labels to add, ok)` for `issue`. `ask_model(messages) -> str | None`; pure otherwise.
+def pick_labels(issue, repo_labels, ask_model):
+    """`(picked labels, ok)` for `issue`. `ask_model(messages) -> str | None`.
 
     `ok` is False when the model gave no usable answer: only `user-report` (which needs no model)
     is returned then, and the caller reports the failure instead of guessing areas."""
@@ -155,8 +155,12 @@ def decide(issue, repo_labels, ask_model):
     names = {l["name"] for l in repo_labels}
     if is_user_report(issue) and USER_REPORT in names:
         picked.append(USER_REPORT)
+    return picked, ok
+
+
+def labels_to_add(issue, picked):
     have = {l["name"] for l in issue.get("labels", [])}
-    return [name for name in picked if name not in have], ok
+    return [name for name in picked if name not in have]
 
 
 # --- I/O -----------------------------------------------------------------------------------------
@@ -271,12 +275,17 @@ def label_issue(repo, number, token, repo_labels, ask, dry_run, only_if_unlabele
     if only_if_unlabeled and issue.get("labels"):
         print(f"#{number}: already labeled, skipped")
         return True
-    add, ok = decide(issue, repo_labels, ask)
-    action = "would add" if dry_run else "add"
-    summary = f"{action} {', '.join(add)}" if add else "nothing to add"
-    print(f"#{number} {issue.get('title', '')!r}: {summary}")
-    if add and not dry_run:
-        request("POST", f"{API}/repos/{repo}/issues/{number}/labels", token, {"labels": add})
+    # Preview the full classification on an already labeled issue, then compare it with its labels.
+    classification_issue = dict(issue, labels=[]) if dry_run else issue
+    picked, ok = pick_labels(classification_issue, repo_labels, ask)
+    add = labels_to_add(issue, picked)
+    title = f"#{number} {issue.get('title', '')!r}"
+    if dry_run:
+        print(f"{title}: picks {', '.join(picked) or 'nothing'}; would add {', '.join(add) or 'nothing'}")
+    else:
+        print(f"{title}: {', '.join(add) or 'nothing to add'}")
+        if add:
+            request("POST", f"{API}/repos/{repo}/issues/{number}/labels", token, {"labels": add})
     if not ok:
         print(f"::error::#{number}: the model gave no usable answer ({LAST_FAILURE['reason']}), "
               "so there are no area labels to add")
@@ -334,6 +343,9 @@ def report_failed(failed, output):
 
 def selftest():
     import unittest
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from unittest.mock import patch
 
     labels = [{"name": n, "description": f"{n} things"} for n in (
         "artwork", "bug", "documentation", "duplicate", "enhancement", "good first issue",
@@ -343,7 +355,8 @@ def selftest():
               "body": "i love how fast the app is but the Arabic subtitles aren't working correctly."}
 
     def got(issue, ans, repo=labels):
-        return decide(issue, repo, lambda m: ans)
+        picked, ok = pick_labels(issue, repo, lambda _: ans)
+        return labels_to_add(issue, picked), ok
 
     class T(unittest.TestCase):
         def test_only_approved_area_labels_are_candidates(self):
@@ -390,6 +403,16 @@ def selftest():
         def test_existing_labels_are_not_re_added(self):
             had = dict(arabic, labels=[{"name": "playback"}, {"name": "user-report"}])
             self.assertEqual(got(had, '{"labels": ["playback", "subtitles"]}'), (["subtitles"], True))
+
+        def test_dry_run_shows_full_pick_without_writing(self):
+            had = dict(arabic, labels=[{"name": "playback"}, {"name": "user-report"}])
+            output = StringIO()
+            with patch(__name__ + ".request", return_value=had) as api, redirect_stdout(output):
+                ok = label_issue("owner/repo", 483, "token", labels,
+                                 lambda _: '{"labels": ["playback", "ui"]}', True, False)
+            self.assertTrue(ok)
+            self.assertIn("picks playback, ui, user-report; would add ui", output.getvalue())
+            api.assert_called_once_with("GET", f"{API}/repos/owner/repo/issues/483", "token")
 
         def test_missing_repo_label_is_never_added(self):
             few = [l for l in labels if l["name"] not in ("subtitles", "user-report")]
