@@ -1,11 +1,12 @@
 name: Issue labels
 
-# Pullfrog proposes triage. The repository's label script owns all issue writes.
-# Edited issues are handled only while unlabeled. Manual backfill defaults to dry run.
-# Public replies come from Pullfrog's separate Enrich issues automation when enabled.
+# The same Pullfrog run classifies and handles first-line issue support.
+# Shadow is the default. Turn off native Enrich and Label before choosing public.
 on:
   issues:
     types: [opened, reopened, edited]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       issues:
@@ -22,6 +23,11 @@ permissions: {}
 jobs:
   select:
     name: select issues
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (vars.PLXNATIVE_ISSUE_SUPPORT == 'public' && !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' && github.event.comment.user.type == 'User' &&
+      github.event.comment.user.id == github.event.issue.user.id)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -33,7 +39,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: ci/label-issue.py
+          sparse-checkout: |
+            ci/label-issue.py
+            ci/issue_support.py
           sparse-checkout-cone-mode: false
       - name: Resolve issue numbers
         id: select
@@ -78,3 +86,8 @@ jobs:
       number: ${{ matrix.issue.number }}
       only_if_unlabeled: ${{ matrix.issue.only_if_unlabeled }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      support_mode: >-
+        ${{ github.event_name == 'issue_comment' && 'public' ||
+        github.event_name == 'issues' && github.event.action == 'opened' && (vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow') ||
+        github.event_name == 'workflow_dispatch' && inputs.dry_run && 'preview' || 'off' }}
+      comment_id: ${{ github.event.comment.id || 0 }}

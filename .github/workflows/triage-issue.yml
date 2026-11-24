@@ -12,6 +12,12 @@ on:
       dry_run:
         type: boolean
         required: true
+      support_mode:
+        type: string
+        required: true
+      comment_id:
+        type: number
+        required: true
 
 concurrency:
   group: issue-triage-${{ inputs.number }}
@@ -30,6 +36,7 @@ jobs:
     outputs:
       eligible: ${{ steps.prepare.outputs.eligible }}
       revision: ${{ steps.prepare.outputs.revision }}
+      conversation: ${{ steps.prepare.outputs.conversation }}
       result: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +49,8 @@ jobs:
           ISSUE: ${{ inputs.number }}
           ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
           DRY_RUN: ${{ inputs.dry_run }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
         run: |
           set -euo pipefail
           args=()
@@ -63,6 +72,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.number }}
           ISSUE_REVISION: ${{ steps.prepare.outputs.revision }}
+          SUPPORT_CONVERSATION: ${{ steps.prepare.outputs.conversation }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
           PULLFROG_RESULT: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
         run: python3 ci/label-issue.py apply "$ISSUE" --dry-run
 
@@ -80,7 +92,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: ci/label-issue.py
+          sparse-checkout: |
+            ci/label-issue.py
+            ci/issue_support.py
           sparse-checkout-cone-mode: false
       - name: Apply validated labels
         env:
@@ -88,6 +102,9 @@ jobs:
           ISSUE: ${{ inputs.number }}
           ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
           ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
+          SUPPORT_CONVERSATION: ${{ needs.classify.outputs.conversation }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
           PULLFROG_RESULT: ${{ needs.classify.outputs.result }}
         run: |
           set -euo pipefail

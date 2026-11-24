@@ -15,6 +15,8 @@ runs:
         # The pinned action uses this read-only job token for Git and GitHub tools.
         GH_TOKEN: ${{ github.token }}
       with:
+        # A standalone prompt_file avoids the App's webhook dispatch path. The read-only
+        # GH_TOKEN, rather than progress_comments, prevents the model from posting.
         prompt_file: ${{ runner.temp }}/issue-triage.txt
         model: deepseek/deepseek-flash
         effort: high
@@ -26,7 +28,7 @@ runs:
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["labels", "related", "follow_up"],
+            "required": ["labels", "related", "support"],
             "properties": {
               "labels": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 50}},
               "related": {
@@ -40,6 +42,16 @@ runs:
                   }
                 }
               },
-              "follow_up": {"type": ["string", "null"], "minLength": 1, "maxLength": 300}
+              "support": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["outcome", "category", "topic", "handoff"],
+                "properties": {
+                  "outcome": {"enum": ["ask", "check", "handoff", "quiet"]},
+                  "category": {"enum": ["app_bug", "platform_limit", "configuration", "feature", "unclear"]},
+                  "topic": {"type": ["string", "null"], "maxLength": 40},
+                  "handoff": {"type": ["string", "null"], "minLength": 1, "maxLength": 350}
+                }
+              }
             }
           }
