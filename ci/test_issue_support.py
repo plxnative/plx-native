@@ -44,12 +44,15 @@ class Support(unittest.TestCase):
                       {"author_association": "MEMBER"}, {"labels": [{"name": "ready"}]}):
             self.assertIsNone(support_turn(dict(REPORT, **edits), [], "public", 0), edits)
 
-    def test_public_replies_require_active_bot_thread_and_latest_reporter_evidence(self):
+    def test_latest_reporter_evidence_can_resume_intake_or_advance_bot_thread(self):
         newest = comment(4, "webOS 25")
         prior = asked(1, "platform")
+        forged = comment(1, prior["body"])
+        for thread in ([newest], [forged, newest]):
+            turn = support_turn(REPORT, thread, "public", 4)
+            self.assertEqual((turn.phase, turn.replies, turn.reporter_comment), ("intake", 0, 4))
+            self.assertIn("platform", turn.available)
         for bad in (
-            [newest],
-            [comment(1, prior["body"]), newest],  # A reporter cannot spoof history.
             [prior, comment(4, "Thanks!")],
             [prior, comment(4, "> quoted log\n\nSame")],
             [prior, comment(4, "I can reproduce this", MAINTAINER)],
@@ -97,8 +100,14 @@ class Support(unittest.TestCase):
 
     def test_conversation_changes_and_obvious_credentials_are_detected(self):
         original = [comment(1, "Playback failed")]
-        self.assertNotEqual(thread_revision(original), thread_revision([comment(1, "Corrected playback report")]))
-        self.assertNotEqual(thread_revision(original), thread_revision(original + [comment(2, "Update")]))
+        revision = thread_revision(REPORT, original)
+        for changed in ([comment(1, "Corrected playback report")], original + [comment(2, "Update")],
+                        original + [comment(2, "I will take a look", MAINTAINER, "MEMBER")],
+                        original + [asked(2, "platform")]):
+            self.assertNotEqual(revision, thread_revision(REPORT, changed))
+        for benign in (comment(2, "Thanks!"), comment(2, "Playback failed"),
+                       comment(2, "Happens on my TV too", MAINTAINER)):
+            self.assertEqual(revision, thread_revision(REPORT, original + [benign]))
         self.assertFalse(has_exposed_credential(REPORT, original))
         self.assertTrue(has_exposed_credential(REPORT, [comment(2, "X-Plex-Token=abcdefgh12345678")]))
         self.assertTrue(has_exposed_credential(dict(REPORT, body="Authorization: Bearer abcdefgh12345678"), []))

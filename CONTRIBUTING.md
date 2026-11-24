@@ -28,7 +28,8 @@ diagnostic only, with tokens, addresses and private identifiers removed. The
 The Issue labels workflow calls Pullfrog once per eligible turn on GitHub-hosted runners, with
 one retry on failure. The same run can classify the issue and select a diagnostic. The pinned
 action gets a read-only GitHub token, no provider secrets and no shell. Issue text and comments
-reach the model as GitHub tool results. A separate Python step owns label and comment writes.
+reach the model as GitHub tool results, which can include media hosted by GitHub. A separate
+Python step owns label and comment writes.
 
 - In the [Pullfrog console](https://pullfrog.com/console), turn off **Enrich issues** and
   **Label issues** so the workflow owns intake. Keep **Review PRs**, **Address reviews** and

@@ -87,6 +87,13 @@ def meaningful_reply(comment, reporter, seen):
     return True
 
 
+def hands_off(comment, reporter):
+    commenter = actor(comment)
+    return ((commenter.get("type") == "Bot" and commenter.get("login") == "pullfrog[bot]")
+            or (commenter.get("type") == "User" and commenter.get("id") != reporter
+                and comment.get("author_association") in OPERATOR_ASSOCIATIONS))
+
+
 def support_turn(issue, comments, mode, comment_id):
     """Return the eligible turn of this thread, independent of the model's answer."""
     if mode == "off":
@@ -104,16 +111,11 @@ def support_turn(issue, comments, mode, comment_id):
             or HUMAN_HANDOFF_LABELS.intersection(label["name"] for label in issue.get("labels", []))):
         return None
     reporter = user.get("id")
-    for comment in comments:
-        commenter = actor(comment)
-        if commenter.get("type") == "Bot" and commenter.get("login") == "pullfrog[bot]":
-            return None  # Give the existing native reply ownership of this issue.
-        if (commenter.get("type") == "User" and commenter.get("id") != reporter
-                and comment.get("author_association") in OPERATOR_ASSOCIATIONS):
-            return None
+    if any(hands_off(comment, reporter) for comment in comments):
+        return None
     if not comment_id:
         return Turn("intake", available, 0) if not history else None
-    if mode != "public" or not history:
+    if mode != "public":
         return None
 
     seen = set()
@@ -130,12 +132,14 @@ def support_turn(issue, comments, mode, comment_id):
         if len(replies) != 1:
             return None
         available = ()
-    return Turn("followup", available, len(history), comment_id)
+    return Turn("followup" if history else "intake", available, len(history), comment_id)
 
 
-def thread_revision(comments):
-    data = [(comment["id"], comment.get("body"), comment.get("author_association"),
-             actor(comment).get("id")) for comment in comments]
+def thread_revision(issue, comments):
+    reporter = (issue.get("user") or {}).get("id")
+    seen = set()
+    data = [(comment["id"], comment.get("body")) for comment in comments
+            if bot_topic(comment) or hands_off(comment, reporter) or meaningful_reply(comment, reporter, seen)]
     return hashlib.sha256(json.dumps(data).encode()).hexdigest()
 
 

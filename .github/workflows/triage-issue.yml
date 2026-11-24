@@ -37,6 +37,7 @@ jobs:
       eligible: ${{ steps.prepare.outputs.eligible }}
       revision: ${{ steps.prepare.outputs.revision }}
       conversation: ${{ steps.prepare.outputs.conversation }}
+      sensitive: ${{ steps.prepare.outputs.sensitive }}
       result: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,7 +59,7 @@ jobs:
           if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
           python3 ci/label-issue.py prepare "$ISSUE" "${args[@]}" > "$RUNNER_TEMP/issue-triage.txt"
       - name: Classify and triage with Pullfrog
-        if: steps.prepare.outputs.eligible == 'true'
+        if: steps.prepare.outputs.eligible == 'true' && steps.prepare.outputs.sensitive != 'true'
         id: initial
         continue-on-error: true
         uses: ./.github/actions/classify-issue
@@ -75,6 +76,7 @@ jobs:
           SUPPORT_CONVERSATION: ${{ steps.prepare.outputs.conversation }}
           SUPPORT_MODE: ${{ inputs.support_mode }}
           SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
+          TRIAGE_SENSITIVE: ${{ steps.prepare.outputs.sensitive }}
           PULLFROG_RESULT: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
         run: python3 ci/label-issue.py apply "$ISSUE" --dry-run
 
@@ -105,6 +107,7 @@ jobs:
           SUPPORT_CONVERSATION: ${{ needs.classify.outputs.conversation }}
           SUPPORT_MODE: ${{ inputs.support_mode }}
           SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
+          TRIAGE_SENSITIVE: ${{ needs.classify.outputs.sensitive }}
           PULLFROG_RESULT: ${{ needs.classify.outputs.result }}
         run: |
           set -euo pipefail
