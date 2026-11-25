@@ -1090,3 +1090,60 @@ fn local_midnight_follows_the_zone_and_the_clock_change_of_each_date() {
             "local midnight failed (or ran nothing) under {zone}:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+#[test]
+fn the_utc_offset_is_the_local_face_minus_the_utc_face_with_the_day_difference_kept() {
+    // 2026-11-25 23:30:00 UTC.
+    const T: i64 = 1_795_649_400;
+    assert_eq!(utc_offset_between(T, [23, 30], [2026, 11, 25]), Some(0));
+    assert_eq!(utc_offset_between(T, [0, 30], [2026, 11, 26]), Some(3_600), "past UTC midnight");
+    assert_eq!(utc_offset_between(T, [17, 30], [2026, 11, 25]), Some(-6 * 3_600));
+    assert_eq!(utc_offset_between(T, [5, 0], [2026, 11, 26]), Some(19_800), "a half-hour zone");
+    assert_eq!(utc_offset_between(T + 15, [5, 0], [2026, 11, 26]), Some(19_800), "the seconds are the same in both");
+    // 2026-11-26 00:10 UTC is still the 25th for the Americas.
+    assert_eq!(utc_offset_between(1_795_651_800, [19, 10], [2026, 11, 25]), Some(-5 * 3_600));
+    // 2026-01-01 00:00 UTC is the evening of the year's last day there.
+    assert_eq!(utc_offset_between(1_767_225_600, [19, 0], [2025, 12, 31]), Some(-5 * 3_600));
+    // The zones a day apart from their opposites: +13 is not -11, +14 is not -10.
+    assert_eq!(utc_offset_between(1_767_268_800, [1, 0], [2026, 1, 2]), Some(13 * 3_600), "2026-01-01 12:00 UTC");
+    assert_eq!(utc_offset_between(1_767_312_000, [13, 0], [2026, 1, 1]), Some(-11 * 3_600), "2026-01-02 00:00 UTC");
+    assert_eq!(utc_offset_between(1_767_268_800, [2, 0], [2026, 1, 2]), Some(14 * 3_600));
+    // A face the calendar cannot have is no offset.
+    assert_eq!(utc_offset_between(T, [0, 30], [2026, 13, 26]), None);
+    assert_eq!(utc_offset_between(T, [0, 30], [2026, 11, 29]), None, "four days ahead is not a zone");
+}
+
+#[test]
+fn the_utc_offset_follows_the_os_timezone_including_its_clock_changes() {
+    const CHILD: &str = "PLX_LOCAL_UTC_OFFSET_CASE";
+    const NAME: &str = "i18n::tests::the_utc_offset_follows_the_os_timezone_including_its_clock_changes";
+    if let Ok(zone) = std::env::var(CHILD) {
+        let hours = |h: i32| h * 3_600;
+        let cases: &[(i64, i32)] = match zone.as_str() {
+            "UTC" => &[(1_795_649_400, 0)],
+            // Spring-forward: 01:59:59 CET (+1) is followed by 03:00 CEST (+2); fall-back at 01:00 UTC.
+            "Europe/Madrid" => &[(1_774_745_999, hours(1)), (1_774_746_000, hours(2)), (1_792_889_999, hours(2)), (1_792_890_000, hours(1))],
+            "Asia/Kolkata" => &[(1_795_649_400, 19_800)],
+            "America/Los_Angeles" => &[(1_795_651_800, hours(-8))],
+            "Pacific/Auckland" => &[(1_767_268_800, hours(13))],
+            "Pacific/Pago_Pago" => &[(1_767_312_000, hours(-11))],
+            "Pacific/Kiritimati" => &[(1_767_268_800, hours(14))],
+            other => panic!("no cases for {other}"),
+        };
+        for &(at, want) in cases {
+            assert_eq!(local_utc_offset(at), Some(want), "{zone} at {at}");
+        }
+        assert_eq!(local_utc_offset(0), None);
+        assert_eq!(local_utc_offset(-1), None);
+        assert_eq!(local_utc_offset(i64::MAX), None);
+        return;
+    }
+    for zone in ["UTC", "Europe/Madrid", "Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland", "Pacific/Pago_Pago", "Pacific/Kiritimati"] {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env("TZ", zone).env(CHILD, zone).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains("1 passed"),
+            "the UTC offset failed under {zone}:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
