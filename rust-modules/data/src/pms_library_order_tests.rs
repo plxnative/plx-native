@@ -214,10 +214,16 @@ fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
     assert_eq!(rank, [63, 62, 61], "no owner, then the family's, then the friend's share");
-    // a source Browse has not classified is read as the household's own exactly when it names no owner
+    // a source Browse has not classified (the step after a reset empties its table, while the registry
+    // still lists every slot) is graded by no second rule, a handle included: it ranks behind the
+    // classified ones, in slot order
     let unknown = BrowseScope { households: &[], clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&unknown).iter().map(|(sid, _)| sid.raw()).collect();
-    assert_eq!(rank, [63, 61, 62], "own servers first, then the shares in slot order");
+    assert_eq!(rank, [61, 62, 63], "no verdict, no grouping: slot order");
+    let partly = [(sid(62), true)];
+    let scope = BrowseScope { households: &partly, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
+    assert_eq!(rank, [62, 61, 63], "the classified source leads, the unclassified follow in slot order");
     // a household verdict that moves is a moved roster
     let moved = [(sid(61), true), (sid(62), true), (sid(63), true)];
     let pins = [(sid(61), 1, true)];
@@ -227,6 +233,50 @@ fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     let no_pins = |households: &[(ServerId, bool)]| BrowseScope { households, ..BrowseScope::standalone() }.cache_key();
     assert_ne!(no_pins(&households), no_pins(&moved));
     assert_eq!(no_pins(&[]), 0, "nothing known, nothing to republish");
+}
+
+/// PMS mints one `home.television.recent` hub PER TV library when a household owns two
+/// (`twin_tv_libraries_home`), so the hub id does not span libraries: each row ranks by the one
+/// library its cards name, and reordering the two libraries swaps the two rows.
+#[test]
+fn a_reorder_of_two_same_type_libraries_swaps_their_shared_identifier_rows() {
+    let build = project(&twin_tv_libraries_home(), &plx_plex::plex::MediaContainer::default(), sid(0));
+    let srcs = [src(0, "", HubState::Ready, Some(build))];
+    let sections = |hubs: &[HubRow], cat: &[Arc<PmsMovie>]| hubs.iter().map(|hub| cat[hub.start].sec).collect::<Vec<_>>();
+    let natural = [(sid(0), 1), (sid(0), 2)];
+    let (cat, hubs, _) = merge_with_scope(&srcs, &scope(&natural, &defaults(&natural)));
+    assert_eq!(sections(&hubs, &cat), [1, 2]);
+    let swapped = [(sid(0), 2), (sid(0), 1)];
+    let (cat, hubs, _) = merge_with_scope(&srcs, &scope(&swapped, &defaults(&swapped)));
+    assert_eq!(ids(&hubs), ["home.television.recent", "home.television.recent"]);
+    assert_eq!(sections(&hubs, &cat), [2, 1], "TV HDR now leads TV");
+}
+
+/// A `home.<type>.recent` hub with one library's cards is that library's shelf (the household's only
+/// library of the type); a whole-server hub is nobody's, whatever its cards say.
+#[test]
+fn a_lone_type_hub_is_its_librarys_shelf_and_a_whole_server_hub_is_nobodys() {
+    let cards = shelf_in(0, 3, "x", "x", &["a", "b"]).items;
+    assert_eq!(ShelfLibrary::projected("home.movies.recent", &cards), ShelfLibrary::One(3));
+    for id in ["home.playlists", "home.ondeck", "home.continue"] {
+        assert_eq!(ShelfLibrary::projected(id, &cards), ShelfLibrary::Mixed, "{id}");
+    }
+}
+
+/// Both surfaces order the sources by the slot number (`ServerId::raw`), not by the order the
+/// registry's roster listed the slots in: the roster key of Home is the same whatever that order was.
+#[test]
+fn home_orders_the_roster_by_slot_number_whatever_order_the_registry_listed_them() {
+    let rows = |order: &[u16]| roster(&order.iter().map(|&raw| (raw, Some(key(raw as u32)), if raw == 62 { "anna" } else { "" })).collect::<Vec<_>>(), 1, 1);
+    let households = [(sid(61), true), (sid(62), false), (sid(63), true)];
+    let order = |listed: &[u16]| {
+        let keys = rows(listed);
+        let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+        roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect::<Vec<u16>>()
+    };
+    assert_eq!(order(&[61, 62, 63]), [61, 63, 62]);
+    assert_eq!(order(&[63, 62, 61]), [61, 63, 62], "listed descending, ranked by slot");
+    assert_eq!(order(&[62, 63, 61]), [61, 63, 62]);
 }
 
 /// F7: a refresh re-projects every row, and a released row's library is the one it was given when

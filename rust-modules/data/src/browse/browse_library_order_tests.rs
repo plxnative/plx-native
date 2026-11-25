@@ -82,9 +82,12 @@ fn a_managed_profiles_family_server_leads_a_friends_share_in_the_default() {
     assert_eq!(titles(&state, &state.default_section_order()), vec!["Movies", "Films"]);
     assert_eq!(state.section_of_kind(SecKind::Movie), Some(1), "the tab with nothing remembered opens the family's");
     let slot = ServerId::from_raw;
-    assert!(source_rank(true, true, slot(5)) < source_rank(false, true, slot(1)), "the household before a share, whatever the slots");
-    assert!(source_rank(false, false, slot(3)) < source_rank(false, true, slot(1)), "a share with no owner named before one that has");
-    assert!(source_rank(true, false, slot(2)) < source_rank(true, true, slot(1)), "and within the household, no owner before one");
+    let rank = |household: bool, has_handle: bool, raw: u16| source_rank(Some((household, has_handle)), slot(raw));
+    assert!(rank(true, true, 5) < rank(false, true, 1), "the household before a share, whatever the slots");
+    assert!(rank(false, false, 3) < rank(false, true, 1), "a share with no owner named before one that has");
+    assert!(rank(true, false, 2) < rank(true, true, 1), "and within the household, no owner before one");
+    assert!(rank(false, true, 9) < source_rank(None, slot(1)), "a source Browse has not classified ranks behind every classified one");
+    assert!(source_rank(None, slot(1)) < source_rank(None, slot(2)), "and in slot order among its own kind");
 }
 
 /// A recorded order ranks across servers (a share between the owner's own libraries); the table

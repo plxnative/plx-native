@@ -1194,8 +1194,7 @@ enum ShelfLibrary {
     /// ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
     #[default]
     Unknown,
-    /// Computed: the row belongs to no single library (a whole-server `home.*` hub, or cards of
-    /// several).
+    /// Computed: the row belongs to no single library (a whole-server hub, or cards of several).
     Mixed,
     /// Computed: the row's cards (or its hub id) name this one library (`librarySectionID`).
     One(i64),
@@ -1203,10 +1202,12 @@ enum ShelfLibrary {
 
 impl ShelfLibrary {
     /// Decide at projection: the hub id when it names a library (`plex::library_order::hub_library`),
-    /// none for a whole-server `home.*` hub, else the one `librarySectionID` every card shares.
+    /// none for a hub that spans the server (`plex::library_order::is_whole_server_hub`), else the one
+    /// `librarySectionID` every card shares: which is how a `home.<type>.recent` hub, one per library
+    /// when a household owns two of a type, finds its library.
     fn projected(hub_id: &str, items: &[Arc<PmsMovie>]) -> Self {
         if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id) { return Self::One(library); }
-        if hub_id.starts_with("home.") { return Self::Mixed; }
+        if plx_plex::plex::library_order::is_whole_server_hub(hub_id) { return Self::Mixed; }
         let mut sections = items.iter().map(|m| m.sec).filter(|sec| *sec != 0);
         match sections.next() {
             Some(first) if sections.all(|sec| sec == first) => Self::One(first),
@@ -2704,9 +2705,11 @@ struct Src {
     /// Plex Home profile is watching, and a share plex.tv never named. Read from the registry at
     /// [`sync_roster`] time, never inside a worker.
     ///
-    /// [`roster`] groups the uncredited ones first, so an empty string also orders Home. That is
-    /// the right answer for the first two cases and the wrong one for the third; it was wrong for
-    /// the third before this field held a credit too (see `docs/shared-servers.md` §13).
+    /// An empty handle is NOT what orders Home: [`roster_with_scope`] ranks sources by
+    /// [`browse::source_rank`], Browse's household verdict first; the handle only breaks ties inside
+    /// one verdict (a server with an owner to name after one without). So a share plex.tv never
+    /// named, which has an empty handle but is not the household's, sorts with the shares (the
+    /// mistake `docs/shared-servers.md` §13 describes cannot recur through Home's order).
     handle: String,
     state: HubState,
     /// Single flight, PER SOURCE. Cleared only where a landing is taken, where the launch was
@@ -3176,8 +3179,8 @@ struct BrowseScope<'a> {
     pins: &'a [(ServerId, i64, bool)],
     /// Browse's household verdict per source ([`browse::DirectoryView::source_households`]), which
     /// [`roster_with_scope`] orders the sources by (the default source order, [`browse::source_rank`]).
-    /// A source it does not name is read as the household's own exactly when it names no owner, the
-    /// verdict a fixture carries.
+    /// A source it does not name is unclassified: [`browse::source_rank`] grades it behind the
+    /// classified ones, the same as Browse's own table does for a source it no longer holds.
     households: &'a [(ServerId, bool)],
     /// The profile's Library order as Home reads it ([`HomeOrder`]); [`HomeOrder::Natural`] for the
     /// server order (and always for a fixture), which leaves Home exactly as it was.
@@ -3301,7 +3304,7 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 
 /// The sources Home is built from, in display order: [`browse::source_rank`]'s, the ONE default source
 /// order Browse's section order reads too (the household's own servers first, then each share, each
-/// group keeping registration order). The merge appends shelves in exactly this order and adjacency is
+/// group in registry slot order, `ServerId::raw`, whatever order the registry listed the slots in). The merge appends shelves in exactly this order and adjacency is
 /// the grouping device, so the grouping is true by construction rather than by convention.
 ///
 /// The registry IS the granted roster — a server is in it only once plex.tv (or the
@@ -3311,7 +3314,7 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 /// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
-    let mut ranked: Vec<((bool, bool, u16), ServerId, String)> = Vec::new();
+    let mut ranked: Vec<(crate::browse::SourceRank, ServerId, String)> = Vec::new();
     for sid in scope.clients.slots() {
         if scope.clients.key(sid).is_none() || !feeds_home(sid, &pinned, &known) {
             continue;
@@ -3319,9 +3322,9 @@ fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
         let handle = scope.clients.facts(sid).and_then(|facts| facts.described)
             .map(|f| f.handle.clone())
             .unwrap_or_default();
-        let household = scope.households.iter().find(|(known, _)| *known == sid)
-            .map_or(handle.is_empty(), |(_, household)| *household);
-        ranked.push((crate::browse::source_rank(household, !handle.is_empty(), sid), sid, handle));
+        let verdict = scope.households.iter().find(|(known, _)| *known == sid)
+            .map(|(_, household)| (*household, !handle.is_empty()));
+        ranked.push((crate::browse::source_rank(verdict, sid), sid, handle));
     }
     ranked.sort_by_key(|(rank, ..)| *rank);
     ranked.into_iter().map(|(_, sid, handle)| (sid, handle)).collect()
@@ -3412,7 +3415,8 @@ fn sync_roster_with_scope(state: &mut PmsState, scope: &BrowseScope) {
     // the shelves and the hero pool were stamped with. Updating `Src::handle` alone left the built
     // rows saying the old thing until the next successful hub fetch, and an OFFLINE source never
     // has one: "keep the last good shelves" would then have preserved a wrong attribution for good.
-    // The order can move with it (`roster` groups uncredited first), which the same re-merge fixes.
+    // The order can move with it (`source_rank` reads whether a source has an owner to name, after
+    // Browse's household verdict), which the same re-merge fixes.
     let mut restamped = false;
     for (sid, handle) in want {
         // One slot, one source. The way a roster came to name a slot twice was `plex::register`

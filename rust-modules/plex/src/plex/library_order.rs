@@ -142,8 +142,9 @@ pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], pr
 
 /// Which library a `/hubs` shelf belongs to, from its `hubIdentifier`: the per-library Recently
 /// Added family (`movie.recentlyadded.<id>`, `show.recentlyadded.<id>`, `tv.recentlyadded.<id>`) and
-/// a promoted collection (`custom.collection.<section>.…`). `None` for every other identifier —
-/// among them the whole-server `home.*` ones, which span libraries by construction.
+/// a promoted collection (`custom.collection.<section>.…`). `None` for every other identifier — a
+/// [`is_whole_server_hub`] one spans libraries by construction, and any other (a `home.<type>.recent`
+/// among them) is decided by the cards it holds.
 pub fn hub_library(hub_identifier: &str) -> Option<i64> {
     const PER_LIBRARY: [&str; 3] = ["movie.recentlyadded.", "show.recentlyadded.", "tv.recentlyadded."];
     for prefix in PER_LIBRARY {
@@ -152,6 +153,15 @@ pub fn hub_library(hub_identifier: &str) -> Option<i64> {
         }
     }
     hub_identifier.strip_prefix("custom.collection.")?.split('.').next()?.parse().ok()
+}
+
+/// The `home.*` hubs that span the whole server whatever they hold: Continue Watching, On Deck (both
+/// spellings PMS has used) and Recent Playlists. **The only `home.*` identifiers that belong to no
+/// library by their id.** `home.<type>.recent` is NOT one: PMS mints one such hub per library when a
+/// household owns two of a type (`docs/pms-api.md` §3, `hub_title::is_recently_added_hub`), and a
+/// lone one is that library's own shelf, so those are decided by the library their cards share.
+pub fn is_whole_server_hub(hub_identifier: &str) -> bool {
+    matches!(hub_identifier, "home.continue" | "home.ondeck" | "home.onDeck" | "home.playlists")
 }
 
 #[cfg(test)]
@@ -273,6 +283,14 @@ mod tests {
         // its predecessor was a present library the profile unfavoured: it follows the one before that
         let previous = record(&[("A", 4), ("A", 9), ("B", 2)]);
         assert_eq!(merged(Some(&previous), &here, &here).unwrap(), pairs(&[("A", 4), ("B", 2)]));
+    }
+
+    #[test]
+    fn whole_server_hubs_are_the_three_that_span_libraries() {
+        for id in ["home.continue", "home.ondeck", "home.onDeck", "home.playlists"] { assert!(is_whole_server_hub(id), "{id}"); }
+        for id in ["home.movies.recent", "home.television.recent", "movie.recentlyadded.3", "mock.shelf.0"] {
+            assert!(!is_whole_server_hub(id), "{id}");
+        }
     }
 
     #[test]
