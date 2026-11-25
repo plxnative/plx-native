@@ -728,7 +728,12 @@ impl ResolvePort {
         else if request.selection.audio_contract.any() { Some(UriDecline::AudioEnhancement) }
         else if request.requires_subtitle_burn { Some(UriDecline::SubtitleBurn) }
         else if request.requires_client_subtitle { Some(UriDecline::ClientSubtitle) }
-        else if request.subtitle_choice == TrackChoice::Off { Some(UriDecline::SubtitleOff) }
+        // Off is refused only where the driver cannot carry it: a pipeline that shows a default
+        // subtitle by itself (the webOS one) states `subtitle_off: false`.
+        else if request.subtitle_choice == TrackChoice::Off
+            && !(evidence.callable.subtitle_off && evidence.certified.subtitle_off) {
+            Some(UriDecline::SubtitleOff)
+        }
         else if request.dolby_vision.present
             && request.dolby_vision_mode == plx_plex::plex::session::DolbyVisionMode::Off {
             Some(UriDecline::DolbyVisionOff)
