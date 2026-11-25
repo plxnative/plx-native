@@ -127,6 +127,11 @@ impl PreplayPanelScreen {
                 StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
             )));
             fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
+            // On the failure screen the pick starts the retry (the loop does it with the commit), so the
+            // panel has nothing left to show; on a Detail page it stays up with the check moved.
+            if matches!(self.arg.source, Source::Failed { .. }) {
+                self.dismiss(fx);
+            }
         }
     }
 }
@@ -416,5 +421,25 @@ pub(crate) mod tests {
         assert!(fx.is_empty() && p.picker().depth() == 0, "BACK pops the subtitle page first");
         let fx = drive(&mut p, |p, fx| p.back(fx));
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "BACK at the root closes");
+    }
+
+    /// On the failure screen a pick commits with the failure source (the loop holds it AND starts the
+    /// retry, as a quality pick does) and closes the panel; on a page the panel stays up.
+    #[test]
+    fn a_failure_pick_commits_for_the_retry_and_closes_the_panel() {
+        use plx_appkit::preplay_tracks::PickRow;
+        let elem = |row: PickRow| plx_ui::form::FormId::key(&row).0;
+        let mut p = panel_from(Source::Failed { part_id: 9001, pick: None });
+        drive(&mut p, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
+        let fx = drive(&mut p, |p, fx| p.activate(elem(PickRow::SubOff), fx));
+        assert!(fx.iter().any(|f| matches!(
+            f,
+            Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { source: Source::Failed { .. }, sel, .. })) if sel.subtitle_sid == 0
+        )));
+        assert!(matches!(fx.last(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the retry is under way: the panel closes");
+        let mut page = panel();
+        drive(&mut page, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
+        let fx = drive(&mut page, |p, fx| p.activate(elem(PickRow::SubOff), fx));
+        assert!(!fx.iter().any(|f| matches!(f, Fx::Nav(_))), "a Detail page's panel stays up with the check moved");
     }
 }

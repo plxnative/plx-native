@@ -784,6 +784,13 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
                 // DecisionRefused has no Try again, so a pick that only held would have nothing to play it.
                 if let plx_screens::preplay_panel::Source::Failed { .. } = source {
                     plx_media::route::hold_pick_for_retry(&mut app.player.session, &sel.pick);
+                    super::playback::retry_failed_playback(
+                        &mut app.player.session,
+                        &mut app.adapters.player,
+                        app.bridge.metadata_mut(),
+                        None,
+                        plx_media::player::report::AttemptOrigin::ViewerReconfigure,
+                    );
                 }
             }
             ContentReq::Panel(panel) => {
