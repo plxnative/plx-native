@@ -224,7 +224,7 @@ fn content_request(request: &plx_screens::registry::ContentReq) -> Result<Value,
         ContentReq::PreviewSeek(position) => json!({"preview_seek":position}),
         ContentReq::ItemMenu => json!("itemmenu"),
         ContentReq::SelectVersion { sid, rk, media } => json!({"select_version":{"sid":sid.raw(),"rk":rk,"media":media.0}}),
-        ContentReq::CommitPreplayPick { tracks, sel } => json!({"commit_preplay_pick":{
+        ContentReq::CommitPreplayPick { tracks, sel, .. } => json!({"commit_preplay_pick":{
             "sid":tracks.sid.raw(),"rk":tracks.rk,"audio":sel.audio_sid,"subtitle":sel.subtitle_sid}}),
         ContentReq::Panel(panel) => json!({"panel":match panel {
             ContentPanel::AltSources { anchor } => json!({"alt_sources":anchor}),

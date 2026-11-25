@@ -1084,3 +1084,28 @@ fn a_preplay_subtitles_off_on_an_episode_puts_off_and_its_memory_rung_draws_none
     );
     assert_eq!(decision.pick, None, "the viewer's Off outranks PMS's still-selected track");
 }
+
+/// **A pick on the failure screen is what Try again plays** (`hold_pick_for_retry`): the retry's
+/// selection is the viewer's pair instead of the failed attempt's, Off included; an audio-only pick keeps
+/// the subtitle the attempt stood on; and the request that consumes it clears the hold, so it never
+/// outlives its retry.
+#[test]
+fn a_pick_held_on_the_failure_screen_is_the_selection_the_retry_carries() {
+    let mut ps = PlaybackSession::default();
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 11, 12)), "nothing held: the attempt's own pair");
+
+    memory::hold_pick_for_retry(&mut ps, PART, 21, Some(0));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 21, 0)), "Off is the viewer's, not the attempt's track");
+
+    memory::hold_pick_for_retry(&mut ps, PART, 22, None);
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 22, 12)), "an audio-only pick leaves subtitles alone");
+
+    let retry = current_retry_context(&ps, 0);
+    begin_track_selection(&mut ps, Some(retry));
+    assert!(ps.held_pick.is_none(), "the retry absorbed it");
+    assert_eq!(held(ps.carried_selection), Some((PART, 22, 12)), "into the pair the new attempt carries");
+}

@@ -102,6 +102,30 @@ impl<'a> MetadataView<'a> {
     pub fn preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
         preplay_tracks(self.state, sid, rk)
     }
+    /// **The playing item's tracks for the failure screen's picker**: the item that was playing when
+    /// `(sid, rk)` failed, with the lists it was started with and the part the failed attempt addressed
+    /// (`part_id`, `> 0`). `None` when the playing item is another one, or the attempt has no part, or it
+    /// has no stream to show. The ONE rule behind both the read-out's *Audio & Subtitles* entry
+    /// ([`Self::has_failed_tracks`]) and the panel's rows, so the entry is offered exactly when the panel
+    /// has something in it.
+    pub fn failed_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64) -> Option<PreplayTracks> {
+        let p = self.playing()
+            .filter(|p| part_id > 0 && plx_plex::plex::same_item((p.sid, p.rk.as_str()), (sid, rk)))
+            .filter(|p| !p.audio.is_empty() || !p.subs.is_empty())?;
+        Some(PreplayTracks {
+            sid: p.sid,
+            rk: p.rk.clone(),
+            kind: p.kind.clone(),
+            show_rk: p.show_rk.clone(),
+            part: format!("/library/parts/{part_id}/"),
+            audio: p.audio.clone(),
+            subs: p.subs.clone(),
+        })
+    }
+    /// [`Self::failed_tracks`] is `Some`, asked once per presentation capture.
+    pub fn has_failed_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64) -> bool {
+        self.failed_tracks(sid, rk, part_id).is_some()
+    }
     /// Would [`Self::preplay_tracks`] return `Some`, without cloning the lists: the hero's Audio &
     /// Subtitles disc gate, asked every frame.
     pub fn has_preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> bool {

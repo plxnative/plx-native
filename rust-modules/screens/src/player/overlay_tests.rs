@@ -120,7 +120,7 @@ pub(super) fn derive_state(ps: &mut plx_media::route::PlaybackSession, state: pl
 pub(super) fn failure_fixture(ps: &plx_media::route::PlaybackSession) -> plx_appkit::player_hud::FailureReadout {
     use plx_media::player;
     let error = player::error_now(ps);
-    let actions = player::failure_actions(error.kind, player::failure_context(ps));
+    let actions = player::failure_actions(error.kind, player::failure_context(ps, false));
     let support = player::support_line(error.kind);
     plx_appkit::player_hud::FailureReadout::captured(error, actions, support, ps.repair_status)
 }

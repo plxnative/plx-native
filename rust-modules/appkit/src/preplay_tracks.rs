@@ -252,6 +252,18 @@ pub struct Selection {
     pub subtitle_memo: Option<SubtitleMemo>,
 }
 
+impl Selection {
+    /// The subtitle half a retry should carry: `Some(0)` for the viewer's Off, `Some(id)` for a track,
+    /// `None` when the viewer left subtitles alone (an audio pick on an item whose subtitle was never
+    /// touched keeps what the attempt stood on).
+    pub fn held_subtitle(&self) -> Option<i64> {
+        match self.sub_choice {
+            SubChoice::Off => Some(0),
+            SubChoice::Server => (self.subtitle_sid != 0).then_some(self.subtitle_sid),
+        }
+    }
+}
+
 /// Apply `pick` over `now`: the new choice and everything [`commit`] writes. `None` for a drill-in
 /// or an index off the list. `choice` is the viewer's standing subtitle decision so far: a subtitle
 /// row (Off or a track) replaces it, an audio pick keeps it.

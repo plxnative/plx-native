@@ -1273,6 +1273,7 @@ impl PlayerScreen {
             A::PlayAutomatically => Self::ask(fx, PlayerReq::PlayAutomatically),
             A::TryAgain => Self::ask(fx, PlayerReq::RetryPlayback),
             A::ChangeQuality => Self::ask(fx, PlayerReq::OpenOverlay(overlay::OverlayKind::More { page: Some(plx_appkit::more_menu::MorePage::Quality) })),
+            A::ChangeTracks => Self::ask(fx, PlayerReq::OpenFailedTracks),
             A::Repair => {
                 if ps.repair_status == plx_os::tv::native_video::State::Idle && !self.repair_alert.visible() {
                     self.repair_scroll = 0;
@@ -2912,7 +2913,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
                     Some(rk) => item.with_subject(rk),
                     None => item,
                 },
-                Fail::ChangeQuality | Fail::Repair | Fail::Back => item,
+                Fail::ChangeQuality | Fail::ChangeTracks | Fail::Repair | Fail::Back => item,
             });
         }
         if (ELEM_SECTION_BASE..ELEM_SECTION_END).contains(&key) {
@@ -4809,6 +4810,33 @@ pub(crate) mod step_ladder_tests {
             [Some("99".to_owned()), Some("99".to_owned()), None, None],
             "Try again and Play automatically name the request's key, not `cur_rk`"
         );
+    }
+
+    /// **The failure read-out's *Audio & Subtitles* asks the app for the picker** over the failed player
+    /// (`PlayerReq::OpenFailedTracks`), by the same resolution as every other control of the row.
+    #[test]
+    fn the_failure_entry_for_tracks_asks_for_the_picker() {
+        use plx_media::player::FailureAction as Fail;
+        let _g = plx_base::testlock::serial();
+        let ps = super::overlay_tests::middle_episode_session();
+        let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
+        let actions = vec![Fail::TryAgain, Fail::ChangeQuality, Fail::ChangeTracks, Fail::Back];
+        let readout = plx_appkit::player_hud::FailureReadout::captured(
+            plx_media::player::error_now(&ps), actions, String::new(), ps.repair_status);
+        page.presentation = player_hud::Presentation {
+            busy: player_hud::Busy::Readout(plx_ui::widgets::StatusKind::Failed, c"Playback failed"),
+            failure: Some(std::sync::Arc::new(readout)),
+        };
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx = Effects::new(&mut out, MachineId::Instance(INST), &mut present);
+        page.failure_activate::<TestHost>(&ps, 2, &mut fx);
+        assert!(
+            out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::Player(PlayerReq::OpenFailedTracks)))),
+            "the third control is Audio & Subtitles"
+        );
+        assert_eq!(page.failure_sel, 2, "the row remembers where the viewer pressed");
+        assert_eq!(plx_appkit::player_hud::failure_action_word(Fail::ChangeTracks), "change_tracks");
     }
 
     /// **The Info card's buttons are named by position, so each carries a subject**: From the beginning restarts

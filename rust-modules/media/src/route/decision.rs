@@ -31,7 +31,7 @@ use super::track_memory::{SubMode, TrackContext};
 // says what is remembered about it; every public name keeps its `route::` path.
 #[path = "decision_memory.rs"]
 mod memory;
-pub use memory::{commit_preplay_pick, PreplayItem};
+pub use memory::{commit_preplay_pick, hold_pick_for_retry, PreplayItem};
 pub use memory::{
     commit_audio_pick,commit_forced_only_and_sidecar, commit_forced_only_pick, commit_subtitle_and_sidecar, commit_subtitle_pick,
     on_decoded_frame, persist_subtitle_offset, rematch_subtitle_with_names, repoint_parked_subtitle, send_parked_write_back,
@@ -420,6 +420,11 @@ pub struct PlaybackSession {
     /// kept across a refused landing, dropped by a playable one ([`apply_plan`]).
     /// [`current_retry_context`] reads it only while the selection is unknown.
     carried_selection: Option<HeldSelection>,
+    /// **The pair the viewer chose on the failure screen** (`memory::hold_pick_for_retry`): the
+    /// pick the next retry carries INSTEAD of the standing selection, which describes the attempt that
+    /// just failed. One owner of 'what Try again plays': [`current_retry_context`] reads it first, and the
+    /// request that consumes it ([`clear_track_selection`]) clears it.
+    held_pick: Option<HeldSelection>,
     /// Is [`Self::cur_sub_sid`] an external sidecar (`metadata::Stream::sidecar_renderable`) rather
     /// than an embedded (in-container) track? Meaningless when `cur_sub_sid == 0`. Issue #266 I6:
     /// this is what tells `route::decision::facts`'s [`super::plan::SubtitleEffect::Sidecar`]
@@ -1111,7 +1116,7 @@ mod backend_offer_session_tests {
         session.cur_src = (20_000, 1920, 1080); // more than a 480p rung admits: the pick would re-transcode
         let (ceiling, delivery) = (cur_ceiling(&session), cur_delivery(&session));
         assert!(!session.quality_pick_carriable());
-        assert!(!crate::player::failure_context(&session).quality_carriable,
+        assert!(!crate::player::failure_context(&session, false).quality_carriable,
             "the failure read-out reads the same question: no Change quality either");
         assert!(!set_quality(&mut session, Quality::P480), "a refused pick reports refusal");
         assert_eq!(quality(), Quality::Original, "a refused pick persists nothing");
@@ -1120,7 +1125,7 @@ mod backend_offer_session_tests {
         // A provider that can certify a converted output, or a Feed, carries the pick as before.
         session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
         assert!(session.quality_pick_carriable());
-        assert!(crate::player::failure_context(&session).quality_carriable);
+        assert!(crate::player::failure_context(&session, false).quality_carriable);
         session.install_backends(plx_playback_contract::BackendSet::BOTH);
         session.install_uri_preflight_port(None);
         assert!(session.quality_pick_carriable());
@@ -1940,6 +1945,7 @@ impl PlaybackSession {
         cur_sub_sid: 0,
         selection_known: false,
         carried_selection: None,
+        held_pick: None,
         cur_sub_sidecar: false,
         cur_sub_client_drawable: false,
         cur_sub_ordinal: -1,
@@ -2051,6 +2057,7 @@ impl PlaybackSession {
             cur_sub_sid,
             selection_known,
             carried_selection,
+            held_pick,
             cur_sub_sidecar,
             cur_sub_client_drawable,
             cur_sub_ordinal,
@@ -2144,6 +2151,7 @@ impl PlaybackSession {
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,
+            held_pick: *held_pick,
             cur_sub_sidecar: *cur_sub_sidecar,
             cur_sub_client_drawable: *cur_sub_client_drawable,
             cur_sub_ordinal: *cur_sub_ordinal,
@@ -11508,6 +11516,7 @@ fn clear_track_selection(s: &mut PlaybackSession) {
     s.source_selection = None;
     s.cur_sub_sid = 0;
     s.selection_known = false;
+    s.held_pick = None;
     s.cur_sub_sidecar = false;
     s.cur_sub_client_drawable = false;
     s.cur_sub_ordinal = -1;
@@ -11581,18 +11590,23 @@ pub fn confirm_resume_presented(ps: &mut PlaybackSession) {
     }
 }
 
+/// The track pair the CURRENT attempt stands on, as a retry would carry it (`None` before any is known).
+fn standing_selection(ps: &PlaybackSession) -> Option<HeldSelection> {
+    ps.source_selection.map(|selection| HeldSelection {
+        part_id: selection.part_id, audio_sid: selection.audio_sid, sub_sid: selection.subtitle_sid,
+    }).or_else(|| {
+        if ps.selection_known {
+            Some(HeldSelection { part_id: cur_part_id(ps), audio_sid: cur_audio_sid(ps), sub_sid: cur_sub_sid(ps) })
+        }
+        else { ps.carried_selection }
+    })
+}
+
 fn current_retry_context(ps: &PlaybackSession, resume_ns: i64) -> RetryContext {
     RetryContext {
         resume_ns: resume_ns.max(0),
         candidate_purpose: CandidatePurpose::ReopenCurrent,
-        selection: ps.source_selection.map(|selection| HeldSelection {
-            part_id: selection.part_id, audio_sid: selection.audio_sid, sub_sid: selection.subtitle_sid,
-        }).or_else(|| {
-            if ps.selection_known {
-                Some(HeldSelection { part_id: cur_part_id(ps), audio_sid: cur_audio_sid(ps), sub_sid: cur_sub_sid(ps) })
-            }
-            else { ps.carried_selection }
-        }),
+        selection: ps.held_pick.or_else(|| standing_selection(ps)),
         sub_offset_ms: crate::player::subtitle_offset_ms(),
         direct_play_mode: ps.direct_play_mode,
         suppress_enhancement: false,
@@ -12293,6 +12307,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             cur_sub_sid: plan.sub_sid,
             selection_known,
             carried_selection,
+            held_pick: None,
             // Negative = an external sidecar the client draws itself (`sub_render_ordinal`'s own
             // convention); `None` (Off) never sets `sub_sid` either, so this reads `false` for it.
             cur_sub_sidecar: plan.sub_render_ordinal.is_some_and(|ord| ord < 0),

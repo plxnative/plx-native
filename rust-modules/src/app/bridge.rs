@@ -1708,7 +1708,7 @@ impl Bridge<'_> {
     pub(crate) fn publish_player_presentation(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
         // No Player replay domain exists: controlled owners retain explicit neutral/supplied facts.
         if !self.retained.live_screen_inputs { return false; }
-        let next = super::player_presentation::capture(ps);
+        let next = super::player_presentation::capture(ps, self.metadata_view());
         // The set the composition published: the screens read it to disable Play when none is composed.
         let backends = ps.backends();
         if self.retained.screen_inputs.player_presentation == next
@@ -4413,6 +4413,27 @@ pub(crate) fn open_player_overlay(
             plx_screens::player::overlay::PlayerOverlayArg { kind },
         )),
     );
+}
+
+/// **Present the before-playback picker over the failed player** (`PlayerReq::OpenFailedTracks`): the
+/// item and the part are the failed attempt's, read off the session; the surface is a player panel that
+/// survives the failure, as the `…` popover's Quality page does.
+pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, d: &mut Dispatcher<AppHost>) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::PreplayPanel(plx_screens::preplay_panel::PreplayArg {
+        host,
+        sid: plx_media::route::cur_sid(ps),
+        rk: plx_media::route::cur_rk(ps),
+        anchor: anchor_bits(None),
+        source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps) },
+    });
+    let id = plx_ui::screen::ScreenArg::id(&arg);
+    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        return;
+    }
+    d.nav.next_style = Style::PlayerPanel { survives_failure: true };
+    d.request(MachineId::Nav, NavOp::Present(arg));
 }
 
 /// Which player panel owns input right now, if one does.

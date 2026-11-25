@@ -122,7 +122,7 @@ impl PreplayPanelScreen {
                 StoreId::Metadata,
                 StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
             )));
-            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel })));
+            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
         }
     }
 }

@@ -772,11 +772,16 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             ContentReq::SelectVersion { sid, rk, media } => {
                 plx_media::route::choose_version(sid, &rk, media);
             }
-            ContentReq::CommitPreplayPick { tracks, sel } => {
+            ContentReq::CommitPreplayPick { tracks, sel, source } => {
                 // The selection PUT (queued off the frame thread) and, for an episode, the show's
                 // track memory; the panel already patched the loaded page's copy.
                 if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
                     plx_base::eventlog::log("preplay: pick not written (no part to address)");
+                }
+                // On the failure screen the pick is also what Try again plays: held on the session, the
+                // one owner of what a retry carries.
+                if let plx_screens::preplay_panel::Source::Failed { part_id } = source {
+                    plx_media::route::hold_pick_for_retry(&mut app.player.session, part_id, sel.audio_sid, sel.held_subtitle());
                 }
             }
             ContentReq::Panel(panel) => {

@@ -366,6 +366,10 @@ pub enum PlayerReq {
     /// `super::bridge::open_player_overlay` straight from the loop's key ladder; `PlayerScreen`
     /// may not name that function itself (§2.2), so it asks instead.
     OpenOverlay(crate::player::overlay::OverlayKind),
+    /// **The failure read-out's *Audio & Subtitles***: present the before-playback picker over the
+    /// player page, on the tracks of the item that failed (`preplay_panel::Source::Failed`). The app
+    /// names the item and the attempt's part, and the style (`bridge::open_failed_tracks`).
+    OpenFailedTracks,
 
     /// **A press on a control of the discs committed**, after the engine's tvOS dip has played
     /// (`PressCommit`, [`PlayerScreen`](crate::player::PlayerScreen)): perform this command. The screen resolves the command of the control the
@@ -880,17 +884,7 @@ fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::pr
             .and_then(|rk| meta.preplay_tracks(arg.sid, rk))
             .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
         Source::Failed { part_id } => meta
-            .playing()
-            .filter(|p| plx_plex::plex::same_item((p.sid, p.rk.as_str()), (arg.sid, arg.rk.as_str())) && part_id > 0)
-            .map(|p| plx_data::metadata::PreplayTracks {
-                sid: p.sid,
-                rk: p.rk.clone(),
-                kind: p.kind.clone(),
-                show_rk: p.show_rk.clone(),
-                part: format!("/library/parts/{part_id}/"),
-                audio: p.audio.clone(),
-                subs: p.subs.clone(),
-            })
+            .failed_tracks(arg.sid, &arg.rk, part_id)
             .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
     }
 }
@@ -1369,7 +1363,13 @@ pub enum ContentReq {
     /// PUT and, for an episode, the show's track memory. Addressed to the loop because the PUT is
     /// queued off the frame thread; the store patch that makes the first start plan the pick is the
     /// panel's own `AppFx::Store`.
-    CommitPreplayPick { tracks: plx_data::metadata::PreplayTracks, sel: plx_appkit::preplay_tracks::Selection },
+    /// `source` says where the tracks were read from: a pick on the failure screen is also HELD for the
+    /// retry (`route::hold_pick_for_retry`), which a pick on a page has no attempt to hand it to.
+    CommitPreplayPick {
+        tracks: plx_data::metadata::PreplayTracks,
+        sel: plx_appkit::preplay_tracks::Selection,
+        source: crate::preplay_panel::Source,
+    },
     /// **Present one of the Detail page's own panels** on the container tree (spec §6.2's
     /// "page-owned panels"). The page names WHICH and supplies whatever the panel needs to place
     /// itself; the loop knows the style and the page's identity, so neither is on this request.

@@ -702,3 +702,13 @@ pub fn commit_preplay_pick(
     }
     true
 }
+
+/// **A pick made on the playback failure screen, held for Try again** ([`PlaybackSession::held_pick`]).
+/// The failed attempt's own selection is what a retry would otherwise carry; this replaces it with the
+/// viewer's. `subtitle_sid` is `Some` only for a half the viewer set (`Some(0)` = Off); `None` keeps the
+/// subtitle the attempt stood on, so an audio-only pick does not turn subtitles off. The
+/// part is the failed attempt's, the one the selection PUT addresses.
+pub fn hold_pick_for_retry(ps: &mut PlaybackSession, part_id: i64, audio_sid: i64, subtitle_sid: Option<i64>) {
+    let sub_sid = subtitle_sid.unwrap_or_else(|| super::standing_selection(ps).map_or(0, |held| held.sub_sid));
+    ps.held_pick = Some(super::HeldSelection { part_id, audio_sid, sub_sid });
+}
