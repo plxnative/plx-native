@@ -214,10 +214,16 @@ fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
     assert_eq!(rank, [63, 62, 61], "no owner, then the family's, then the friend's share");
-    // a source Browse has not classified is read as the household's own exactly when it names no owner
+    // a source Browse has not classified (the step after a reset empties its table, while the registry
+    // still lists every slot) is graded by no second rule, a handle included: it ranks behind the
+    // classified ones, in slot order
     let unknown = BrowseScope { households: &[], clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&unknown).iter().map(|(sid, _)| sid.raw()).collect();
-    assert_eq!(rank, [63, 61, 62], "own servers first, then the shares in slot order");
+    assert_eq!(rank, [61, 62, 63], "no verdict, no grouping: slot order");
+    let partly = [(sid(62), true)];
+    let scope = BrowseScope { households: &partly, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
+    assert_eq!(rank, [62, 61, 63], "the classified source leads, the unclassified follow in slot order");
     // a household verdict that moves is a moved roster
     let moved = [(sid(61), true), (sid(62), true), (sid(63), true)];
     let pins = [(sid(61), 1, true)];
@@ -255,6 +261,22 @@ fn a_lone_type_hub_is_its_librarys_shelf_and_a_whole_server_hub_is_nobodys() {
     for id in ["home.playlists", "home.ondeck", "home.continue"] {
         assert_eq!(ShelfLibrary::projected(id, &cards), ShelfLibrary::Mixed, "{id}");
     }
+}
+
+/// Both surfaces order the sources by the slot number (`ServerId::raw`), not by the order the
+/// registry's roster listed the slots in: the roster key of Home is the same whatever that order was.
+#[test]
+fn home_orders_the_roster_by_slot_number_whatever_order_the_registry_listed_them() {
+    let rows = |order: &[u16]| roster(&order.iter().map(|&raw| (raw, Some(key(raw as u32)), if raw == 62 { "anna" } else { "" })).collect::<Vec<_>>(), 1, 1);
+    let households = [(sid(61), true), (sid(62), false), (sid(63), true)];
+    let order = |listed: &[u16]| {
+        let keys = rows(listed);
+        let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+        roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect::<Vec<u16>>()
+    };
+    assert_eq!(order(&[61, 62, 63]), [61, 63, 62]);
+    assert_eq!(order(&[63, 62, 61]), [61, 63, 62], "listed descending, ranked by slot");
+    assert_eq!(order(&[62, 63, 61]), [61, 63, 62]);
 }
 
 /// F7: a refresh re-projects every row, and a released row's library is the one it was given when

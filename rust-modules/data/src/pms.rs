@@ -3177,8 +3177,8 @@ struct BrowseScope<'a> {
     pins: &'a [(ServerId, i64, bool)],
     /// Browse's household verdict per source ([`browse::DirectoryView::source_households`]), which
     /// [`roster_with_scope`] orders the sources by (the default source order, [`browse::source_rank`]).
-    /// A source it does not name is read as the household's own exactly when it names no owner, the
-    /// verdict a fixture carries.
+    /// A source it does not name is unclassified: [`browse::source_rank`] grades it behind the
+    /// classified ones, the same as Browse's own table does for a source it no longer holds.
     households: &'a [(ServerId, bool)],
     /// The profile's Library order as Home reads it ([`HomeOrder`]); [`HomeOrder::Natural`] for the
     /// server order (and always for a fixture), which leaves Home exactly as it was.
@@ -3302,7 +3302,7 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 
 /// The sources Home is built from, in display order: [`browse::source_rank`]'s, the ONE default source
 /// order Browse's section order reads too (the household's own servers first, then each share, each
-/// group keeping registration order). The merge appends shelves in exactly this order and adjacency is
+/// group in registry slot order, `ServerId::raw`, whatever order the registry listed the slots in). The merge appends shelves in exactly this order and adjacency is
 /// the grouping device, so the grouping is true by construction rather than by convention.
 ///
 /// The registry IS the granted roster — a server is in it only once plex.tv (or the
@@ -3312,7 +3312,7 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 /// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
-    let mut ranked: Vec<((bool, bool, u16), ServerId, String)> = Vec::new();
+    let mut ranked: Vec<(crate::browse::SourceRank, ServerId, String)> = Vec::new();
     for sid in scope.clients.slots() {
         if scope.clients.key(sid).is_none() || !feeds_home(sid, &pinned, &known) {
             continue;
@@ -3320,9 +3320,9 @@ fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
         let handle = scope.clients.facts(sid).and_then(|facts| facts.described)
             .map(|f| f.handle.clone())
             .unwrap_or_default();
-        let household = scope.households.iter().find(|(known, _)| *known == sid)
-            .map_or(handle.is_empty(), |(_, household)| *household);
-        ranked.push((crate::browse::source_rank(household, !handle.is_empty(), sid), sid, handle));
+        let verdict = scope.households.iter().find(|(known, _)| *known == sid)
+            .map(|(_, household)| (*household, !handle.is_empty()));
+        ranked.push((crate::browse::source_rank(verdict, sid), sid, handle));
     }
     ranked.sort_by_key(|(rank, ..)| *rank);
     ranked.into_iter().map(|(_, sid, handle)| (sid, handle)).collect()

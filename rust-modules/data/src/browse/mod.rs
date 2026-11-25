@@ -128,9 +128,20 @@ pub enum SourceState {
 /// ([`BrowseState::default_section_order`]), and so the Library header, the tab fallback and Settings,
 /// read it; so does Home's roster (`pms::roster_with_scope`), so a profile's shelves and its header
 /// never disagree about which server leads.
-pub(crate) fn source_rank(household: bool, has_handle: bool, sid: ServerId) -> (bool, bool, u16) {
-    (!household, has_handle, sid.raw())
+///
+/// `verdict` is Browse's classification of the source, `(household, has_handle)`; `None` is a source
+/// Browse has not classified (its table does not hold it yet, or no longer: the step after a reset), and
+/// it ranks behind every classified one, in slot order among its own kind. That is the ONE grade of an
+/// unclassified source, whichever surface asks: nothing else guesses a verdict from a handle.
+pub(crate) fn source_rank(verdict: Option<(bool, bool)>, sid: ServerId) -> SourceRank {
+    match verdict {
+        Some((household, has_handle)) => (false, !household, has_handle, sid.raw()),
+        None => (true, true, true, sid.raw()),
+    }
 }
+
+/// [`source_rank`]'s key: unclassified, then not the household's, then has an owner to name, then the slot.
+pub(crate) type SourceRank = (bool, bool, bool, u16);
 
 /// One SOURCE the table is addressed by — a server this account has been granted. Comes from the
 /// [server registry](plx_plex::plex::server_ids), which is the granted roster: a server is registered
@@ -2168,8 +2179,8 @@ impl BrowseState {
         order.sort_by_key(|&index| {
             let src = self.sections[index].src;
             let source = self.sources.get(src);
-            // a section whose source is gone sorts last, then by source index
-            (source.map_or((true, true, u16::MAX), |source| source_rank(source.household, !source.handle.is_empty(), source.sid)), src)
+            // a section whose source is gone is unclassified: last, then by source index
+            (source_rank(source.map(|source| (source.household, !source.handle.is_empty())), source.map_or(ServerId::UNSET, |source| source.sid)), src)
         });
         order
     }
