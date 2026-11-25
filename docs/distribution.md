@@ -1687,7 +1687,8 @@ glowing faintly grey while the app boots.
 `assets/splash-master.png` is already the shipped artwork, so cut it WITHOUT `--splash-lift`: that
 option exists for a non-black splash, and passing it would undo the OLED black field.
 
-The master arrives at 1672×941, so the script resamples (LANCZOS, 1.148×). Measured cost: none
+The master is exported at 1920×1080, so the script copies it at size. A 16:9 master of another size
+is resampled (LANCZOS); the first master arrived at 1672×941 and its 1.148× resample cost nothing
 detectable — 1 px 10–90 % edge transition and full contrast on both sides, because the art is
 vector-derived with hard edges. It refuses a master that is not 16:9 rather than letterboxing.
 
