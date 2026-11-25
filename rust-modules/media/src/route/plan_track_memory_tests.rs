@@ -513,6 +513,8 @@ fn a_show_page_offers_its_hero_episodes_tracks_and_part() {
         on_deck: Some(plx_data::metadata::Episode {
             rk: "ep-7".into(),
             part: "/library/parts/777/1/file.mkv".into(),
+            // underway: the show's Play resumes it (`Detail::play_episode`), so its streams are the page's
+            resume_ms: 60_000,
             ..Default::default()
         }),
         episode_streams: plx_data::metadata::EpisodeStreams::Loaded("ep-7".into()),
@@ -571,4 +573,44 @@ fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
     assert_eq!(start(&store).pick, None, "an audio pick after Off keeps Off");
     patch(&mut store, 11, SubPick::Track(22));
     assert_eq!(start(&store).pick, Some((22, 1)), "a track picked after Off plays");
+}
+
+/// **A pick is spent by the playback it started** (#1532): on a SHOW page the loaded page's key is the
+/// show's while the pick is keyed by the episode, so no landing of the page ever drops it. Pick Off,
+/// Play, turn English on in the player, stop, Resume: the second start reads the server's selection,
+/// not the stale Off.
+#[test]
+fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "show-1".into(),
+        kind: "show".into(),
+        is_show: true,
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![text_sub(22, "spa", "")],
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "ep-7".into(),
+            part: "/library/parts/777/1/file.mkv".into(),
+            resume_ms: 60_000,
+            ..Default::default()
+        }),
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("ep-7".into()),
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let off = PreplayPick { part_id: 777, audio_sid: 11, sub: SubPick::Off };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: off }));
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "control: the pick waits for the start");
+    let played = PlayingItem { sid, rk: "ep-7".into(), ..item("episode", "show-1", vec![text_sub(22, "spa", "")]) };
+    assert!(store.run(MetadataCmd::InstallPlaying(Some(played))));
+    assert!(store.view().picks_of(sid, "ep-7").is_empty(), "the playback that started under the pick spent it");
+    let other = PlayingItem { sid, rk: "ep-8".into(), ..item("episode", "show-1", Vec::new()) };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: off }));
+    assert!(store.run(MetadataCmd::InstallPlaying(Some(other))));
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "another item's playback leaves the pick");
 }

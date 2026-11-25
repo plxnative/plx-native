@@ -122,16 +122,19 @@ impl PreplayPanelScreen {
         let Some(id) = self.picker.row_at(RowKey(elem)) else { return };
         if let Outcome::Picked(sel) = self.picker.ok(id) {
             let tracks = self.picker.tracks().clone();
-            fx.push(Fx::App(AppFx::Store(
-                StoreId::Metadata,
-                StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
-            )));
-            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
-            // On the failure screen the pick starts the retry (the loop does it with the commit), so the
-            // panel has nothing left to show; on a Detail page it stays up with the check moved.
-            if matches!(self.arg.source, Source::Failed { .. }) {
-                self.dismiss(fx);
+            // **The store keeps only what the viewer chose for the item's next start**, and a page's
+            // pick is that. The failure screen's pair is the session's (`route::hold_pick_for_retry`,
+            // run by the loop's commit): its standing half is DERIVED from the failed attempt (a `0`
+            // subtitle reads as `Off`), which is not the viewer's word, so it never reaches the store.
+            if matches!(self.arg.source, Source::Page) {
+                fx.push(Fx::App(AppFx::Store(
+                    StoreId::Metadata,
+                    StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
+                )));
             }
+            // On the failure screen the loop starts the retry with the commit and closes this panel
+            // only when the retry started (`content_command`), so a refused retry keeps it.
+            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
         }
     }
 }
@@ -424,9 +427,9 @@ pub(crate) mod tests {
     }
 
     /// On the failure screen a pick commits with the failure source (the loop holds it AND starts the
-    /// retry, as a quality pick does) and closes the panel; on a page the panel stays up.
+    /// retry, as a quality pick does) and leaves closing to it; on a page the panel stays up.
     #[test]
-    fn a_failure_pick_commits_for_the_retry_and_closes_the_panel() {
+    fn a_failure_pick_commits_for_the_retry_and_never_patches_the_store() {
         use plx_appkit::preplay_tracks::PickRow;
         let elem = |row: PickRow| plx_ui::form::FormId::key(&row).0;
         let mut p = panel_from(Source::Failed { part_id: 9001, pick: None });
@@ -436,7 +439,11 @@ pub(crate) mod tests {
             f,
             Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { source: Source::Failed { .. }, sel, .. })) if sel.subtitle_sid == 0
         )));
-        assert!(matches!(fx.last(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the retry is under way: the panel closes");
+        assert!(!fx.iter().any(|f| matches!(f, Fx::Nav(_))), "the loop closes the panel, and only when the retry started");
+        assert!(
+            !fx.iter().any(|f| matches!(f, Fx::App(AppFx::Store(StoreId::Metadata, _)))),
+            "the failure screen's pair is the session's: a derived standing Off is never stored as the viewer's pick"
+        );
         let mut page = panel();
         drive(&mut page, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
         let fx = drive(&mut page, |p, fx| p.activate(elem(PickRow::SubOff), fx));

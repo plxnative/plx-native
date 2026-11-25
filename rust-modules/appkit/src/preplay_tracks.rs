@@ -255,7 +255,8 @@ pub struct Selection {
     pub audio_sid: i64,
     /// `0` is Off.
     pub subtitle_sid: i64,
-    /// The standing pick after this one: what the store keeps (`PatchTracks`) and the next pick is
+    /// The standing pick after this one: what the store keeps for a page (`PatchTracks`; the failure
+    /// screen's goes to the session, `route::hold_pick_for_retry`) and the next pick is
     /// diffed against. Off is a value of its own, not `subtitle_sid == 0`: an audio-only pick on an
     /// item whose subtitle was never touched also sends `0`.
     pub pick: PreplayPick,

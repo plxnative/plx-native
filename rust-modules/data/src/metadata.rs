@@ -213,8 +213,11 @@ pub struct MetadataState {
     /// **The one pre-play pick** ([`PreplayPick`]): what the viewer chose in the Audio & Subtitles
     /// panel for an item before it plays, one per file (`part_id`). `MetadataCmd::PatchTracks` is the
     /// only writer; the resolve snapshots it (`MetadataView::picks_of`) and applies it to the item it
-    /// plans, and the panel is seeded from it ([`PreplayTracks::pick`]). Dropped with the page
-    /// ([`reset`], a fresh read of the item).
+    /// plans, and the panel is seeded from it ([`PreplayTracks::pick`]). **A pick is the viewer's
+    /// word for the NEXT start of its item and is retired by [`retire_picks`]**: when that item's
+    /// playback is installed ([`install_playing`], the same transition that sets `played_since_load`,
+    /// so Resume after an in-player change reads the server's selection and not a stale pick), when
+    /// a fresh read of that same item lands, and on [`reset`].
     picks: Vec<(plx_plex::plex::ServerId, String, PreplayPick)>,
     alt: AltStore,
     /// The IO this owner has asked the application to start and the application has not yet taken
@@ -3092,6 +3095,12 @@ fn has_preplay_tracks(
     preplay_source(state, sid, rk, version).is_some()
 }
 
+/// **The one retirement of a pre-play pick**: drop what is held for `(sid, rk)`. Keyed by the item
+/// that PLAYS (an episode's key even from a show page, where the loaded page's own key is the show's).
+fn retire_picks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str) {
+    state.picks.retain(|(s, r, _)| !plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)));
+}
+
 /// The picks held for `(sid, rk)`, one per file.
 fn picks_of<'a>(
     state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &'a str,
@@ -3320,6 +3329,10 @@ fn install_playing(state: &mut MetadataState, pt: Option<PlayingItem>) {
     state.skipped.clear(); // a different leaf's markers, so a fresh slate
     if let Some(pt) = &pt {
         state.played_since_load = Some((pt.sid, pt.rk.clone()));
+        // The playback starts under the pick (the resolve captured it at the press), so it is spent:
+        // the page's next Play or Resume plans from the server's selection, which a change made
+        // in the player has moved.
+        retire_picks(state, pt.sid, &pt.rk);
         plx_base::eventlog::log(&format!(
             "playing item: rk={} audio={} subs={} markers={} chapters={}",
             pt.rk,
@@ -4719,7 +4732,7 @@ fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<Met
     if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (d.sid, &d.rk))) {
         state.played_since_load = None;
     }
-    state.picks.retain(|(s, r, _)| !plx_plex::plex::same_item((*s, r.as_str()), (d.sid, &d.rk)));
+    retire_picks(state, d.sid, &d.rk);
     let mut d = d;
     if let Some(old) = state.current.as_ref() {
         carry_related_window(old, &mut d);
