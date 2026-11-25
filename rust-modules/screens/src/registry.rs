@@ -620,27 +620,16 @@ pub enum ItemMenuKind {
     /// `sid` is `UNSET` and `rk` empty; the subject is [`ItemMenuArg::catalog`] and `state` picks the
     /// rows (`item_menu::hold::rows_for`).
     Catalog { state: plx_data::watchlist::model::TileState },
-    /// The Detail hero's More (…) menu: the actions that did not fit the row's three round buttons
-    /// (`detail::hero::split_actions`), in the row's priority order, captured when it opened. `rk` on the
-    /// argument is the item Play from Start and Play Version act on (the on-deck episode on a show page).
-    /// `opener` is the Detail page's instance: the picker is a page-owned panel, so the menu hands the
-    /// request back to the page that owns it (`AppMsg::OpenPreplayTracks`).
-    HeroOverflow { rows: Vec<OverflowRow>, opener: plx_machine::machine::InstanceId },
+    /// The Detail hero's More (…) menu: the actions that did not fit the row's round buttons
+    /// (`detail::hero::overflow_ctls`), in the row's priority order, captured when it opened. `rk` on the
+    /// argument is the item Play acts on ([`plx_data::metadata::Detail::play_rk`]). `opener` is the Detail
+    /// page's instance: a row is the round button it replaces, so the menu hands that [`HeroCtl`] back to
+    /// the page (`AppMsg::HeroCtl`), whose `activate_hero` is the one path a hero action takes. The row's
+    /// icon and label are the button's, from the one table ([`hero_face`]).
+    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId },
 }
 
-/// One row of the hero's … menu. Each wears the icon and label of the round button it replaces, and OK
-/// does what that button does (`Action::GoToShow`, `Action::PlayFromStart`, `Action::ChooseVersion`).
-/// A new hero action joins the menu as one more variant here and one more arm in `item_menu::build_hero_overflow`.
-#[derive(Clone)]
-pub enum OverflowRow {
-    GoToShow { show_rk: String, season: std::os::raw::c_int },
-    PlayFromStart,
-    /// The versions are the ones Play Version lists, captured at open.
-    PlayVersion { versions: Vec<plx_data::pms::MediaVersion> },
-    /// *Audio & Subtitles*: the menu closes and the page opens the picker anchored where the menu was
-    /// (`Action::ChooseTracks`).
-    AudioSubtitles,
-}
+pub use crate::detail::{hero_face, HeroCtl};
 
 /// **Identity, not contents.** `PmsMovie` is a wire DTO with no `PartialEq` of its own, and one
 /// derived over its forty-odd fields would be the wrong question anyway: two menus are the same
@@ -654,8 +643,7 @@ impl PartialEq for ItemMenuKind {
             (Self::Card { row: a, from_deck: da }, Self::Card { row: b, from_deck: db }) =>
                 da == db && a.sid == b.sid && a.rk == b.rk && a.kind == b.kind,
             (Self::Episode { mark: a, .. }, Self::Episode { mark: b, .. }) => a == b,
-            (Self::HeroOverflow { rows: a, .. }, Self::HeroOverflow { rows: b, .. }) =>
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::mem::discriminant(x) == std::mem::discriminant(y)),
+            (Self::HeroOverflow { rows: a, .. }, Self::HeroOverflow { rows: b, .. }) => a == b,
             (Self::Season { mark: a, show_rk: sa, index: ia }, Self::Season { mark: b, show_rk: sb, index: ib }) =>
                 a == b && sa == sb && ia == ib,
             (Self::Catalog { state: a }, Self::Catalog { state: b }) => a == b,
@@ -1759,9 +1747,9 @@ pub enum AppMsg {
     /// the page reports the choice (`ContentReq::SelectVersion`), so "what Play means on this
     /// page" stays in one place.
     SelectVersion(plx_plex::plex::MediaId),
-    /// The hero's … menu asked for *Audio & Subtitles*: the page opens the picker (a page-owned panel)
-    /// anchored on `anchor`, the rect the menu hung off. The disc sends the same request itself.
-    OpenPreplayTracks { anchor: [u32; 4] },
+    /// A row of the hero's … menu was chosen: the page performs `ctl` exactly as its own round button
+    /// would, anchoring a panel on `anchor`, the rect the menu hung off.
+    HeroCtl { ctl: HeroCtl, anchor: [u32; 4] },
     /// **A `toggle_section` command was performed** (`app::playback::perform_hud_command`, from a tab's
     /// OK or click or from a package's disc): the player page opens that section if it is closed and closes it
     /// if it is open, under the package's policy. The page owns the sections ([`crate::player::input::Sections`]),

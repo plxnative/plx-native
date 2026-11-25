@@ -95,11 +95,29 @@ pub fn audio_subtitles_label() -> &'static CStr { plx_os::i18n::msg::settings_au
 /// title, which is what a version list is. It used to be [`plx_ui::icons::Icon::Show`], the item
 /// menu's own *Go to Show* glyph; that mark is now the Go to Show disc's, and two identical glyphs
 /// in one row would make the only icon-only pair of controls indistinguishable at three metres.
-pub const VERSION_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Collection;
+const VERSION_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Collection;
 
 /// The Go to Show disc's mark: the same stack-of-episodes glyph the item menu's *Go to Show* row
 /// wears, so the row and the disc name one destination with one mark.
-pub const GO_TO_SHOW_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Show;
+const GO_TO_SHOW_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Show;
+
+/// **The one table of a hero action's mark and verb**: the round disc draws it (`DetailScreen::draw_hero`,
+/// [`disc_verb`]'s label) and the … menu's row wears it (`item_menu::build_hero_overflow`, through
+/// `registry::hero_face`), so a control and the row that replaces it cannot disagree. The actions that
+/// can move into the … menu, plus the glyph-only discs with a fixed mark; `None` for the pills, the
+/// Watchlist disc (its face animates) and the watched toggle (its mark follows the state).
+/// Exhaustive: a new control must be placed here.
+pub fn face(ctl: HeroCtl) -> Option<(plx_ui::icons::Icon, &'static CStr)> {
+    use plx_ui::icons::Icon;
+    match ctl {
+        HeroCtl::Restart => Some((Icon::Restart, play_from_start_label())),
+        HeroCtl::Trailer => Some((Icon::Trailer, trailer_label())),
+        HeroCtl::Version => Some((VERSION_ICON, select_version_label())),
+        HeroCtl::GoToShow => Some((GO_TO_SHOW_ICON, go_to_show_label())),
+        HeroCtl::AudioSubtitles => Some((Icon::Audio, audio_subtitles_label())),
+        HeroCtl::Play | HeroCtl::Alt | HeroCtl::More | HeroCtl::Watchlist | HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => None,
+    }
+}
 
 /// A control in the hero action row, named rather than numbered — ported verbatim from
 /// `ui/detail.rs::HeroCtl`.
@@ -532,15 +550,14 @@ pub fn go_to_show_target(d: &Detail) -> Option<(&str, i64)> {
 /// name: it is its glyph and its focus fill.
 pub fn disc_verb(ctl: HeroCtl, name_episode: bool) -> Option<(usize, &'static CStr)> {
     match (ctl, name_episode) {
-        (HeroCtl::Restart, _) => Some((0, play_from_start_label())),
-        (HeroCtl::Trailer, _) => Some((1, trailer_label())),
+        (HeroCtl::Restart | HeroCtl::Trailer, _) => face(ctl).map(|f| (if ctl == HeroCtl::Restart { 0 } else { 1 }, f.1)),
         (HeroCtl::MarkWatched, false) => Some((2, mark_watched_label())),
         (HeroCtl::MarkWatched, true) => Some((2, mark_episode_watched_label())),
         (HeroCtl::MarkUnwatched, false) => Some((2, mark_unwatched_label())),
         (HeroCtl::MarkUnwatched, true) => Some((2, mark_episode_unwatched_label())),
-        (HeroCtl::Version, _) => Some((3, select_version_label())),
-        (HeroCtl::GoToShow, _) => Some((4, go_to_show_label())),
-        (HeroCtl::AudioSubtitles, _) => Some((5, audio_subtitles_label())),
+        (HeroCtl::Version, _) => face(ctl).map(|f| (3, f.1)),
+        (HeroCtl::GoToShow, _) => face(ctl).map(|f| (4, f.1)),
+        (HeroCtl::AudioSubtitles, _) => face(ctl).map(|f| (5, f.1)),
         _ => None,
     }
 }
@@ -1098,6 +1115,16 @@ pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn 
 mod tests {
     use super::*;
     use plx_data::metadata::Episode;
+
+    /// The round disc's verb and the menu row are one table: every control with a face unfurls
+    /// the face's own label (the watched toggle and the pills have none).
+    #[test]
+    fn a_discs_verb_is_its_faces_label() {
+        for ctl in [HeroCtl::Restart, HeroCtl::Trailer, HeroCtl::Version, HeroCtl::GoToShow, HeroCtl::AudioSubtitles] {
+            assert_eq!(disc_verb(ctl, false).map(|v| v.1), face(ctl).map(|f| f.1), "{ctl:?}");
+        }
+        assert!(face(HeroCtl::Play).is_none() && face(HeroCtl::MarkWatched).is_none());
+    }
 
     #[test]
     fn the_hdr_warning_follows_the_version_play_starts() {

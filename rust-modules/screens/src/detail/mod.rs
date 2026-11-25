@@ -12,6 +12,7 @@ mod collection;
 mod episodes;
 mod extras;
 mod hero;
+pub use hero::{face as hero_face, HeroCtl};
 mod related;
 mod season;
 mod section;
@@ -871,7 +872,6 @@ impl DetailScreen {
         meta: plx_data::metadata::MetadataView<'_>,
         opener: plx_machine::machine::InstanceId,
     ) -> Option<(String, crate::registry::ItemMenuKind)> {
-        use crate::registry::OverflowRow;
         let key = focus.filter(|key| key.entry == self.entry)?;
         if key.elem != hero::ELEM_MORE {
             return None;
@@ -880,14 +880,14 @@ impl DetailScreen {
         let (moved, n) = hero::overflow_ctls(self.hero_set(meta));
         let rows: Vec<_> = moved[..n]
             .iter()
-            .filter_map(|ctl| match ctl {
-                hero::HeroCtl::GoToShow => hero::go_to_show_target(d)
-                    .map(|(show_rk, season)| OverflowRow::GoToShow { show_rk: show_rk.to_string(), season: season as std::os::raw::c_int }),
-                hero::HeroCtl::Restart => Some(OverflowRow::PlayFromStart),
-                hero::HeroCtl::Version => Some(OverflowRow::PlayVersion { versions: hero_versions(d).to_vec() }),
-                hero::HeroCtl::AudioSubtitles => Some(OverflowRow::AudioSubtitles),
-                _ => None,
+            .filter(|ctl| match ctl {
+                hero::HeroCtl::GoToShow => hero::go_to_show_target(d).is_some(),
+                hero::HeroCtl::Restart | hero::HeroCtl::Version | hero::HeroCtl::AudioSubtitles => true,
+                // Never moved into the menu (`hero::overflow_ctls`): they keep their own disc or pill.
+                hero::HeroCtl::Play | hero::HeroCtl::Trailer | hero::HeroCtl::Alt | hero::HeroCtl::Watchlist
+                | hero::HeroCtl::MarkWatched | hero::HeroCtl::MarkUnwatched | hero::HeroCtl::More => false,
             })
+            .copied()
             .collect();
         Some((d.play_rk().to_string(), rows))
             .filter(|(_, rows)| !rows.is_empty())
@@ -2657,9 +2657,10 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
             }
             // The *Select Version* surface committed a row: that version is now the file this page's
             // Play and Resume start (and its facts line describes). Nothing plays.
-            // The hero's … menu asked for the picker and closed itself: the same request the disc makes.
-            ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor }) => {
-                self.content(fx, ContentReq::Panel(ContentPanel::PreplayTracks { anchor: *anchor }));
+            // A row of the hero's … menu, handed back with the rect the menu hung off: the page performs the
+            // control as if its own disc had been pressed, so `activate_hero` is the only action path.
+            ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor }) => {
+                self.activate_hero(*ctl, Some(*anchor), cx, fx, H::metadata(cx));
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::SelectVersion(media)) => {
@@ -3389,16 +3390,13 @@ impl DetailScreen {
                 }
                 ctl => {
                     let icon = match ctl {
-                        hero::HeroCtl::Restart => plx_ui::icons::Icon::Restart,
-                        hero::HeroCtl::Trailer => plx_ui::icons::Icon::Trailer,
+                        hero::HeroCtl::Restart | hero::HeroCtl::Trailer | hero::HeroCtl::GoToShow | hero::HeroCtl::Version
+                        | hero::HeroCtl::AudioSubtitles => hero::face(ctl).map(|f| f.0).unwrap_or_else(|| unreachable!()),
                         hero::HeroCtl::More => plx_ui::icons::Icon::More,
                         hero::HeroCtl::MarkWatched => plx_ui::icons::Icon::Check,
                         hero::HeroCtl::MarkUnwatched => plx_ui::icons::Icon::Minus,
                         // At either rest the plain face; only a flip in flight layers the fill.
                         hero::HeroCtl::Watchlist => plx_appkit::watchlist_disc::paint(self.watchlist.pos()).0,
-                        hero::HeroCtl::GoToShow => hero::GO_TO_SHOW_ICON,
-                        hero::HeroCtl::Version => hero::VERSION_ICON,
-                        hero::HeroCtl::AudioSubtitles => plx_ui::icons::Icon::Audio,
                         _ => unreachable!(),
                     };
                     let mut button = CircleButton::new(c"".as_ptr())
@@ -4694,7 +4692,7 @@ impl DetailScreen {
         }
         let local = self.locate(elem, meta).and_then(Located::local_key).unwrap_or(elem);
         match self.locate(elem, meta) {
-            Some(Located::Hero(ctl)) => self.activate_hero(ctl, cx, fx, meta),
+            Some(Located::Hero(ctl)) => self.activate_hero(ctl, None, cx, fx, meta),
             Some(Located::Season(i)) => {
                 // A direct press skips the dwell entirely — pre-loading `season_settle` past the
                 // threshold fires on the very NEXT `tick` rather than after a full `SETTLE_S`.
@@ -4781,6 +4779,7 @@ impl DetailScreen {
     fn activate_hero<H: ContentLike>(
         &mut self,
         ctl: hero::HeroCtl,
+        menu_anchor: Option<[u32; 4]>,
         cx: &Cx<'_, H>,
         fx: &mut Effects<'_, H>,
         meta: plx_data::metadata::MetadataView<'_>,
@@ -4837,7 +4836,8 @@ impl DetailScreen {
             }
             hero::HeroCtl::Alt | hero::HeroCtl::Version | hero::HeroCtl::AudioSubtitles => {
                 let set = self.hero_set(meta);
-                if let Some(i) = hero::index_of(set, ctl) {
+                // A control moved into the … menu has no disc: the menu's own rect is its anchor.
+                let drawn = hero::index_of(set, ctl).map(|i| {
                     let widths = hero::hero_widths(
                         cx.measure,
                         set,
@@ -4849,7 +4849,9 @@ impl DetailScreen {
                     rect.y -= self.scroll.pos;
                     // The ANCHOR travels on the argument, bit for bit, so the surface places
                     // itself off the control without the page or a static holding a `Rect` for it.
-                    let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
+                    [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits)
+                });
+                if let Some(anchor) = menu_anchor.or(drawn) {
                     let panel = match ctl {
                         hero::HeroCtl::Version => ContentPanel::Versions { anchor },
                         hero::HeroCtl::AudioSubtitles => ContentPanel::PreplayTracks { anchor },

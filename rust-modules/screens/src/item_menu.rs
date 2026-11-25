@@ -56,7 +56,7 @@ use std::os::raw::c_int;
 use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
-use crate::registry::{AppFx, AppLike, AppMsg, ItemMenuArg, ItemMenuKind, ItemMenuReq, OverflowRow};
+use crate::registry::{hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq};
 use plx_ui::consts::*;
 use plx_ui::form::{Activation, Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::frame::Budget;
@@ -594,40 +594,29 @@ fn build_episode(rk: &str, mark: PosterMark, versions: &[MediaVersion], face: Op
     Form::new().section(watchlist::push_face(sec, face))
 }
 
+/// A hero action's row in the … menu: its identity and the action that stands for it. The ONE pairing,
+/// read both ways (a row to build, a pressed row back to its [`HeroCtl`]); the mark and the verb are
+/// not here but in `detail::hero::face`, shared with the round button.
+const HERO_ROWS: [(HeroCtl, ItemRow); 4] = [
+    (HeroCtl::GoToShow, ItemRow::GoToShow),
+    (HeroCtl::Restart, ItemRow::PlayFromStart),
+    (HeroCtl::Version, ItemRow::PlayVersion),
+    (HeroCtl::AudioSubtitles, ItemRow::ChooseTracks),
+];
+
 /// **The Detail hero's … menu**: one row per action the round buttons had no room for, in the row's
-/// order. Each row wears the SAME icon as its round button (`detail::hero`: `GO_TO_SHOW_ICON`,
-/// `Icon::Restart`, `VERSION_ICON`) and the button's own verb, and presses what the button presses;
-/// Play Version turns the panel into the versions list ([`Action::ChooseVersion`]).
-fn build_hero_overflow(rk: &str, rows: &[OverflowRow]) -> ItemForm {
+/// order. A row wears the SAME icon and verb as its round button (`registry::hero_face`) and a press
+/// hands its [`HeroCtl`] back to the page that opened the menu, which performs it through the one path
+/// its own button takes (`AppMsg::HeroCtl`): Select Version included, so the versions list is the
+/// page's panel, anchored where the menu was, not a second page inside this one.
+fn build_hero_overflow(rows: &[HeroCtl]) -> ItemForm {
     let mut sec = FormSection::new("");
-    for row in rows {
-        sec = match row {
-            OverflowRow::GoToShow { show_rk, season } => sec.item_if(
-                !show_rk.is_empty(),
-                ItemRow::GoToShow,
-                RowKind::Button,
-                Action::GoToShow(show_rk.clone(), *season),
-                Row::new(plx_os::i18n::msg::browse_menu_go_show()).licon(Icon::Show),
-            ),
-            OverflowRow::PlayFromStart => sec.item(
-                ItemRow::PlayFromStart,
-                RowKind::Button,
-                Action::PlayFromStart(rk.to_string()),
-                Row::new(plx_os::i18n::msg::browse_detail_play_start()).licon(Icon::Restart),
-            ),
-            OverflowRow::PlayVersion { .. } => sec.item(
-                ItemRow::PlayVersion,
-                RowKind::Button,
-                Action::ChooseVersion(rk.to_string()),
-                Row::new(plx_os::i18n::msg::browse_detail_select_version()).licon(Icon::Collection),
-            ),
-            OverflowRow::AudioSubtitles => sec.item(
-                ItemRow::ChooseTracks,
-                RowKind::Button,
-                Action::ChooseTracks(rk.to_string()),
-                Row::new(plx_os::i18n::msg::settings_audio_title()).licon(Icon::Audio),
-            ),
-        };
+    for ctl in rows {
+        let Some((id, _)) = HERO_ROWS.iter().find(|(c, _)| c == ctl).map(|(_, id)| (*id, ())) else { continue };
+        let Some((icon, label)) = hero_face(*ctl) else { continue };
+        let label = label.to_str().unwrap_or_default();
+        // The action is the row's identity for the form; the menu's `activate` reads the row, not it.
+        sec = sec.item(id, RowKind::Button, Action::ChooseTracks(String::new()), Row::new(label).licon(icon));
     }
     Form::new().section(sec)
 }
@@ -800,7 +789,7 @@ impl ItemMenuScreen {
             }
             ItemMenuKind::Episode { mark, versions } => build_episode(&self.arg.rk, *mark, versions, self.face.as_ref()),
             ItemMenuKind::Season { mark, .. } => build_season(&self.arg.rk, *mark, self.face.as_ref()),
-            ItemMenuKind::HeroOverflow { rows, .. } => build_hero_overflow(&self.arg.rk, rows),
+            ItemMenuKind::HeroOverflow { rows, .. } => build_hero_overflow(rows),
             ItemMenuKind::Catalog { state } => {
                 let guid = self.arg.catalog.as_ref().map_or("", |c| c.guid.as_str());
                 let kind = self.arg.catalog.as_ref().map_or(plx_data::watchlist::model::Kind::Movie, |c| c.kind);
@@ -847,19 +836,23 @@ impl ItemMenuScreen {
                 Activation::Action(act) => act,
                 Activation::Push(never) => match never {},
             });
-        if let Some(Action::ChooseVersion(rk)) = &act {
-            self.show_versions(rk);
+        // The hero's … menu is its round buttons' overflow: a row is a [`HeroCtl`], and the menu closes and
+        // hands it back to the page that owns the hero, anchored on the rect it hung off. The page's
+        // `activate_hero` is the one path (Go to Show, Play from Start, the versions list and the
+        // picker are its panels, never a second copy inside this menu).
+        if let ItemMenuKind::HeroOverflow { opener, .. } = &self.arg.kind {
+            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+            let pressed = self.form.index_of_key(RowKey(elem)).and_then(|i| self.form.binding_at(i)).map(|b| b.id);
+            if let Some(ctl) = pressed.and_then(|id| HERO_ROWS.iter().find(|(_, row)| *row == id).map(|(ctl, _)| *ctl)) {
+                fx.push(Fx::Deliver(
+                    MachineId::Instance(*opener),
+                    Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: self.arg.anchor })),
+                ));
+            }
             return;
         }
-        // The picker is the Detail page's panel (a `PickerState` screen with its own pages and
-        // motion); a second copy of it inside this menu would be a second picker. The menu closes
-        // and hands the request back, anchored on the rect it hung off.
-        if let (Some(Action::ChooseTracks(_)), ItemMenuKind::HeroOverflow { opener, .. }) = (&act, &self.arg.kind) {
-            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
-            fx.push(Fx::Deliver(
-                MachineId::Instance(*opener),
-                Delivery::Screen(ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor: self.arg.anchor })),
-            ));
+        if let Some(Action::ChooseVersion(rk)) = &act {
+            self.show_versions(rk);
             return;
         }
         // Every arm of the dispatch turns an rk into a blocking fetch, a scrobble or a play; an
@@ -890,13 +883,6 @@ impl ItemMenuScreen {
         match &self.arg.kind {
             ItemMenuKind::Card { row, .. } => &row.versions,
             ItemMenuKind::Episode { versions, .. } => versions,
-            ItemMenuKind::HeroOverflow { rows, .. } => rows
-                .iter()
-                .find_map(|r| match r {
-                    OverflowRow::PlayVersion { versions } => Some(versions.as_slice()),
-                    _ => None,
-                })
-                .unwrap_or(&[]),
             _ => &[],
         }
     }
@@ -1434,25 +1420,15 @@ pub(crate) mod tests {
     /// round button it replaces and committing what that button does. Play Version opens the versions page.
     #[test]
     fn the_hero_overflow_menu_mirrors_the_round_buttons_it_replaces() {
-        let rows = vec![
-            OverflowRow::GoToShow { show_rk: "show-1".into(), season: 3 },
-            OverflowRow::PlayFromStart,
-            OverflowRow::PlayVersion { versions: plx_appkit::version_list::sample() },
-            OverflowRow::AudioSubtitles,
-        ];
-        let menu = built(super::build_hero_overflow("ep-9", &rows));
+        let rows = [HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
+        let menu = built(super::build_hero_overflow(&rows));
         assert_eq!(menu.ids(), [ItemRow::GoToShow, ItemRow::PlayFromStart, ItemRow::PlayVersion, ItemRow::ChooseTracks]);
-        let icons: Vec<_> = (0..4).map(|i| menu.0.table.sections[0].rows[i].licon).collect();
-        assert_eq!(icons, [Some(Icon::Show), Some(Icon::Restart), Some(Icon::Collection), Some(Icon::Audio)]);
-        assert_eq!(
-            menu.actions(),
-            [
-                Action::GoToShow("show-1".into(), 3),
-                Action::PlayFromStart("ep-9".into()),
-                Action::ChooseVersion("ep-9".into()),
-                Action::ChooseTracks("ep-9".into()),
-            ]
-        );
+        // The mark and the verb are the round button's, from the one table, not literals of this menu.
+        for (i, ctl) in rows.iter().enumerate() {
+            let (icon, label) = hero_face(*ctl).expect("an overflowable control has a face");
+            let row = &menu.0.table.sections[0].rows[i];
+            assert_eq!((row.licon, row.label.as_str()), (Some(icon), label.to_str().unwrap()), "{ctl:?}");
+        }
         // two rows or more: the menu never stands for a single item either
         assert!(menu.ids().len() >= 2);
     }
@@ -2686,34 +2662,34 @@ pub(crate) mod tests {
     /// it, anchored on the rect the menu hung off: the picker is the page's panel, not a second copy
     /// inside the menu, so nothing reaches the app runner.
     #[test]
-    fn the_overflow_menus_audio_row_closes_it_and_asks_the_page_for_the_picker() {
+    fn every_overflow_row_closes_the_menu_and_hands_its_control_back_to_the_page() {
         let anchor = [10.0f32, 20.0, 64.0, 64.0].map(f32::to_bits);
-        let mut arg = card_arg(&item(3, PosterMark::None), false);
-        arg.anchor = anchor;
-        arg.kind = ItemMenuKind::HeroOverflow {
-            rows: vec![OverflowRow::PlayFromStart, OverflowRow::AudioSubtitles],
-            opener: plx_machine::machine::InstanceId(4),
-        };
-        let mut s = ItemMenuScreen::new(EntryId(7), arg);
-        s.built = true;
-        s.form.set(build_hero_overflow("ep-9", &[OverflowRow::PlayFromStart, OverflowRow::AudioSubtitles]), None);
-        let elem = first_action(&s, |a| matches!(a, Action::ChooseTracks(_)));
-        let mut out = Vec::new();
-        let mut present = plx_machine::present::Present::new();
-        let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
-        s.activate::<HostFixture>(elem, &mut fx);
-        assert!(out.iter().any(|e| matches!(e.fx, Fx::Nav(NavOp::Dismiss(EntryId(7))))), "the menu closes");
-        assert!(
-            out.iter().any(|e| matches!(
-                &e.fx,
-                Fx::Deliver(
-                    MachineId::Instance(plx_machine::machine::InstanceId(4)),
-                    Delivery::Screen(ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor: got })),
-                ) if *got == anchor
-            )),
-            "the opening page is asked for its picker on the menu's anchor"
-        );
-        assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::ItemMenu(_)))), "nothing reaches the app runner");
+        let rows = vec![HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
+        for (n, want) in rows.iter().enumerate() {
+            let mut arg = card_arg(&item(3, PosterMark::None), false);
+            arg.anchor = anchor;
+            arg.kind = ItemMenuKind::HeroOverflow { rows: rows.clone(), opener: plx_machine::machine::InstanceId(4) };
+            let mut s = ItemMenuScreen::new(EntryId(7), arg);
+            s.built = true;
+            s.form.set(build_hero_overflow(&rows), None);
+            let elem = s.form.key_at(n).expect("a row").0;
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
+            s.activate::<HostFixture>(elem, &mut fx);
+            assert!(out.iter().any(|e| matches!(e.fx, Fx::Nav(NavOp::Dismiss(EntryId(7))))), "{want:?}: the menu closes");
+            assert!(
+                out.iter().any(|e| matches!(
+                    &e.fx,
+                    Fx::Deliver(
+                        MachineId::Instance(plx_machine::machine::InstanceId(4)),
+                        Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: got })),
+                    ) if ctl == want && *got == anchor
+                )),
+                "{want:?}: the opening page is handed the control on the menu's anchor"
+            );
+            assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::ItemMenu(_)))), "nothing reaches the app runner");
+        }
     }
 
     /// A leaf with three versions, its card menu built (so Play Version is a row).
