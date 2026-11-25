@@ -383,7 +383,8 @@ The whole shared-source feature rests on keeping these apart:
   of the type). It never changes which libraries are favourites, the tab strip's membership, Search or
   the Sources picker, and an absent record is the server order (own servers first, then shares, each
   server's directory order). One state, `library_order::OrderState`, says what the record is (none /
-  saved / saved and in effect); the writer's `merged` keeps an offline server's entries (the grain is
+  recorded / recorded and moving a favourite shown: recorded means the profile sees one or the
+  session still holds one, so Reset stays offered until the disk has none); the writer's `merged` keeps an offline server's entries (the grain is
   the machine, like `pins::carry_forward`) and deletes a record only when it says nothing.
 - **reachable** — a fact about NOW: something answered at one of its addresses, *as the right
   machine*. It changes while nobody touches anything, and it is never a reason to forget the grant

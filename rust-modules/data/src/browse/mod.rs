@@ -1057,12 +1057,16 @@ pub struct BrowseState {
     /// another's view.
     view_memory: plx_plex::plex::session::LibraryViews,
     recorded: Option<plx_plex::plex::session::HomePins>,
-    /// This profile's Library order record, as last read ([`Self::load_remembered`], through the
-    /// pending-write overlay). `None` is the server order.
+    /// This profile's Library order record as the profile SEES it: [`Self::load_remembered`]'s read
+    /// through the pending-write overlay, so a write not yet saved already shows. `None` is the
+    /// server order.
     order_record: Option<plx_plex::plex::session::LibraryOrder>,
+    /// Whether the session itself (what is on disk once a write is saved) holds a record for this
+    /// profile: the other half of [`Self::order_state`], which a Reset that is pending or failed
+    /// keeps apart from `order_record` (the overlay already shows it gone, the disk still has it).
+    order_stored: bool,
     preference_writes: preferences_job::Preferences,
-    /// The receipt of the last write of each tracked kind ([`WriteSlots`]).
-    writes: WriteSlots,
+    pending_pins: Option<(String, std::sync::Arc<std::sync::Mutex<PinWrite>>)>,
     /// The outcome of the last editor commit ([`apply_pins_from`](Self::apply_pins_from)),
     /// published on the directory ([`super::view::DirectoryView::pin_commit`]) so the screen that
     /// sent it can wait for its answer instead of assuming one.
@@ -1088,46 +1092,7 @@ pub use preferences_job::WriteState;
 ///
 /// Observation and use are split: the host observes the addressed completion BEFORE capturing
 /// the session for the next step. Logic reads only that latch, never a worker's newer completion.
-type WriteReceipt = preferences_job::Receipt;
-
-/// The preference writes whose outcome the store tracks: each has one slot holding the receipt of
-/// its latest write for the profile that made it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WriteKind {
-    /// The Favorite libraries commit: [`BrowseState::pin_record_for`] keeps the local record until
-    /// its receipt says saved.
-    Pins,
-    /// The Library order: the overlay keeps the order until its receipt says saved, and
-    /// [`BrowseState::order_write`] tells Settings whether it did.
-    Order,
-}
-
-#[derive(Clone, Default)]
-struct WriteSlots {
-    slots: [Option<(String, std::sync::Arc<std::sync::Mutex<WriteReceipt>>)>; 2],
-}
-
-impl WriteSlots {
-    fn set(&mut self, kind: WriteKind, user: &str, receipt: std::sync::Arc<std::sync::Mutex<WriteReceipt>>) {
-        self.slots[kind as usize] = Some((user.to_owned(), receipt));
-    }
-    fn get(&self, kind: WriteKind) -> Option<&(String, std::sync::Arc<std::sync::Mutex<WriteReceipt>>)> {
-        self.slots[kind as usize].as_ref()
-    }
-    fn clear(&mut self, kind: WriteKind) { self.slots[kind as usize] = None; }
-    fn observe(&self) {
-        for (_, receipt) in self.slots.iter().flatten() { receipt.lock().unwrap_or_else(|e| e.into_inner()).observe(); }
-    }
-    /// Where `user`'s latest write of `kind` stands.
-    fn state_for(&self, kind: WriteKind, user: &str) -> WriteState {
-        self.get(kind).filter(|(owner, _)| owner == user)
-            .map_or(WriteState::Idle, |(_, receipt)| receipt.lock().unwrap_or_else(|e| e.into_inner()).state())
-    }
-    #[cfg(test)]
-    fn state(&self, kind: WriteKind) -> WriteState {
-        self.get(kind).map_or(WriteState::Idle, |(_, receipt)| receipt.lock().unwrap_or_else(|e| e.into_inner()).state())
-    }
-}
+type PinWrite = preferences_job::Receipt;
 
 /// Worker-facing half of one Browse store. Every read's port holds this adapter, so a result
 /// can only land in the store that emitted the job even when another Bridge is alive.
@@ -1219,7 +1184,8 @@ impl Default for BrowseState {
             view_memory: Default::default(),
             recorded: None,
             order_record: None,
-            writes: WriteSlots::default(),
+            order_stored: false,
+            pending_pins: None,
             pin_commit: PinCommit::default(),
             preference_writes: Default::default(),
             session_generation: 0,
@@ -2221,12 +2187,6 @@ impl BrowseState {
         plx_plex::plex::library_order::effective(&self.libs_in(&default), self.order_record.as_ref())
             .into_iter().map(|at| default[at]).collect()
     }
-    /// **What the record is against the libraries present now**: the ONE state the header, Home and
-    /// Settings read (`plex::library_order::state`); the writer decides "says nothing" by the same
-    /// rule (`plex::library_order::merged`).
-    fn order_state(&self) -> OrderState {
-        plx_plex::plex::library_order::state(&self.libs_in(&self.default_section_order()), self.order_record.as_ref())
-    }
     /// The favourites (table indices) in presentation order.
     fn favorite_order(&self) -> Vec<usize> {
         self.section_order().into_iter().filter(|&index| self.sections[index].pinned).collect()
@@ -2235,18 +2195,35 @@ impl BrowseState {
     fn favorite_default_order(&self) -> Vec<usize> {
         self.default_section_order().into_iter().filter(|&index| self.sections[index].pinned).collect()
     }
-    /// How Home ranks its shelves: the server order unless the record is in effect, then the
+    /// The favourites in presentation order and in the server's own order, when they DIFFER: what the
+    /// record moves among the libraries every surface presents. `None` is the server order. The one
+    /// comparison [`Self::order_state`] and [`Self::home_order`] both read.
+    fn favorites_moved(&self) -> Option<(Vec<usize>, Vec<usize>)> {
+        let effective = self.favorite_order();
+        let default = self.favorite_default_order();
+        (effective != default).then_some((effective, default))
+    }
+    /// **What the profile's Library order is now**: the ONE state the header, Home and Settings read.
+    /// A record is *there* when the profile sees one ([`Self::order_record`], a pending write
+    /// included) or the session holds one ([`Self::order_stored`]: a Reset not yet saved, or one that
+    /// failed, leaves the disk's record to be deleted); it is *in effect* when it moves a favourite.
+    fn order_state(&self) -> OrderState {
+        let recorded = self.order_stored || self.order_record.as_ref().is_some_and(|record| !record.libs.is_empty());
+        OrderState::of(recorded, self.favorites_moved().is_some())
+    }
+    /// How Home ranks its shelves: the server order unless the record moves a favourite, then the
     /// favourites in presentation and in server order for Home to compare per source.
     fn home_order(&self) -> crate::pms::HomeOrder<Vec<(ServerId, i64)>> {
-        if !self.order_state().in_effect() { return crate::pms::HomeOrder::Natural; }
+        let Some((effective, default)) = self.favorites_moved() else { return crate::pms::HomeOrder::Natural };
         let named = |order: Vec<usize>| order.into_iter().filter_map(|index| {
             let section = self.sections.get(index)?;
             Some((self.sources.get(section.src)?.sid, section.key))
         }).collect();
-        crate::pms::HomeOrder::Moved { effective: named(self.favorite_order()), default: named(self.favorite_default_order()) }
+        crate::pms::HomeOrder::Moved { effective: named(effective), default: named(default) }
     }
-    /// Where this profile's last Library order write stands (what Settings tells saved from failed by).
-    fn order_write(&self) -> WriteState { self.writes.state_for(WriteKind::Order, &self.profile_key) }
+    /// Where this profile's last Library order write stands (what Settings tells saved from failed by):
+    /// the overlay's own entry for it, through the overlay's own filter.
+    fn order_write(&self) -> WriteState { self.preference_writes.order_write(&self.profile_key) }
     /// What the profile reads as a library's identity in the record: `(machine id, key)`.
     fn order_identity(&self, index: usize) -> Option<(String, i64)> {
         let section = self.sections.get(index)?;
@@ -2254,8 +2231,8 @@ impl BrowseState {
         Some((machine.clone(), section.key))
     }
     /// The Library order commands' one door: queue the write the way every other preference write is
-    /// queued, track its receipt (the order's slot of [`WriteSlots`]), mirror it into the local record
-    /// at once (the overlay already holds it until its receipt lands), and republish.
+    /// queued (the overlay holds it, and its receipt, until it is saved), mirror it into the local
+    /// record at once, and republish.
     fn commit_library_order(&mut self, edit: preferences_job::Edit, session: &plx_plex::plex::session::Session) -> bool {
         if session.client_id.is_empty() {
             plx_base::eventlog::log(
@@ -2263,11 +2240,10 @@ impl BrowseState {
             return false;
         }
         let user = self.profile_key.clone();
-        let Some(receipt) = self.preference_writes.emit(&user, edit) else {
+        if self.preference_writes.emit(&user, edit).is_none() {
             plx_base::eventlog::log("browse: the write queue refused a Library order change");
             return false;
-        };
-        self.writes.set(WriteKind::Order, &user, receipt);
+        }
         // `load_remembered` republishes when the record the overlay now shows is not the one it had
         self.load_remembered(session, &user);
         true
@@ -2311,6 +2287,7 @@ impl BrowseState {
     fn tab_of_kind(&self, kind: SecKind) -> Option<usize> {
         self.tab_kinds().position(|candidate| candidate == kind)
     }
+    #[cfg(test)]
     fn tab_kind(&self, tab: usize) -> Option<SecKind> {
         self.tab_kinds().nth(tab)
     }
@@ -2340,6 +2317,16 @@ impl BrowseState {
     /// owned, so everything tied again and the tab could land on a stranger's shelf. Grading on
     /// the household is what makes the tiebreak able to separate them.
     fn section_of_kind(&self, kind: SecKind) -> Option<usize> {
+        self.kind_hint(kind).or_else(|| self.first_favorite_of(kind, &self.section_order()))
+    }
+    /// [`Self::section_of_kind`] over a presentation order already built (`DirectoryData::order`, which
+    /// the publication rebuilds only when the table, a source fact or the record moves): what the
+    /// per-frame capture reads, so a frame that moved none of those allocates nothing for it.
+    fn section_of_kind_in(&self, kind: SecKind, presented: &[usize]) -> Option<usize> {
+        self.kind_hint(kind).or_else(|| self.first_favorite_of(kind, presented))
+    }
+    /// The visit and the profile's memory decide a tab before any order does.
+    fn kind_hint(&self, kind: SecKind) -> Option<usize> {
         if self.tab_has_favorite(kind) {
             if let Some((_, machine, key)) = self.visited.iter().find(|(candidate, _, _)| *candidate == kind) {
                 if let Some(index) = self.sections.iter().position(|section| section.kind == kind && section.key == *key
@@ -2348,13 +2335,15 @@ impl BrowseState {
                 }
             }
         }
-        if let Some(section) = self.remembered_section(kind) {
-            return Some(section);
-        }
-        // the profile's first-ordered favourite of the type: the default order already puts the
-        // household's own servers before shares, and a Library order moves them as the profile chose
-        self.favorite_order().into_iter().find(|&index| self.sections[index].kind == kind)
+        self.remembered_section(kind)
     }
+    /// The profile's first-ordered favourite of the type in `presented` (every table index in
+    /// presentation order): the default order already puts the household's own servers before shares,
+    /// and a Library order moves them as the profile chose.
+    fn first_favorite_of(&self, kind: SecKind, presented: &[usize]) -> Option<usize> {
+        presented.iter().copied().find(|&index| self.sections.get(index).is_some_and(|section| section.kind == kind && section.pinned))
+    }
+    #[cfg(test)]
     fn tab_section(&self, tab: usize) -> Option<usize> {
         self.section_of_kind(self.tab_kind(tab)?)
     }
@@ -2444,6 +2433,7 @@ impl BrowseState {
         }
     }
     fn load_remembered(&mut self, session: &plx_plex::plex::session::Session, user: &str) {
+        let stored = session;
         let overlaid = self.preference_writes.overlay(session, user);
         let session = &overlaid;
         if self.visited_user != user {
@@ -2464,8 +2454,10 @@ impl BrowseState {
         // a tenure move only retires the overlay's pending edits (`Preferences::overlay`), and the
         // next reload then reads a different record, which is what this compares.
         let order = session.order_for(user).cloned();
-        if order != self.order_record {
+        let stored = stored.order_for(user).is_some_and(|record| !record.libs.is_empty());
+        if order != self.order_record || stored != self.order_stored {
             self.order_record = order;
+            self.order_stored = stored;
             self.bump_sections_gen();
         }
     }
@@ -2513,13 +2505,15 @@ impl BrowseState {
             self.set_cur(index);
         }
     }
-    /// Poll every tracked preference write's receipt, once (`WriteReceipt::observe`: the pin commit's
-    /// and the Library order's, besides the overlay's). The Bridge calls this
+    /// Poll the pending pin write's receipt, once (`PinWrite::observe`), and the overlay's (the Library
+    /// order's among them). The Bridge calls this
     /// before it reads the session it hands the step (`Bridge::browse_session`), so a write seen as
     /// saved is never paired with a session read from before it.
     pub fn observe_pin_write(&self) {
         self.preference_writes.observe();
-        self.writes.observe();
+        if let Some((_, write)) = &self.pending_pins {
+            write.lock().unwrap_or_else(|e| e.into_inner()).observe();
+        }
     }
 
     pub(crate) fn take_preference_jobs(&mut self) -> Vec<crate::stores::StoreJob> {
@@ -2532,11 +2526,11 @@ impl BrowseState {
     /// local record, never with a snapshot older than the write.
     fn pin_record_for(&mut self, session: &plx_plex::plex::session::Session, user: &str)
         -> Option<plx_plex::plex::session::HomePins> {
-        if let Some((pending_user, write)) = self.writes.get(WriteKind::Pins) {
+        if let Some((pending_user, write)) = &self.pending_pins {
             if pending_user == user && !write.lock().unwrap_or_else(|e| e.into_inner()).saved() {
                 return self.recorded.clone();
             }
-            self.writes.clear(WriteKind::Pins);
+            self.pending_pins = None;
         }
         session.pins_for(user).cloned()
     }
@@ -2682,7 +2676,7 @@ impl BrowseState {
         let receipt = self.preference_writes.emit(&user, preferences_job::Edit::Pins {
             libraries: owned, on, touched, asked,
         })?;
-        self.writes.set(WriteKind::Pins, &pending_user, receipt);
+        self.pending_pins = Some((pending_user, receipt));
         self.recorded = Some(record.clone());
         Some(record)
     }
@@ -2880,7 +2874,7 @@ impl BrowseState {
         self.states = Vec::new();
         self.recorded = None;
         self.order_record = None;
-        self.writes.clear(WriteKind::Order);
+        self.order_stored = false;
         self.remembered = Vec::new();
         self.view_memory = Default::default();
         self.tab_shape = u32::MAX;

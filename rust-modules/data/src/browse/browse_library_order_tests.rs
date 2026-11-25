@@ -94,7 +94,7 @@ fn a_set_order_is_a_projection_and_leaves_the_table_alone() {
     let before: Vec<_> = state.sections.iter().map(|s| (s.src, s.key)).collect();
     assert!(state.set_library_order_from(ids(&[("home", 1), ("nas", 2), ("home", 4), ("home", 5), ("nas", 9)]), &signed_in()));
     assert_eq!(shown(&state), vec!["Anime", "Films", "Movies", "TV", "Docs"]);
-    assert_eq!(state.order_state(), OrderState::Saved { in_effect: true });
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: true });
     let after: Vec<_> = state.sections.iter().map(|s| (s.src, s.key)).collect();
     assert_eq!(before, after, "table indices are identities and never move");
     let rows = state.library_order_rows();
@@ -115,7 +115,7 @@ fn the_library_header_follows_the_order() {
     assert_eq!(films, vec!["Films", "Movies"]);
     let (indices, _): (Vec<usize>, Vec<_>) = view.favorite_sections_for(1).unzip();
     assert_eq!(indices, vec![2, 4, 1], "favorite_sections_for carries the same order, with table indices");
-    assert_eq!(view.library_order_state(), OrderState::Saved { in_effect: true });
+    assert_eq!(view.library_order_state(), OrderState::Recorded { in_effect: true });
     assert_eq!(view.library_order().len(), 5);
 }
 
@@ -274,16 +274,16 @@ fn a_record_that_moves_nothing_present_is_saved_and_not_in_effect() {
     let mut state = table(&[0]);
     assert_eq!(state.order_state(), OrderState::Server);
     state.load_remembered(&session_with_record(&[("nas", 9), ("nas", 2)]), "");
-    assert_eq!(state.order_state(), OrderState::Saved { in_effect: false });
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: false });
     assert!(matches!(state.home_order(), crate::pms::HomeOrder::Natural), "Home reads the same state");
     let mut snapshot = DirectorySnapshot::default();
     snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
-    assert!(snapshot.view().library_order_state().is_saved(), "Reset is offered: a record exists");
+    assert!(snapshot.view().library_order_state().is_recorded(), "Reset is offered: a record exists");
     // and the record is one entry kind of state on both sides of an empty machine id
     let mut anonymous = table(&[0]);
     anonymous.sources[0].machine_id = String::new();
     anonymous.load_remembered(&session_with_record(&[("home", 5), ("home", 4)]), "");
-    assert_eq!(anonymous.order_state(), OrderState::Saved { in_effect: false }, "no library without an id can be named");
+    assert_eq!(anonymous.order_state(), OrderState::Recorded { in_effect: false }, "no library without an id can be named");
 }
 
 /// F9: the write's outcome is published, so Settings can tell saved from failed.
@@ -295,10 +295,12 @@ fn the_order_write_lifecycle_is_published() {
     assert!(state.set_library_order_from(moved.clone(), &signed_in()));
     assert_eq!(state.order_write(), WriteState::InFlight);
     let crate::stores::StoreJob::BrowsePreferences(job, port) = state.take_preference_jobs().remove(0) else { panic!("preference job") };
-    port.refused(job.addr);
+    // the worker ran and the file did not take it: what the runner reports as `Finished(false)`
+    port.done(job.addr, crate::browse::preferences_job::WriteOutcome::Finished(false));
     state.observe_pin_write();
     assert_eq!(state.order_write(), WriteState::Failed);
     assert!(state.order_record.is_some(), "the order still shows for this run");
+    assert!(state.order_state().is_recorded(), "and Reset is offered for it");
     let mut snapshot = DirectorySnapshot::default();
     snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
     assert_eq!(snapshot.view().library_order_write(), WriteState::Failed, "published on the directory");
@@ -309,9 +311,88 @@ fn the_order_write_lifecycle_is_published() {
     port.done(job.addr, crate::browse::preferences_job::WriteOutcome::Finished(true));
     state.observe_pin_write();
     assert_eq!(state.order_write(), WriteState::Saved);
+    // an unrelated preference write does not turn Saved back into Idle
+    assert!(state.preference_writes.emit("", preferences_job::Edit::Library { kind: SecKind::Movie.wire().into(), machine: "home".into(), key: 4 }).is_some());
+    assert_eq!(state.order_write(), WriteState::Saved, "the newest order write's outcome outlives other writes");
     // another profile never reads this profile's outcome
     state.profile_key = "kid".into();
     assert_eq!(state.order_write(), WriteState::Idle);
+}
+
+/// The write and what the profile sees come from one holder: after the session is reset and reloaded
+/// (a server change, a profile round-trip) an order that still shows is a write that is still known.
+#[test]
+fn a_reset_session_keeps_the_write_and_the_order_it_presents_in_step() {
+    let mut state = table(&[0, 1]);
+    assert!(state.set_library_order_from(ids(&[("nas", 9), ("nas", 2)]), &signed_in()));
+    assert_eq!(state.order_write(), WriteState::InFlight);
+    state.reset_with(|| {});
+    state.preference_writes.prepare(&signed_in(), 0);
+    state.profile_key = "kid".into();
+    assert_eq!(state.order_write(), WriteState::Idle, "another profile's write is not this one's");
+    state.profile_key = String::new();
+    state.load_remembered(&signed_in(), "");
+    assert!(state.order_record.is_some(), "the overlay still presents the unsaved order");
+    assert_eq!(state.order_write(), WriteState::InFlight, "so the write that holds it is still known");
+}
+
+/// A Reset that fails leaves the disk's record: the profile sees the server order, Reset stays offered
+/// and says the last write failed, and the retry deletes it.
+#[test]
+fn a_failed_reset_keeps_reset_offered_until_the_record_is_gone_from_disk() {
+    let mut state = table(&[0]);
+    let stored = session_with_record(&[("home", 5), ("home", 4)]);
+    state.load_remembered(&stored, "");
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: true });
+    assert!(state.reset_library_order_from(&stored));
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: false }, "the order is gone from view, the disk still has it");
+    assert_eq!(shown(&state), vec!["Movies", "Anime", "TV"]);
+    let crate::stores::StoreJob::BrowsePreferences(job, port) = state.take_preference_jobs().remove(0) else { panic!("preference job") };
+    port.done(job.addr, crate::browse::preferences_job::WriteOutcome::Finished(false));
+    state.observe_pin_write();
+    state.load_remembered(&stored, "");
+    assert_eq!(state.order_write(), WriteState::Failed);
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: false }, "Reset is still offered");
+    let mut snapshot = DirectorySnapshot::default();
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    assert!(snapshot.view().library_order_state().is_recorded());
+    assert_eq!(snapshot.view().library_order_write(), WriteState::Failed);
+    // the retry, saved: the session no longer holds the record, and the state follows the disk
+    assert!(state.reset_library_order_from(&stored));
+    let crate::stores::StoreJob::BrowsePreferences(job, port) = state.take_preference_jobs().remove(0) else { panic!("preference job") };
+    port.done(job.addr, crate::browse::preferences_job::WriteOutcome::Finished(true));
+    state.observe_pin_write();
+    state.load_remembered(&signed_in(), "");
+    assert_eq!(state.order_write(), WriteState::Saved);
+    assert_eq!(state.order_state(), OrderState::Server, "nothing left to delete");
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    assert_eq!(snapshot.view().library_order_state(), OrderState::Server, "published on the directory");
+}
+
+/// One judgement of "in effect", over the favourites every surface presents: unfavourite the one
+/// library the record moved and the record is stored yet moves nothing shown, Home included.
+#[test]
+fn a_record_that_moves_only_an_unfavourited_library_is_not_in_effect() {
+    let mut state = table(&[0, 1]);
+    assert!(state.set_library_order_from(ids(&[("home", 4), ("home", 1), ("home", 5), ("nas", 9), ("nas", 2)]), &signed_in()));
+    assert!(state.order_state().in_effect());
+    assert!(matches!(state.home_order(), crate::pms::HomeOrder::Moved { .. }));
+    for section in state.sections.iter_mut().filter(|section| section.src == 1) { section.pinned = false; }
+    assert_eq!(state.order_state(), OrderState::Recorded { in_effect: false });
+    assert!(matches!(state.home_order(), crate::pms::HomeOrder::Natural), "Moved with two equal lists is not an order");
+}
+
+/// The per-frame tab destination reads the presentation order the publication holds, and agrees with
+/// the state's own answer.
+#[test]
+fn the_captured_tab_destination_follows_the_presented_order() {
+    let mut state = table(&[0, 1]);
+    state.set_library_order_from(ids(&[("nas", 2), ("home", 4), ("home", 1), ("home", 5), ("nas", 9)]), &signed_in());
+    let mut snapshot = DirectorySnapshot::default();
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    let view = snapshot.view();
+    assert_eq!(view.preferred(SecKind::Movie), state.section_of_kind(SecKind::Movie));
+    assert_eq!(view.preferred(SecKind::Movie).map(|index| state.sections[index].title.as_str()), Some("Films"));
 }
 
 /// F11: a command naming no library is refused; Reset is the one explicit "no record".

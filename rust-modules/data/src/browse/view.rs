@@ -651,7 +651,7 @@ impl DirectorySnapshot {
         self.pin_commit = state.pin_commit();
         self.order_write = state.order_write();
         for (i, kind) in [super::SecKind::Movie, super::SecKind::Show].into_iter().enumerate() {
-            self.preferred[i] = state.tab_of_kind(kind).and_then(|tab| state.tab_section(tab));
+            self.preferred[i] = state.tab_of_kind(kind).and_then(|_| state.section_of_kind_in(kind, &self.data.order));
             self.kind_fetch[i] = state.kind_state(kind);
             self.kind_shelves[i] = self.preferred[i]
                 .and_then(|section| state.states().get(section))
@@ -872,9 +872,11 @@ impl<'a> DirectoryView<'a> {
     pub fn library_order(self) -> &'a [super::LibraryOrderRow] {
         &self.0.data.order_rows
     }
-    /// **What the profile's record is** ([`super::OrderState`]): `Server` when it has none (Reset has
-    /// nothing to delete), `Saved { in_effect }` when it has one — `in_effect` false while it moves
-    /// no library present now (a friend's server offline), where Reset still has a record to delete.
+    /// **What the profile's record is** ([`super::OrderState`]): `Server` when there is none (Reset has
+    /// nothing to delete), `Recorded { in_effect }` when one is shown or still stored. `in_effect`
+    /// is false while it moves no favourite shown (a friend's server offline, the one library it
+    /// moved unfavourited, a Reset not yet saved), where Reset still has a record to delete. Whether
+    /// the last write reached the disk is [`Self::library_order_write`].
     pub fn library_order_state(self) -> super::OrderState {
         self.0.data.order_state
     }
