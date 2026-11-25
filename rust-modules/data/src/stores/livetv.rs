@@ -33,6 +33,9 @@ impl LiveTvStore {
     }
     #[must_use]
     pub fn take_jobs(&mut self) -> Vec<super::StoreJob> { std::mem::take(&mut self.state.jobs) }
+    /// What a change to Recent asks the app to persist; the Bridge takes it in the call that ran the command.
+    #[must_use]
+    pub fn take_fx(&mut self) -> Vec<crate::livetv::LiveTvFx> { self.state.take_fx() }
     pub fn has_jobs(&self) -> bool { !self.state.jobs.is_empty() }
     #[cfg(any(test, feature = "test-support"))]
     pub fn install_for_test(&mut self, channels: Vec<crate::livetv::Channel>) { self.state.install_for_test(channels); self.bump(); }

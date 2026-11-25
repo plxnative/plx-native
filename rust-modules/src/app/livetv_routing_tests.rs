@@ -115,6 +115,75 @@ fn channel_requests_wrap_the_lineup_and_keep_the_original_return_entry() {
     assert!(!plx_media::route::is_live(&app.player.session));
 }
 
+/// A live play and every zap are noted in Recent through the one door (`start_playback_with`): the
+/// first tune joins, a channel tuned again does not move, and the newest is at the front. A run
+/// with nobody seated remembers nothing on disk (the memory door refuses it) but the row still reads.
+#[test]
+fn a_live_play_and_every_zap_are_noted_in_recent_without_moving_a_known_channel() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-recent-noted");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    let mut other = channel("101", "Other server");
+    other.sid = plx_plex::plex::ServerId::from_raw(1);
+    app.runtime.bridge(&mut app.bridge).stores.livetv.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons"), other]);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing tuned yet");
+    start_channel(&mut app, &mut now);
+    for direction in [1, 1, 1, -1] {
+        app.repause_at = 50;
+        player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(direction));
+        settle(&mut app, &mut now);
+    }
+    let bridge = app.runtime.bridge(&mut app.bridge);
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| (c.sid.raw(), c.name.as_str())).collect();
+    assert_eq!(row, [(1, "Other server"), (0, "Cartoons"), (0, "Family Channel")],
+        "first tuned in the order Family, Cartoons, Other; going back round to Family and Other changes nothing");
+}
+
+/// **The seated profile's Recent survives a restart under another slot assignment.** A tune is
+/// written to the memory door under the server's machine identifier; a later run, whose registry
+/// numbered the servers the other way round, reads the same channel back through the Bridge's
+/// restore.
+#[test]
+fn recent_is_stored_by_machine_and_read_back_under_another_slot_assignment() {
+    use plx_data::livetv::{LiveTvCmd, RecentKey};
+    use plx_plex::plex::session::prefs::RecentChannelEntry;
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("livetv-recent-persist");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+
+    plx_plex::plex::reset_servers_for_test();
+    let a = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    {
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        bridge.livetv_run(LiveTvCmd::Noted(RecentKey { sid: a, dvr: "7".into(), channel: "C101".into() }));
+    }
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>(""), [RecentChannelEntry::new("machine-a", "7", "C101")],
+        "stored by machine identifier, never by slot");
+
+    // A new run: its registry numbers the servers the other way round, and its store starts empty.
+    plx_plex::plex::reset_servers_for_test();
+    let filler = plx_plex::plex::register_for_test("machine-filler", "127.0.0.1", 10, "synthetic", "fixture");
+    let moved = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    assert_ne!(moved, a, "the same server holds another slot");
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.livetv_pump();
+    let mut on_moved = channel("101", "Family Channel");
+    on_moved.sid = moved;
+    on_moved.channel = "C101".into();
+    let mut decoy = on_moved.clone();
+    decoy.sid = filler;
+    bridge.stores.livetv.install_for_test(vec![decoy, on_moved]);
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| c.sid).collect();
+    assert_eq!(row, [moved], "the channel is the one on machine-a, not whatever now holds the old slot");
+}
+
 #[test]
 fn channel_request_on_nonlive_and_an_empty_or_single_lineup_keeps_the_session() {
     let _serial = plx_base::testlock::serial();

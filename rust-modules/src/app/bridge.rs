@@ -56,6 +56,7 @@ use plx_screens::registry::{AppArg, AppFx, InlineAppFx, ExternalAppFx, AppMounte
 #[cfg(test)]
 use plx_screens::registry::HomeReq;
 use plx_data::stores::{StoreCmd, StoreId};
+use plx_plex::plex::session::prefs::{MemoryEntry, RecentChannelEntry};
 use plx_plex::plex::session::{LibraryPage, LibraryViews};
 use plx_ui::containers::modal::{HostRender, HostUpdate, Phase, Style};
 use plx_ui::dispatch::{CxParts, Dispatcher, FrameReport, Rig, Split};
@@ -710,6 +711,9 @@ pub(crate) struct BridgeRetained {
     library_commands: std::collections::VecDeque<plx_screens::registry::LibraryCmd>,
     library_pages: Option<(u32, LibraryViews)>,
     library_page_visit: Option<LibraryPageVisit>,
+    /// When the seated profile's stored Recent channels were last read into the Live TV store
+    /// ([`Bridge::livetv_pump`]).
+    recent_sync: plx_data::livetv::RecentSync,
 
     /// Passive test observations; no product request accumulator.
     #[cfg(test)]
@@ -1057,6 +1061,7 @@ impl BridgeRetained {
             library_commands: std::collections::VecDeque::new(),
             library_pages: None,
             library_page_visit: None,
+            recent_sync: Default::default(),
 
             #[cfg(test)]
                         observed_loop_commands: Vec::new(),
@@ -2175,7 +2180,8 @@ impl Bridge<'_> {
         if !self.retained.screen_inputs.backends.feed { return false; }
         super::adapters::stores::refill_client_keys(&mut self.retained.client_keys);
         let now = super::clock::unix_ms().unwrap_or(0) / 1_000;
-        let changed = self.stores.livetv_pump(&self.retained.client_keys, now);
+        let restored = self.restore_recent_channels(now);
+        let changed = self.stores.livetv_pump(&self.retained.client_keys, now) | restored;
         self.start_store_jobs_of(StoreId::LiveTv);
         changed
     }
@@ -2189,7 +2195,43 @@ impl Bridge<'_> {
         let now = super::clock::unix_ms().unwrap_or(0) / 1_000;
         let changed = self.stores.livetv_run(cmd, &self.retained.client_keys, now);
         self.start_store_jobs_of(StoreId::LiveTv);
+        self.persist_recent_channels();
         changed
+    }
+
+    /// A live channel was tuned: the playback session now holds a live request, so Recent notes it
+    /// (the store ignores a channel it already holds). Every live play and every zap passes through
+    /// `start_playback_with`, which is where this is asked.
+    pub(crate) fn note_live_tune(&mut self, ps: &plx_media::route::PlaybackSession) {
+        let Some((sid, live)) = plx_media::route::live_request(ps) else { return };
+        let key = plx_data::livetv::RecentKey { sid, dvr: live.dvr.clone(), channel: live.channel.clone() };
+        self.livetv_run(plx_data::livetv::LiveTvCmd::Noted(key));
+    }
+
+    /// Read the seated profile's stored Recent list into the Live TV store when it is due: the
+    /// first frame, a profile switch, and the server roster moving (the seat arrives before the
+    /// servers register, so the first read can resolve none of them). The stored list is read from
+    /// the memory door's mirror, which already holds every write queued, and an entry whose server
+    /// is not registered stays in storage.
+    fn restore_recent_channels(&mut self, now: i64) -> bool {
+        if !self.retained.recent_sync.due(Self::profile_scope(), &self.retained.client_keys) { return false; }
+        let stored = plx_media::route::recall_all::<RecentChannelEntry>(&plx_plex::plex::session::current_profile_key());
+        let restored = plx_data::livetv::keys_of(&stored, &self.retained.client_keys);
+        self.stores.livetv_run(plx_data::livetv::LiveTvCmd::Restore(restored), &self.retained.client_keys, now)
+    }
+
+    /// Persist what the store asked for: each newly noted channel is merged into the seated
+    /// profile's stored list through the memory door, which leaves a channel already stored where it
+    /// is and refuses the write without a seated profile (a dev token never writes the owner's record).
+    fn persist_recent_channels(&mut self) {
+        let user = plx_plex::plex::session::current_profile_key();
+        for plx_data::livetv::LiveTvFx::RememberRecent(key) in self.stores.livetv.take_fx() {
+            let Some(entry) = plx_data::livetv::entry_of(&key, &self.retained.client_keys) else {
+                plx_base::eventlog::log(&format!("livetv: recent channel not remembered — server slot {} has no machine id", key.sid.raw()));
+                continue;
+            };
+            plx_media::route::remember::<RecentChannelEntry>(&user, entry.key(), entry.noted());
+        }
     }
 
     /// The catalog page's frame pass: the store's landing pass (a refused read asked again, a

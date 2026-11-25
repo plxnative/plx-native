@@ -462,6 +462,7 @@ pub(super) fn start_playback_with<R: PlaybackResources>(
     resources: &mut R,
 ) -> bool {
     publish_live_banner(ps, bridge.livetv_view().channels);
+    bridge.note_live_tune(ps);
     let entering = resources.prepare_start(ps, pa, resume_ns);
     if entering {
         enter_player(pages, bridge, from, ret);

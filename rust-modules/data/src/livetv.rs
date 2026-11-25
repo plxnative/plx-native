@@ -8,6 +8,10 @@ use plx_plex::plex::{Client, ClientKey, ClientKeys, ServerId};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
+mod recent;
+pub use recent::{entry_of, keys_of, LiveTvFx, RecentKey, RecentSync, MAX_RECENT};
+use recent::RecentChannels;
+
 const RETRY_FRAMES: u32 = 120;
 /// A server that keeps refusing its lineup (a shared server, one with no Live TV grant) is asked
 /// again at a doubling interval: 2 s, then up to 2^5 of that (about a minute at 60 Hz).
@@ -67,19 +71,36 @@ pub struct LiveTvView<'a> {
     pub status: LiveTvStatus,
     pub channels: &'a [Channel],
     pub tiles: &'a [Arc<PmsMovie>],
+    /// The seated profile's Recent channels, newest first, at most [`MAX_RECENT`]: lineup channels,
+    /// so a remembered channel the lineup does not list is not here. Empty is a row to hide.
+    pub recent: &'a [Channel],
     revision: u32,
 }
 impl<'a> LiveTvView<'a> {
     pub fn revision(self) -> u32 { self.revision }
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(status: LiveTvStatus, channels: &'a [Channel], tiles: &'a [Arc<PmsMovie>], revision: u32) -> Self {
-        Self { status, channels, tiles, revision }
+        Self { status, channels, tiles, recent: &[], revision }
     }
-    pub const LOADING: Self = Self { status: LiveTvStatus::Loading, channels: &[], tiles: &[], revision: 0 };
+    /// [`for_test`](Self::for_test) with a Recent row.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test_with_recent(mut self, recent: &'a [Channel]) -> Self {
+        self.recent = recent;
+        self
+    }
+    pub const LOADING: Self = Self { status: LiveTvStatus::Loading, channels: &[], tiles: &[], recent: &[], revision: 0 };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LiveTvCmd { Reset, Retry }
+pub enum LiveTvCmd {
+    Reset,
+    Retry,
+    /// A live channel was tuned (the app sends it when a live play is admitted or a zap lands).
+    Noted(RecentKey),
+    /// The seated profile's stored Recent list, newest first, read by the app (at boot, on a profile
+    /// switch, and when the server roster moves); it replaces what the store holds.
+    Restore(Vec<RecentKey>),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Guide { dvr: String, provider: String, channels: Vec<LiveChannel>, refresh_at: i64, retry_cd: u32,
@@ -178,20 +199,31 @@ pub struct LiveTvState {
     status: LiveTvStatus,
     revision: u32,
     fanout: Fanout,
+    /// Recent channels in memory, and the row the lineup resolves them to (see [`recent`]).
+    recent: RecentChannels,
+    recent_row: Vec<Channel>,
+    /// What the app is asked to persist, taken by [`LiveTvState::take_fx`].
+    fx: Vec<LiveTvFx>,
     pub(crate) jobs: Vec<crate::stores::StoreJob>,
 }
 impl Default for LiveTvState {
     fn default() -> Self {
         Self { sources: Vec::new(), channels: Vec::new(), tiles: Vec::new(), status: LiveTvStatus::Loading,
-            revision: 0, fanout: Default::default(), jobs: Vec::new() }
+            revision: 0, fanout: Default::default(), recent: Default::default(), recent_row: Vec::new(),
+            fx: Vec::new(), jobs: Vec::new() }
     }
 }
 impl LiveTvState {
     pub fn view(&self) -> LiveTvView<'_> {
-        LiveTvView { status: self.status, channels: &self.channels, tiles: &self.tiles, revision: self.revision }
+        LiveTvView { status: self.status, channels: &self.channels, tiles: &self.tiles, recent: &self.recent_row,
+            revision: self.revision }
     }
+    /// What changed in Recent since the last call, for the app to persist.
+    #[must_use]
+    pub fn take_fx(&mut self) -> Vec<LiveTvFx> { std::mem::take(&mut self.fx) }
     pub fn run(&mut self, cmd: LiveTvCmd, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
         let reset = matches!(cmd, LiveTvCmd::Reset);
+        let mut recent_moved = false;
         match cmd {
             LiveTvCmd::Reset => {
                 self.sources.clear();
@@ -204,9 +236,16 @@ impl LiveTvState {
                     for guide in &mut s.guides { guide.retry_cd = 0; }
                 }
             }
+            LiveTvCmd::Noted(key) => {
+                if self.recent.note(key.clone()) {
+                    self.fx.push(LiveTvFx::RememberRecent(key));
+                    recent_moved = true;
+                }
+            }
+            LiveTvCmd::Restore(restored) => recent_moved = self.recent.restore(restored),
         }
         let changed = self.pump(gate, keys, now);
-        changed || (reset && self.publish())
+        changed || (reset && self.publish()) || (recent_moved && self.publish_recent())
     }
     pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
         // A recording, a replay or a dump owns the run, and the tape carries no Live TV read
@@ -276,6 +315,14 @@ impl LiveTvState {
         }
         dirty && self.publish()
     }
+    /// The row alone, after the list moved: the lineup did not, so nothing else is rebuilt.
+    fn publish_recent(&mut self) -> bool {
+        let recent = self.recent.resolve(&self.channels);
+        if recent == self.recent_row { return false; }
+        self.recent_row = recent;
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
     fn publish(&mut self) -> bool {
         let mut channels: Vec<_> = self.sources.iter().flat_map(|s| s.guides.iter()
             .flat_map(move |g| g.channels.iter().map(move |c| Channel::of(s.sid, c)))).collect();
@@ -284,8 +331,10 @@ impl LiveTvState {
             else if self.sources.iter().any(|s| s.failed) { LiveTvStatus::Failed }
             else if self.sources.is_empty() || self.sources.iter().any(|s| !s.answered) { LiveTvStatus::Loading }
             else { LiveTvStatus::Empty };
-        if channels == self.channels && status == self.status { return false; }
+        let recent = self.recent.resolve(&channels);
+        if channels == self.channels && status == self.status && recent == self.recent_row { return false; }
         self.tiles = channels.iter().map(|c| Arc::new(channel_tile(c))).collect();
+        self.recent_row = recent;
         self.channels = channels;
         self.status = status;
         self.revision = self.revision.wrapping_add(1);
@@ -295,6 +344,7 @@ impl LiveTvState {
     pub(crate) fn install_for_test(&mut self, channels: Vec<Channel>) {
         self.status = if channels.is_empty() { LiveTvStatus::Empty } else { LiveTvStatus::Ready };
         self.tiles = channels.iter().map(|c| Arc::new(channel_tile(c))).collect();
+        self.recent_row = self.recent.resolve(&channels);
         self.channels = channels;
         self.revision = self.revision.wrapping_add(1);
     }
@@ -401,3 +451,5 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod recent_tests;
