@@ -2021,7 +2021,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
   states, so the offer of a title fails without it; the driver settles that request for the source's one audio stream by
   construction, not on native evidence, and `TizenQualifier` certifies ONLY a source with a single audio stream until the
-  retail default stream is measured). `TizenQualifier` certifies a source only where Standard would direct-play it
+  retail default stream is measured), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
   and never a converted PMS output. `subtitle_choice = Off` (any subtitle stream, none selected) is carried: the driver states
   `subtitle_off` (the host gives the player no subtitle, and the emulator run in `docs/tizen.md`, "Subtitles off", showed
   none drawn from a default-flagged embedded track), so `SubtitleOff` is refused only on evidence without it. A selected
