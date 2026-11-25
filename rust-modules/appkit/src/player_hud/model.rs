@@ -39,8 +39,14 @@ pub struct HudModel {
     pub is_episode: bool,
     /// The source is a channel with no seek bar or library-only controls.
     pub is_live: bool,
-    /// The projected local wall-clock finish time, supplied by the app for this frame.
+    /// The projected local wall-clock finish time (`plx_ui::fmt::clock_hm` of the projected Unix
+    /// second in `wall`'s zone), supplied by the app for this frame and worded at draw.
     pub end_time: Option<[i32; 2]>,
+    /// This frame's wall-clock time as the loop published it (`PlayerLike::wall`; `None` under a
+    /// replay and where the platform cannot say): what the live airing's clock times and "22m
+    /// left" are worded from at draw (`plx_ui::fmt::airing_line`), and what the screen's clock
+    /// fingerprint follows so the line is redrawn when its words change.
+    pub wall: Option<plx_ui::fmt::Wall>,
     /// `plx_media::player::TX.scrub_ns.load(Relaxed)`: the live scrub preview's target, -1 when no
     /// scrub is in progress.
     pub scrub_ns: i64,
@@ -99,6 +105,7 @@ impl Default for HudModel {
             is_episode: false,
             is_live: false,
             end_time: None,
+            wall: None,
             scrub_ns: -1,
             playpos_ns: 0,
             seek_display_ns: -1,
@@ -159,7 +166,8 @@ pub fn end_time_is_eligible(state: EndTimeEligibility) -> bool {
 /// playback pipeline's APPLIED rate (per mille). Invalid or unrepresentable inputs stay unknown.
 ///
 /// Keep the wall clock and remaining media time at subsecond precision until they have been added.
-/// Apply timezone rules at the projected instant, including any DST transition before the end.
+/// The caller words the result in the zone the frame's wall time published (the UTC offset at
+/// now), so a clock change between now and the end is not applied.
 pub fn projected_end_unix_seconds(
     now_utc_ms: i64,
     position_ns: i64,
@@ -177,9 +185,35 @@ pub fn projected_end_unix_seconds(
     Some(end_ms / 1_000)
 }
 
+/// **The finish time the HUD words**: [`projected_end_unix_seconds`] from the frame's published
+/// `wall` time (its second, so no second clock is read) as the viewer's `[hour, minute]` in the zone
+/// that publication carries (`plx_ui::fmt::clock_hm`: the one conversion every clock face shares).
+pub fn projected_end_clock(
+    wall: plx_ui::fmt::Wall,
+    position_ns: i64,
+    duration_ns: i64,
+    rate_permille: Option<i32>,
+) -> Option<[i32; 2]> {
+    let end = projected_end_unix_seconds(wall.unix_s.saturating_mul(1_000), position_ns, duration_ns, rate_permille)?;
+    plx_ui::fmt::clock_hm(end, i64::from(wall.utc_offset_s))
+}
+
 #[cfg(test)]
 mod end_time_tests {
-    use super::{end_time_is_eligible, projected_end_unix_seconds};
+    use super::{end_time_is_eligible, projected_end_clock, projected_end_unix_seconds};
+
+    #[test]
+    fn the_finish_clock_is_the_projected_second_in_the_published_zone() {
+        // 2026-11-25 21:00:00 UTC, thirty-five minutes of film at 1x, 2x and in three zones.
+        let wall = |utc_offset_s| plx_ui::fmt::Wall { unix_s: 1_795_640_400, utc_offset_s };
+        let film = 35 * 60 * 1_000_000_000i64;
+        assert_eq!(projected_end_clock(wall(0), 0, film, Some(1000)), Some([21, 35]));
+        assert_eq!(projected_end_clock(wall(3_600), 0, film, Some(1000)), Some([22, 35]));
+        assert_eq!(projected_end_clock(wall(-6 * 3_600), 0, film, Some(1000)), Some([15, 35]));
+        assert_eq!(projected_end_clock(wall(19_800), 0, film, Some(2000)), Some([2, 47]), "past midnight, a half-hour zone, doubled speed");
+        assert_eq!(projected_end_clock(wall(0), 0, film, None), None, "an unknown rate is not assumed");
+        assert_eq!(projected_end_clock(wall(0), film, film, Some(1000)), None, "nothing left to project");
+    }
 
     #[test]
     fn end_time_visibility_requires_a_reliable_movie_or_episode_playback() {

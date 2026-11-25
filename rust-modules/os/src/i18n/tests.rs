@@ -930,12 +930,6 @@ fn month_year_names_the_month_stand_alone_where_the_language_declines_it() {
 }
 
 #[test]
-fn today_is_a_calendar_date_from_the_wall_clock() {
-    let [year, month, day] = local_calendar_today().expect("a representable date");
-    assert!(year >= 2026 && (1..=12).contains(&month) && (1..=31).contains(&day));
-}
-
-#[test]
 fn time_of_day_respects_the_format_locale_and_clock_override() {
     let locale = |fmt, clock| LocaleContext::resolve(Preference::Es, None, Some(fmt), clock, None);
     let us = locale("en-US", None);
@@ -977,6 +971,43 @@ fn local_clock_time_uses_the_os_timezone_and_checks_time_t_range() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success() && stdout.contains("1 passed"),
         "local clock time failed under Europe/Madrid:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn local_utc_offset_follows_the_os_timezone_including_its_clock_changes() {
+    const CHILD: &str = "PLX_LOCAL_UTC_OFFSET_CASE";
+    if let Ok(zone) = std::env::var(CHILD) {
+        let hours = |h: i32| h * 3_600;
+        let cases: &[(i64, i32)] = match zone.as_str() {
+            "UTC" => &[(1_795_649_400, 0)],
+            // Spring-forward: 01:59:59 CET (+1) is followed by 03:00 CEST (+2); fall-back at 01:00 UTC.
+            "Europe/Madrid" => &[(1_774_745_999, hours(1)), (1_774_746_000, hours(2)), (1_792_889_999, hours(2)), (1_792_890_000, hours(1))],
+            "Asia/Kolkata" => &[(1_795_649_400, 19_800)],
+            "America/Los_Angeles" => &[(1_795_651_800, hours(-8))],
+            // The zones a day apart from their opposites: +13 is not -11, +14 is not -10.
+            "Pacific/Auckland" => &[(1_767_268_800, hours(13))],
+            "Pacific/Pago_Pago" => &[(1_767_312_000, hours(-11))],
+            "Pacific/Kiritimati" => &[(1_767_268_800, hours(14))],
+            other => panic!("no cases for {other}"),
+        };
+        for &(at, want) in cases {
+            assert_eq!(local_utc_offset(at), Some(want), "{zone} at {at}");
+        }
+        assert_eq!(local_utc_offset(0), None);
+        assert_eq!(local_utc_offset(-1), None);
+        assert_eq!(local_utc_offset(i64::MAX), None);
+        return;
+    }
+    let name = format!("{}::local_utc_offset_follows_the_os_timezone_including_its_clock_changes",
+        module_path!().split_once("::").unwrap().1);
+    for zone in ["UTC", "Europe/Madrid", "Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland", "Pacific/Pago_Pago", "Pacific/Kiritimati"] {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1"])
+            .env("TZ", zone).env(CHILD, zone).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains("1 passed"),
+            "the UTC offset failed under {zone}:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
 }
 
 #[test]

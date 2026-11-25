@@ -2963,8 +2963,8 @@ impl Bridge<'_> {
         self.retained.wall = wall;
     }
 
-    /// The wall time last published ([`Self::publish_wall`]), for the app code that words a live
-    /// banner outside any screen's views.
+    /// The wall time last published ([`Self::publish_wall`]), for the app code that derives from it
+    /// outside any screen's views (the HUD model's projected finish time).
     pub(crate) fn wall(&self) -> Option<plx_ui::fmt::Wall> {
         self.retained.wall
     }

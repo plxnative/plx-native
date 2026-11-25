@@ -744,6 +744,7 @@ fn hud_model(
     meta: plx_data::metadata::MetadataView<'_>,
     viewer_paused: bool,
     live_clock_and_lane: bool,
+    wall: Option<plx_ui::fmt::Wall>,
 ) -> plx_appkit::player_hud::model::HudModel {
     let position_ns = plx_media::player::playpos_ns(ps);
     let playpos_ns = position_ns.unwrap_or(0);
@@ -770,11 +771,9 @@ fn hud_model(
         },
     ) {
         let rate = plx_media::player::effective_playback_rate(ps);
-        clock::unix_ms()
-            .and_then(|now| plx_appkit::player_hud::model::projected_end_unix_seconds(
-                now, position_ns?, duration_ns?, rate,
-            ))
-            .and_then(clock::local_end_time)
+        // The frame's published wall time (a replay has none): its second and zone are the ones every
+        // other clock face of the frame is read from.
+        wall.and_then(|wall| plx_appkit::player_hud::model::projected_end_clock(wall, position_ns?, duration_ns?, rate))
     } else {
         None
     };
@@ -789,6 +788,8 @@ fn hud_model(
         is_episode,
         is_live,
         end_time: projected_end_time,
+        // `wall` is the screen's to take from `PlayerLike::wall` when it applies the model.
+        wall: None,
         scrub_ns,
         playpos_ns,
         seek_display_ns: plx_media::player::seek_display_ns(ps).unwrap_or(-1),
@@ -834,12 +835,13 @@ fn begin_product_frame(app: &mut App) -> Frame {
 /// Current transport/marker facts before the dispatcher's input/Tick, refreshed again for draw.
 fn publish_player_model(app: &mut App) {
     let bridge = app.runtime.bridge(&mut app.bridge);
-    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels, bridge.wall());
+    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels);
     let mut model = hud_model(&app.player.session, bridge.metadata_view(),
         app.adapters.player.backend_viewer_paused().unwrap_or(false),
         matches!(app.rec, super::recorder::Recplay::Off) && !bridge.is_controlled_replay()
             // a HUD with no finish-time lane draws no estimate, so none is projected for it
-            && app.hud.as_ref().is_some_and(|hud| hud.compiled.declares_end_time()));
+            && app.hud.as_ref().is_some_and(|hud| hud.compiled.declares_end_time()),
+        bridge.wall());
     model.marker_prefs = bridge.marker_preferences();
     model.covered = app.pages.surface_up();
     super::bridge::send_player_message(&mut app.pages, plx_screens::registry::AppMsg::PlayerModel(model));
@@ -6653,7 +6655,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         }
         // A projected attempt alone does not install a common backend runner.
         // Supply the viewer goal explicitly, opposite to the idle physical mailbox.
-        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false);
+        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false, None);
         model.marker_prefs = app.runtime.bridge(&mut app.bridge).marker_preferences();
         model.covered = app.pages.surface_up();
         // restore before grading: a failed assertion must not leak a scrub target into the next test
