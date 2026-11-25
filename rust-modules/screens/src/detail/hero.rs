@@ -24,7 +24,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 
-use plx_data::metadata::{Detail, Episode, Extra};
+use plx_data::metadata::{Detail, Extra};
 use plx_ui::hstack::{Flow, Item, Span};
 use plx_ui::label::HAlign;
 use plx_machine::machine::{GroupId, Measure};
@@ -473,13 +473,11 @@ pub fn watch_index(set: HeroSet) -> Option<usize> {
     v[..n].iter().position(|&c| c.is_watch())
 }
 
-pub(super) fn hero_episode(d: &Detail) -> Option<&Episode> { d.resume_episode() }
-
 /// The resume position (ns) the hero's Play control would ACTUALLY apply. Ported verbatim from
 /// `ui/detail.rs::hero_resume_ns`.
 pub fn hero_resume_ns(d: &Detail) -> i64 {
     if d.is_show {
-        hero_episode(d)
+        d.resume_episode()
             .map(|e| plx_data::metadata::resume_ns(e.resume_ms, e.dur_ms))
             .unwrap_or(0)
     } else {
@@ -512,14 +510,14 @@ pub fn hero_watch_state(
 
 /// Watch state of the episode displayed by the hero, or the series when there is no on-deck subject.
 pub fn hero_mark(d: &Detail) -> PosterMark {
-    if let Some(ep) = hero_episode(d) {
+    if let Some(ep) = d.resume_episode() {
         hero_watch_state(false, false, ep.watched, plx_data::metadata::resume_ns(ep.resume_ms, ep.dur_ms))
     } else { hero_watch_state(d.is_show, d.show_started(), d.watched, hero_resume_ns(d)) }
 }
 
 /// Name the episode explicitly when the hero presents a leaf, including a show's on-deck item.
 pub fn watch_names_episode(d: &Detail) -> bool {
-    d.kind == "episode" || hero_episode(d).is_some()
+    d.kind == "episode" || d.resume_episode().is_some()
 }
 
 /// The Go to Show disc's target: `(show_rk, season)` for an EPISODE's own page, `None` for a
@@ -775,7 +773,7 @@ fn people_view<'a>(names: &'a str, label: &'a str, measure: &'a dyn Measure) -> 
 }
 
 fn hero_facts(d: &Detail) -> (String, Option<String>) {
-    plx_appkit::hero_layout::meta_facts(d, hero_episode(d))
+    plx_appkit::hero_layout::meta_facts(d, d.resume_episode())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1099,6 +1097,7 @@ pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plx_data::metadata::Episode;
 
     #[test]
     fn the_hdr_warning_follows_the_version_play_starts() {
@@ -1718,14 +1717,14 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            hero_episode(&d).is_none(),
+            d.resume_episode().is_none(),
             "an untouched show is about the series"
         );
         d.seasons[0].viewed_leaf_count = 1;
-        assert_eq!(hero_episode(&d).map(|ep| ep.rk.as_str()), Some("e1"));
+        assert_eq!(d.resume_episode().map(|ep| ep.rk.as_str()), Some("e1"));
         d.seasons[0].viewed_leaf_count = 0;
         d.on_deck.as_mut().unwrap().watched = true;
-        assert_eq!(hero_episode(&d).map(|ep| ep.rk.as_str()), Some("e1"),
+        assert_eq!(d.resume_episode().map(|ep| ep.rk.as_str()), Some("e1"),
             "an optimistic watched flip retains the displayed leaf until the server replaces OnDeck");
         assert_eq!(hero_mark(&d), PosterMark::Watched);
     }

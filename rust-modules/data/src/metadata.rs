@@ -1848,16 +1848,19 @@ impl Detail {
         }
     }
 
-    /// **The item whose file Play starts from this page**: the page's own item (a movie, an
-    /// episode) when it carries its stream, else a show page's play episode while that episode's
-    /// streams are the ones loaded. The same owner `route::played_video` reads its versions from,
-    /// so a remembered version choice is keyed by the item whose file it names, never by the show.
-    pub fn played_rk(&self) -> Option<&str> {
-        if !self.part.is_empty() {
-            return Some(&self.rk);
-        }
-        let ep = self.play_episode().filter(|ep| !ep.part.is_empty())?;
-        (self.stream_episode_key() == Some(ep.rk.as_str())).then_some(ep.rk.as_str())
+    /// **The item Play starts from this page, the one definition**: the page's own item, or on a show
+    /// page its play episode ([`Self::play_episode`]). The key of everything that is about "what Play
+    /// plays": the remembered version choice and the facts line that describes it, the Select Version
+    /// list, the Audio & Subtitles picker and its stored pick. Never the show on a show page.
+    pub fn play_rk(&self) -> &str {
+        if self.is_show { self.play_episode().map_or(self.rk.as_str(), |ep| ep.rk.as_str()) } else { &self.rk }
+    }
+
+    /// The episode a show page's `audio`/`subs` describe when that is `rk` AND it is the episode Play
+    /// starts ([`Self::play_rk`]): a show carries no streams of its own, `backfill_episode` fills them
+    /// from the hero's episode and names it ([`Self::stream_episode_key`]).
+    pub fn play_episode_streaming(&self, rk: &str) -> Option<&Episode> {
+        self.play_episode().filter(|ep| ep.rk == rk && self.stream_episode_key() == Some(rk))
     }
 
     /// The versions this page knows for item `rk`: its own for the page's item, an episode's for an
@@ -3023,19 +3026,6 @@ pub struct PreplayTracks {
     pub pick: Option<PreplayPick>,
 }
 
-/// The episode a show page's `audio`/`subs` describe, when that is `rk`: a show carries no streams of
-/// its own, `backfill_episode` fills them from the hero's episode and names it
-/// ([`Detail::stream_episode_key`]).
-fn hero_episode<'a>(d: &'a Detail, rk: &str) -> Option<&'a Episode> {
-    if d.stream_episode_key() != Some(rk) {
-        return None;
-    }
-    d.on_deck
-        .as_ref()
-        .filter(|e| e.rk == rk)
-        .or_else(|| d.episodes.position(rk).and_then(|i| d.episodes.get(i)))
-}
-
 /// **Where the picker's tracks come from**, borrowed from the loaded page: the identity of the item
 /// they describe and its file's part and lists.
 struct PreplaySource<'a> {
@@ -3068,7 +3058,7 @@ fn preplay_source<'a>(
     let (kind, show_rk, default_part) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
         (d.kind.as_str(), d.show_rk.as_str(), d.part.as_str())
     } else {
-        let ep = hero_episode(d, rk)?;
+        let ep = d.play_episode_streaming(rk)?;
         ("episode", d.rk.as_str(), ep.part.as_str())
     };
     let chosen = version.and_then(|id| d.version_parts.iter().find(|p| p.id == id));
@@ -3116,7 +3106,7 @@ fn picks_of<'a>(
 fn patch_tracks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, pick: PreplayPick) -> bool {
     let holds = current(state).is_some_and(|d| {
         d.sid == sid
-            && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || hero_episode(d, rk).is_some())
+            && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || d.play_episode_streaming(rk).is_some())
     });
     if !holds {
         return false;

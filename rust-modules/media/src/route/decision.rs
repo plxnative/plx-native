@@ -10597,7 +10597,7 @@ pub fn detail_played_video(d: &plx_data::metadata::Detail) -> Option<PlayedVideo
 /// follow. The one read both [`detail_played_video`] and [`detail_playback_preview`] take, so the
 /// resolution chip and the play-mode clause cannot describe two files.
 pub fn chosen_for(d: &plx_data::metadata::Detail) -> Option<plx_plex::plex::MediaId> {
-    chosen_version(item_sid(d.sid), d.played_rk()?)
+    chosen_version(item_sid(d.sid), d.play_rk())
 }
 
 /// **The version a Play of `versions` starts now**, for the check mark on the Select Version list:

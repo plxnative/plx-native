@@ -153,7 +153,7 @@ fn the_facts_follow_the_choice_and_a_stale_or_first_one_changes_nothing() {
     assert!(first.version.is_none() && first.resolution == "4k", "choosing the first is the primary part's own facts");
     let stale = facts(DirectPlayMode::Auto, Some(MediaId(99)));
     assert_eq!(stale.resolution, default.resolution, "a choice whose media is gone describes what no choice would");
-    assert_eq!(d.played_rk(), Some("10"));
+    assert_eq!(d.play_rk(), "10");
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn a_show_page_keys_the_choice_by_its_episode() {
         rk: "show".into(), is_show: true, episodes: vec![ep].into(), episode_streams: EpisodeStreams::Loaded("ep-1".into()),
         ..Default::default()
     };
-    assert_eq!(d.played_rk(), Some("ep-1"), "the choice belongs to the episode Play starts, not to the show");
+    assert_eq!(d.play_rk(), "ep-1", "the choice belongs to the episode Play starts, not to the show");
     assert_eq!(d.versions_known("ep-1").map(<[_]>::len), Some(2));
     assert_eq!(d.versions_known("show"), None, "a show has no versions of its own");
     assert_eq!(d.versions_known("other"), None, "an item not on the page is not known");

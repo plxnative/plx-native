@@ -477,7 +477,7 @@ struct LayoutStamp {
 impl LayoutStamp {
     fn of(d: &Detail) -> Self {
         use std::hash::{Hash, Hasher};
-        let hero = hero::hero_episode(d);
+        let hero = d.resume_episode();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let paged = d.episodes.len() > plx_data::metadata::EPISODE_PAGE;
         if !paged {
@@ -862,7 +862,7 @@ impl DetailScreen {
     }
 
     /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
-    /// episode on a show page, via [`play_subject`]) and one row per action the round buttons had no
+    /// episode on a show page, via [`Detail::play_rk`]) and one row per action the round buttons had no
     /// room for ([`hero::overflow_ctls`]), in the row's order. `None` unless focus is on the … button.
     /// A new hero action is one more arm in the `match` below.
     pub fn hero_overflow(
@@ -889,7 +889,7 @@ impl DetailScreen {
                 _ => None,
             })
             .collect();
-        Some((play_subject(d)?.to_string(), rows))
+        Some((d.play_rk().to_string(), rows))
             .filter(|(_, rows)| !rows.is_empty())
             .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener }))
     }
@@ -2249,7 +2249,7 @@ impl DetailScreen {
 /// series keeps the whole-show action; a season addresses its own number under its parent show.
 fn hero_mark_scope(d: &Detail) -> plx_data::viewstate::Scope {
     use plx_data::viewstate::Scope;
-    if hero::hero_episode(d).is_some() {
+    if d.resume_episode().is_some() {
         Scope::Leaf
     } else if d.is_show {
         Scope::Show
@@ -3059,7 +3059,7 @@ impl DetailScreen {
     fn art_identity<'a>(&'a self, d: Option<&'a Detail>) -> (ServerId, &'a str) {
         if let Some(d) = d {
             let path = if d.is_show {
-                hero::hero_episode(d)
+                d.resume_episode()
                     .map(|ep| ep.thumb.as_str())
                     .filter(|path| !path.is_empty())
                     .unwrap_or(&d.art)
@@ -3622,7 +3622,7 @@ fn hero_blurb<'a>(
 ) -> (String, String) {
     if let Some(d) = d {
         if d.is_show {
-            if let Some(ep) = hero::hero_episode(d) {
+            if let Some(ep) = d.resume_episode() {
                 let lead = plx_appkit::hero_layout::episode_lead(ep.season, ep.index, &ep.title);
                 return (lead, ep.summary.clone());
             }
@@ -4638,7 +4638,7 @@ impl DetailScreen {
         // handling stays correct even though the disc itself is never shown.)
         hero::HeroSet {
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
-            tracks: self.detail(meta).is_some_and(|d| play_subject(d).is_some_and(|rk| meta.has_preplay_tracks(d.sid, rk, plx_media::route::chosen_version(plx_media::route::item_sid(d.sid), rk)))),
+            tracks: self.detail(meta).is_some_and(|d| meta.has_preplay_tracks(d.sid, d.play_rk(), plx_media::route::chosen_for(d))),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
             restart,
             trailer: false,
@@ -4887,7 +4887,7 @@ impl DetailScreen {
                             } else {
                                 plx_data::viewstate::Write::Unwatched
                             },
-                            guid: if hero::hero_episode(d).is_some() { String::new() } else { d.guid.clone() },
+                            guid: if d.resume_episode().is_some() { String::new() } else { d.guid.clone() },
                         }),
                     )));
                 }
@@ -4908,7 +4908,7 @@ impl DetailScreen {
         meta: plx_data::metadata::MetadataView<'_>,
     ) {
         let Some(d) = self.detail(meta) else { return };
-        let Some(rk) = play_subject(d) else { return };
+        let rk = d.play_rk();
         if !hero_versions(d).iter().any(|v| v.id == media) {
             return;
         }
@@ -4927,7 +4927,7 @@ impl DetailScreen {
     ) -> bool {
         let Some(d) = self.detail(meta) else { return false };
         if d.is_show {
-            let i = hero::hero_episode(d).and_then(|ep| d.episodes.position(&ep.rk));
+            let i = d.resume_episode().and_then(|ep| d.episodes.position(&ep.rk));
             match i {
                 Some(i) => self.play_episode_at(i, from_start, version, fx, meta),
                 None => self.play_episode_value(
@@ -5062,22 +5062,11 @@ pub(crate) fn hero_control_subject<'a>(
 ) -> Option<&'a str> {
     use hero::HeroCtl;
     match ctl {
-        HeroCtl::Play | HeroCtl::Restart => Some(if d.is_show {
-            d.play_episode().map_or(d.rk.as_str(), |ep| ep.rk.as_str())
-        } else {
-            selected.map_or(d.rk.as_str(), |m| m.rk.as_str())
-        }),
-        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(hero::hero_episode(d).map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
+        HeroCtl::Play | HeroCtl::Restart => Some(if d.is_show { d.play_rk() } else { selected.map_or(d.play_rk(), |m| m.rk.as_str()) }),
+        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(d.resume_episode().map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
         HeroCtl::Watchlist | HeroCtl::Trailer => Some(d.rk.as_str()),
         HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::AudioSubtitles | HeroCtl::More => None,
     }
-}
-
-/// **The ratingKey the hero's Play plays** ([`hero_control_subject`] of Play, with no loaded card to prefer): what the
-/// Select Version panel's rows select for too, since a committed row names the version of the hero's title
-/// that Play then takes (`AppMsg::SelectVersion`, [`DetailScreen::select_version`]).
-pub(crate) fn play_subject(d: &Detail) -> Option<&str> {
-    hero_control_subject(hero::HeroCtl::Play, d, None)
 }
 
 /// The versions the hero's Play chooses among, for its Play Version disc and panel: the page's
@@ -5093,8 +5082,7 @@ pub(crate) fn hero_versions(d: &Detail) -> &[plx_data::pms::MediaVersion] {
 /// **The version Play takes now**, the row of the Select Version list that wears the check mark: the profile's
 /// choice for the hero's item while its media is still there, else what plays unasked (`route::taken_version`).
 pub(crate) fn taken_version(d: &Detail) -> Option<plx_plex::plex::MediaId> {
-    let chosen = play_subject(d).and_then(|rk| plx_media::route::chosen_version(plx_media::route::item_sid(d.sid), rk));
-    plx_media::route::taken_version(hero_versions(d), chosen)
+    plx_media::route::taken_version(hero_versions(d), plx_media::route::chosen_for(d))
 }
 
 /// A presented preview must leave the framebuffer transparent. The player route punches this

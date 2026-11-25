@@ -857,12 +857,12 @@ fn versions_page<'a>(
 /// the host's metadata view, the way the mount does.
 pub(crate) fn versions_subject<H: MetadataLike>(cx: &Cx<'_, H>, arg: &crate::versions_panel::VersionsArg) -> Option<String> {
     let d = versions_page(H::metadata(cx), arg)?;
-    crate::detail::play_subject(d).map(str::to_owned)
+    Some(d.play_rk().to_owned())
 }
 
 /// **The tracks a Preplay panel offers** ([`crate::preplay_panel::Source`]): on a Detail page the ones
 /// of the item its hero plays (`MetadataView::preplay_tracks`; the page's own item, or a show's hero
-/// episode, `detail::play_subject`); on the failure screen the playing item's own lists, addressed
+/// episode, `Detail::play_rk`); on the failure screen the playing item's own lists, addressed
 /// to the failed attempt's part. A page that cannot say gets an empty set, so the panel opens
 /// with nothing to pick rather than naming another item's tracks.
 fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::preplay_panel::PreplayArg) -> plx_data::metadata::PreplayTracks {
@@ -881,8 +881,7 @@ fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::pr
         Source::Page => meta
             .current()
             .filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
-            .and_then(crate::detail::play_subject)
-            .and_then(|rk| meta.preplay_tracks(arg.sid, rk, plx_media::route::chosen_version(plx_media::route::item_sid(arg.sid), rk)))
+            .and_then(|d| meta.preplay_tracks(arg.sid, d.play_rk(), plx_media::route::chosen_for(d)))
             .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
         Source::Failed { part_id, pick } => meta
             .failed_tracks(arg.sid, &arg.rk, part_id, pick)

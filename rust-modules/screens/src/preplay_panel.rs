@@ -12,7 +12,7 @@
 //! **Entry point.** Anything that wants the panel sends
 //! `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from a Detail page: the panel's
 //! subject is the page's item, and the tracks are the ones of the item the hero PLAYS
-//! (`detail::play_subject`: on a show page the hero episode, never the show). The playback failure
+//! (`Detail::play_rk`: on a show page the hero episode, never the show). The playback failure
 //! screen opens the same surface with [`Source::Failed`], which reads the tracks of the item that
 //! was playing instead of a page's.
 
