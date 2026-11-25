@@ -23,6 +23,10 @@ If the PlxNative support assistant asks for details, reply in the same issue. Sh
 diagnostic only, with tokens, addresses and private identifiers removed. The
 [troubleshooting guide](docs/troubleshooting.md#collecting-logs) explains which log to collect.
 
+Two free reviewers are available on request, as a fallback to the maintainer's review: `@pullfrog review`
+(collaborators only) and `@coderabbitai review`. Neither one reviews automatically, and their findings
+are advice; the maintainer's review decides.
+
 ### Maintainer support pilot
 
 The Issue labels workflow calls Pullfrog once per eligible turn on GitHub-hosted runners, with
