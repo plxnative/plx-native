@@ -137,7 +137,7 @@ pub fn table_elems<'a>(
         .iter()
         .flat_map(|s| s.rows.iter())
         .enumerate()
-        .filter(move |(i, r)| !r.sep && keys.map_or(true, |k| k.key_at(*i).is_some()))
+        .filter(move |(i, r)| r.selectable() && keys.map_or(true, |k| k.key_at(*i).is_some()))
         .map(|(i, _)| i)
 }
 
@@ -157,7 +157,7 @@ pub fn table_a11y<'t>(
     keys: Option<&'t dyn super::form::RowKeys>,
     index: usize,
 ) -> Option<A11y<'t>> {
-    let row = table_row(t, index).filter(|r| !r.sep)?;
+    let row = table_row(t, index).filter(|r| r.selectable())?;
     let path = match keys.and_then(|k| k.a11y_name(index)) {
         Some(name) => A11yPath::new().name(name),
         None => A11yPath::new().name("row").index(table_elems(t, keys).position(|i| i == index)?),
