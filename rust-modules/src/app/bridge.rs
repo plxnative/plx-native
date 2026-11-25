@@ -206,7 +206,7 @@ pub(crate) struct AppViews<'a> {
     /// none. `None` before the first publication and when the platform cannot say.
     pub(crate) today: Option<[i32; 3]>,
     /// **This frame's wall-clock time** (Unix second and UTC offset), published by the loop beside
-    /// `today` ([`Bridge::publish_wall`]): what a clock face, "22m left" and an airing's progress
+    /// `today` ([`Bridge::publish_clock`]): what a clock face, "22m left" and an airing's progress
     /// are derived from, so no screen reads a clock. `None` before the first publication, under a
     /// replay and where the platform cannot say.
     pub(crate) wall: Option<plx_ui::fmt::Wall>,
@@ -232,7 +232,7 @@ impl Bridge<'_> {
             search: self.retained.search.view(), metadata: self.stores.metadata_view(),
             person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session,
             transport_paused: self.retained.transport_paused,
-            today: self.retained.today, wall: self.retained.wall, beneath: None }
+            today: self.retained.today, wall: self.retained.wall(), beneath: None }
     }
 }
 
@@ -686,13 +686,11 @@ pub(crate) struct BridgeRetained {
     /// This frame's publication of the calendar date — see `AppViews::today`. Refreshed by
     /// [`Bridge::publish_today`] from the loop, once per iteration; `None` until the first one.
     today: Option<[i32; 3]>,
-    /// This frame's publication of the wall-clock time — see `AppViews::wall`. Refreshed by
-    /// [`Bridge::publish_wall`] from the loop, once per iteration; `None` until the first one.
-    wall: Option<plx_ui::fmt::Wall>,
-    /// This frame's Unix second alone ([`Bridge::publish_unix_s`]): the Live TV store's `now`. Not taken
-    /// from `wall`, which also needs the OS zone: a set whose zone cannot be read has a second and no
-    /// `wall`, and its lineup must still load (the guide's schedule is UTC).
-    unix_s: Option<i64>,
+    /// This frame's publication of the clock — the ONE reading of it ([`Bridge::publish_clock`], from
+    /// the loop, once per iteration; `None` until the first one and under a replay). The screens'
+    /// `AppViews::wall` and the Live TV store's `now` are both taken from it ([`BridgeRetained::wall`],
+    /// [`BridgeRetained::livetv_input`]).
+    clock: Option<super::clock::Reading>,
     /// **Is the hardware video plane bound?** `Player::video_plane_bound`, published here by the
     /// loop on its edges — the rig's own copy of the one bit, for the privileged call at draw
     /// entry (`clear_opaque_region`), which the `Rig` trait gives no argument.
@@ -827,14 +825,20 @@ impl Bridge<'_> {
 }
 
 impl BridgeRetained {
-    /// **The Live TV store's captured input for this step**: the clients, the frame's wall-clock second
-    /// (`None` where the loop published none, which is not the epoch) and the seat the seat trigger
+    /// The wall time of this frame's clock reading: `None` where there is no reading or the zone's
+    /// offset could not be read ([`super::clock::Reading::wall`]).
+    fn wall(&self) -> Option<plx_ui::fmt::Wall> {
+        self.clock.and_then(super::clock::Reading::wall)
+    }
+
+    /// **The Live TV store's captured input for this step**: the clients, the second of the frame's clock
+    /// reading (`None` where the loop published none, which is not the epoch; present without the zone) and the seat the seat trigger
     /// last restored for, with what the memory door holds for it.
     fn livetv_input<'a>(&'a self, keys: &'a plx_plex::plex::ClientKeys) -> plx_data::livetv::LiveTvInput<'a> {
         let seat = &self.seat_watch.restored;
         plx_data::livetv::LiveTvInput {
             keys,
-            now: self.unix_s,
+            now: self.clock.map(super::clock::Reading::unix_s),
             recent: match seat {
                 plx_plex::plex::session::Seat::Unseated => plx_data::livetv::RecentSeat::Unseated,
                 seat => plx_data::livetv::RecentSeat::Seated { seat, stored: &self.recent_stored },
@@ -863,7 +867,7 @@ impl BridgeRetained {
             section_hubs: self.section_hubs.view(), search: self.search.view(),
             metadata: stores.metadata_view(), person: stores.person_view(), collection: stores.collection_view(),
             subtitle_search: stores.subtitle_search_view(), livetv: stores.livetv_view(), session: &self.playback,
-            transport_paused: self.transport_paused, today: self.today, wall: self.wall, beneath: None }
+            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), beneath: None }
     }
 
     /// A Bridge booted from a controlled Home. It always runs the `Live` store runner, whatever
@@ -1075,8 +1079,7 @@ impl BridgeRetained {
             transport_paused: false,
             playback_live: false,
             today: None,
-            wall: None,
-            unix_s: None,
+            clock: None,
             video_plane: false,
             measure: plx_ui::rec::Measurements::Live(measure),
             hubs: reads.hubs,
@@ -3020,25 +3023,18 @@ impl Bridge<'_> {
         self.retained.today = today;
     }
 
-    /// **Publish this frame's wall-clock time** — see `AppViews::wall`. Called once per iteration by
-    /// the loop, beside [`Self::publish_today`], with `clock::wall()` (the loop is that door's one
-    /// caller).
-    pub(crate) fn publish_wall(&mut self, wall: Option<plx_ui::fmt::Wall>) {
-        self.retained.wall = wall;
+    /// **Publish this frame's clock reading** — the one publication of the clock (`AppViews::wall` and the
+    /// Live TV store's `now` both come from it). Called once per iteration by the loop, beside
+    /// [`Self::publish_today`], with `clock::reading()` (the loop is that door's one caller).
+    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) {
+        self.retained.clock = reading;
     }
 
-    /// **Publish this frame's Unix second** (`clock::unix_ms() / 1000`, the same door `clock::wall` takes
-    /// its second from, so the store and the page read the same second), beside [`Self::publish_wall`].
-    /// It is the Live TV store's `now` (`BridgeRetained::livetv_input`); `None` (a replay) asks the store
-    /// to schedule nothing (`LiveTvInput::now`).
-    pub(crate) fn publish_unix_s(&mut self, unix_s: Option<i64>) {
-        self.retained.unix_s = unix_s;
-    }
-
-    /// The wall time last published ([`Self::publish_wall`]), for the app code that derives from it
-    /// outside any screen's views (the HUD model's projected finish time).
+    /// The wall time of the clock reading last published ([`Self::publish_clock`]; `None` without a
+    /// reading or without the zone's offset), for the app code that derives from it outside any
+    /// screen's views (the HUD model's projected finish time).
     pub(crate) fn wall(&self) -> Option<plx_ui::fmt::Wall> {
-        self.retained.wall
+        self.retained.wall()
     }
 }
 
@@ -3105,7 +3101,7 @@ impl Bridge<'_> {
                 hubs: self.retained.hubs.view(), listing: self.retained.listing.view(), directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall, beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), beneath: None,
             }, &self.retained.measure);
             let handled = self.session.step(event, &cx, fx);
             // #132: the owner logs nothing, and the Profiles screen cannot see a read-out that
@@ -3499,7 +3495,7 @@ impl Rig<AppHost> for Bridge<'_> {
                 directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall, beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), beneath: None,
             },
             measure: &self.retained.measure,
         }

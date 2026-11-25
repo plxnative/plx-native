@@ -388,14 +388,14 @@ fn poll_player_release(app: &mut App) {
 /// which this call is the one caller of: it answers [`clock::REPLAY_DATE`] under a replay (the
 /// recorded tick is set at the top of the iteration) and the platform's date, read at most once a
 /// minute, otherwise. A screen then receives the date through `AppViews::today` and reads no clock.
-/// The wall-clock time ([`super::bridge::Bridge::publish_wall`], from [`clock::wall`], this call
-/// being that door's one caller too) goes out the same way as `AppViews::wall`: nothing under a replay.
+/// The clock reading ([`super::bridge::Bridge::publish_clock`], from [`clock::reading`], this call
+/// being that door's one caller too) goes out the same way, once: the `AppViews::wall` and the Live TV
+/// store's `now` are both taken from it, and it is nothing under a replay.
 fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route::PlaybackSession,
     was_player: bool, viewer_paused: Option<bool>) {
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
-    bridge.publish_wall(clock::wall());
-    bridge.publish_unix_s(clock::unix_ms().map(|ms| ms.div_euclid(1_000)));
+    bridge.publish_clock(clock::reading());
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).

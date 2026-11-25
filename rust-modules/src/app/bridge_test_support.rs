@@ -923,9 +923,14 @@ impl Bridge<'_> {
     pub(crate) fn note_recent_for_test(&mut self, sid: plx_plex::plex::ServerId, dvr: &str, channel: &str) {
         self.note_channel(sid, dvr, channel);
     }
-    /// The frame's wall time as the loop would have published it, so the Live TV step has a clock.
+    /// The frame's clock as the loop would have published it, so the Live TV step has a clock (the
+    /// instant alone: no zone, which the step does not need).
     pub(crate) fn clock_for_test(&mut self, unix_s: i64) {
-        self.publish_unix_s(Some(unix_s));
+        self.publish_clock(Some(crate::app::clock::Reading { unix_ms: unix_s * 1_000, utc_offset_s: None }));
+    }
+    /// The `now` the Live TV store's next step is handed (`BridgeRetained::livetv_input`).
+    pub(crate) fn livetv_now_for_test(&self) -> Option<i64> {
+        self.retained.livetv_input(&self.retained.client_keys).now
     }
 }
 
