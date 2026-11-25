@@ -8,7 +8,7 @@
 //! a frame's time arrives on a `Tick`. `unix_ms()` is the playback estimate's wall-clock input: it
 //! samples the platform at most every five seconds and advances from monotonic frame ticks. `wall()`
 //! is the loop's one publication of it for the screens (`run::publish_frame` ->
-//! `Bridge::publish_wall` -> `AppViews::wall`, read through `LiveTvLike::wall` / `PlayerLike::wall`):
+//! `Bridge::publish_wall` -> `AppViews::wall`, read through `LiveTvLike::wall`, and into the player's `HudModel::wall`):
 //! its Unix second and the OS zone's UTC offset at it, from the same once-a-minute zone read as
 //! the date, from which every clock face and "22m left" (and the HUD's finish time) is derived by
 //! the pure functions in `plx_ui::fmt`. `now()` reads
@@ -46,8 +46,8 @@ thread_local! {
     /// frame clock) it was read in.
     static ZONE: Cell<Option<(u32, Zone)>> = const { Cell::new(None) };
     /// The last read of the zone's UTC offset at one other instant (a projected finish) and the Unix
-    /// second it was read for. Dropped whenever [`ZONE`] is read again, so a changed time-zone setting
-    /// reaches it within a minute like everything else.
+    /// second it was read for. Never dropped: the offset at one second is the zone rules' answer for
+    /// that second, which does not change with the minute (see [`utc_offset_at`]).
     static OFFSET_AT: Cell<Option<(i64, Option<i32>)>> = const { Cell::new(None) };
     /// A wall-clock Unix sample and its monotonic frame tick; advanced between five-second refreshes.
     static UNIX: Cell<Option<(u32, Option<i64>)>> = const { Cell::new(None) };
@@ -116,7 +116,6 @@ fn zone(unix_s: i64) -> Zone {
         utc_offset_s: plx_os::i18n::local_utc_offset(unix_s),
     };
     ZONE.with(|c| c.set(Some((minute, zone))));
-    OFFSET_AT.with(|c| c.set(None));
     zone
 }
 
@@ -124,7 +123,11 @@ fn zone(unix_s: i64) -> Zone {
 /// an instant that is not this frame's: the HUD's projected finish time, which may lie past a clock
 /// change that [`wall`]'s offset (the one in force now) does not know of. [`zone`]'s per-minute memo
 /// answers for NOW only, so this has its own single-entry memo keyed by the second asked for (a steady
-/// playback asks for the same finish second frame after frame) and dropped with the minute's zone read.
+/// playback asks for the same finish second frame after frame). The memo needs no expiry: the offset at
+/// one Unix second is a pure function of the zone rules the C library loaded, and a changed time-zone
+/// SETTING reaches none of this (nothing calls `tzset`, and a reentrant `localtime_r` does not reread
+/// the zone on its own), so [`zone`]'s per-minute read exists for the calendar date and for the offset
+/// NOW changing with the clock (midnight, a daylight-saving change), not for a new zone.
 /// `None` where the platform cannot say. **Only the loop calls it** (through the HUD model).
 pub(crate) fn utc_offset_at(unix_s: i64) -> Option<i32> {
     plx_base::step::assert_io_allowed("app::clock::utc_offset_at");
@@ -143,8 +146,8 @@ pub(crate) fn utc_offset_at(unix_s: i64) -> Option<i32> {
 /// **Only the loop calls it**; a screen receives the publication and reads no clock.
 pub(crate) fn wall() -> Option<plx_ui::fmt::Wall> {
     plx_base::step::assert_io_allowed("app::clock::wall");
-    let unix_s = unix_ms()?.div_euclid(1_000);
-    Some(plx_ui::fmt::Wall { unix_s, utc_offset_s: zone(unix_s).utc_offset_s? })
+    let unix_ms = unix_ms()?;
+    Some(plx_ui::fmt::Wall { unix_ms, utc_offset_s: zone(unix_ms.div_euclid(1_000)).utc_offset_s? })
 }
 
 /// Advance a sampled wall-clock timestamp by monotonic frame time, or ask for a fresh sample once
@@ -248,43 +251,43 @@ mod tests {
     fn a_published_wall_time_reaches_a_screen_through_its_views_and_no_clock() {
         use crate::app::bridge::{AppHost, Bridge};
         use plx_machine::machine::{EntryId, InputOwner, Tick};
-        use plx_screens::registry::{LiveTvLike, PlayerLike};
+        use plx_screens::registry::LiveTvLike;
         use plx_ui::dispatch::CxParts;
         use plx_ui::fmt::Wall;
         let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
         let mut bridge = owner.bridge();
         let parts = CxParts { modal: Default::default(), page_image: Default::default(), hold_hint: Default::default(), tick: Tick::default(), press: Default::default(), focus: Default::default(),
             owner: InputOwner::Entry(EntryId(0)) };
-        // What a screen sees, through both host traits that carry it.
+        // What a screen sees, through the host trait that carries it.
         let seen = |bridge: &Bridge| {
             let cx = parts.cx::<AppHost>(
                 bridge.views_with(plx_media::route::idle_session_for_test()), &plx_ui::fixture::FixtureMeasure);
-            (<AppHost as LiveTvLike>::wall(&cx), <AppHost as PlayerLike>::wall(&cx))
+            <AppHost as LiveTvLike>::wall(&cx)
         };
-        let wall = Wall { unix_s: 1_795_649_400, utc_offset_s: 3_600 };
+        let wall = Wall::from_secs(1_795_649_400, 3_600);
         assert_eq!(bridge.views().wall, None);
-        assert_eq!(seen(&bridge), (None, None), "before the loop's first publication the host has no time");
+        assert_eq!(seen(&bridge), None, "before the loop's first publication the host has no time");
         bridge.publish_wall(Some(wall));
         assert_eq!(bridge.views().wall, Some(wall));
         assert_eq!(bridge.wall(), Some(wall));
-        assert_eq!(seen(&bridge), (Some(wall), Some(wall)), "a screen receives the published time");
+        assert_eq!(seen(&bridge), Some(wall), "a screen receives the published time");
         // The host reads no clock for it: a replay (which has no wall clock) changes nothing it answers.
         super::set_replay(100);
         assert_eq!(super::unix_ms(), None);
         assert_eq!(super::wall(), None, "the door itself answers nothing under a replay");
-        assert_eq!(seen(&bridge), (Some(wall), Some(wall)), "the answer is the publication, not the door");
+        assert_eq!(seen(&bridge), Some(wall), "the answer is the publication, not the door");
         bridge.publish_wall(None);
-        assert_eq!(seen(&bridge), (None, None), "a publication of nothing is nothing");
+        assert_eq!(seen(&bridge), None, "a publication of nothing is nothing");
         super::REPLAY.with(|c| c.set(None));
     }
 
     #[test]
-    fn the_wall_door_pairs_the_wall_second_with_an_offset_read_once_a_minute() {
+    fn the_wall_door_pairs_the_wall_clock_with_an_offset_read_once_a_minute() {
         super::REPLAY.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(Some((0, Some(1_795_649_400_999)))));
         super::ZONE.with(|c| c.set(None));
         let live = super::wall().expect("a platform clock and zone");
-        assert_eq!(live.unix_s, 1_795_649_400, "whole seconds of the frame's wall clock");
+        assert_eq!(live.unix_ms, 1_795_649_400_999, "the frame's wall clock to the millisecond");
         assert_eq!(Some(live.utc_offset_s), plx_os::i18n::local_utc_offset(1_795_649_400));
         let zone = |today, utc_offset_s| super::Zone { today, utc_offset_s };
         super::ZONE.with(|c| c.set(Some((0, zone(None, Some(-4_500))))));
@@ -307,7 +310,7 @@ mod tests {
         // One read answers both; the second call, whichever door asks, is the memo.
         let wall = super::wall().expect("a platform clock and zone");
         let today = super::today();
-        assert_eq!(today, plx_os::i18n::local_calendar_date(wall.unix_s), "the date is of the same second as the offset");
+        assert_eq!(today, plx_os::i18n::local_calendar_date(wall.unix_s()), "the date is of the same second as the offset");
         super::ZONE.with(|c| c.set(Some((0, super::Zone { today: Some([2001, 2, 3]), utc_offset_s: Some(60) }))));
         assert_eq!((super::today(), super::wall().map(|w| w.utc_offset_s)), (Some([2001, 2, 3]), Some(60)));
         super::ZONE.with(|c| c.set(None));
@@ -315,23 +318,23 @@ mod tests {
     }
 
     #[test]
-    fn the_offset_at_another_instant_is_its_own_lookup_kept_for_that_second_and_dropped_with_the_zone() {
+    fn the_offset_at_another_instant_is_its_own_lookup_kept_for_that_second() {
         super::REPLAY.with(|c| c.set(None));
         super::OFFSET_AT.with(|c| c.set(None));
         super::ZONE.with(|c| c.set(None));
         const AT: i64 = 1_795_649_400;
         assert_eq!(super::utc_offset_at(AT), plx_os::i18n::local_utc_offset(AT), "the platform's answer for that second");
         assert_eq!(super::utc_offset_at(0), None, "an instant the zone cannot convert is no offset");
-        // A second asked for again within the zone's minute is the memo, not a new read.
+        // A second asked for again is the memo, not a new read.
         super::OFFSET_AT.with(|c| c.set(Some((AT, Some(-4_500)))));
         assert_eq!(super::utc_offset_at(AT), Some(-4_500));
         assert_eq!(super::utc_offset_at(AT + 1), plx_os::i18n::local_utc_offset(AT + 1), "another second is another lookup");
-        // The minute's zone read drops it: a changed time-zone setting is noticed.
+        // The minute's zone read is a different memo and leaves it alone.
         super::OFFSET_AT.with(|c| c.set(Some((AT, Some(-4_500)))));
         super::ZONE.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(Some((0, Some(AT * 1_000)))));
-        assert!(super::wall().is_some());
-        assert_eq!(super::utc_offset_at(AT), plx_os::i18n::local_utc_offset(AT));
+        assert!(super::wall().is_some(), "the zone was read again");
+        assert_eq!(super::OFFSET_AT.with(|c| c.get()), Some((AT, Some(-4_500))));
         super::OFFSET_AT.with(|c| c.set(None));
         super::ZONE.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(None));

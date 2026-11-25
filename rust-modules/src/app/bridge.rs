@@ -350,7 +350,6 @@ fn execute_endpoint_outcomes_with(
 impl plx_screens::registry::PlayerLike for AppHost {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession { cx.views.session }
     fn transport_paused(cx: &Cx<'_, Self>) -> bool { cx.views.transport_paused }
-    fn wall(cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { cx.views.wall }
 }
 
 impl plx_screens::registry::SearchLike for AppHost {

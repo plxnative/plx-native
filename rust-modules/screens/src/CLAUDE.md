@@ -299,8 +299,8 @@ calendar date once per frame (`Bridge::publish_today`, read from the platform at
 and `CaptionCache` keys its labels on it so "Today" rebuilds at midnight. **The time of day is the same kind of
 input:** the loop publishes the wall-clock second and the zone's UTC offset once per frame
 (`Bridge::publish_wall`, from `app::clock::wall`, whose date and offset are ONE per-minute zone read), a page receives
-them as `LiveTvLike::wall`, the player as `PlayerLike::wall` (which it stores on `HudModel::wall` when it applies the
-model), and every clock face, "22m left" and progress fraction is derived from them by the pure
+them as `LiveTvLike::wall`, the player on `HudModel::wall` (the app's `hud_model` copies the published wall into
+the model it sends, so the screen has no second route to it), and every clock face, "22m left" and progress fraction is derived from them by the pure
 `plx_ui::fmt::airing_line` / `left` / `frac` (each takes the `Wall`, and decides through `plx_ui::fmt::phase`; `None`
 under a replay: no clock face, never a guessed one). **The words are never cached in a published fact:** the player's
 live info keeps the guide's raw begin and end and the HUD words the airing at draw, with the screen's

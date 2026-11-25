@@ -164,15 +164,33 @@ pub fn footer_left_minutes_in(cx: &LocaleContext, mins: i64) -> String {
     if h > 0 { msg::core_footer_left_hours_in(cx, h, m) } else { msg::core_footer_left_minutes_in(cx, m) }
 }
 
-/// **Wall-clock time as one frame's publication**: Unix seconds and the viewer's UTC offset in
-/// seconds, the pair every clock face, "22m left" and progress fraction is derived from. The app
-/// publishes it once per iteration (`AppViews::wall`) from its one wall-clock door; a screen
-/// receives it and reads no clock, the way it receives `today`. Whole-minute offsets only, which
-/// is every zone in use.
+/// **Wall-clock time as one frame's publication**: Unix milliseconds and the viewer's UTC offset in
+/// seconds, the pair every clock face, "22m left", progress fraction and projected finish is derived
+/// from. The app publishes it once per iteration (`AppViews::wall`) from its one wall-clock door; a
+/// screen receives it and reads no clock, the way it receives `today`. Whole-minute offsets only,
+/// which is every zone in use.
+///
+/// The milliseconds are kept because the projected finish adds the remaining media time to them: from
+/// the whole second the sum would take two values per second of steady playback (the position moves
+/// inside the second), and a finish near a minute boundary would flip a minute once a second. Every
+/// other face is whole-second ([`Wall::unix_s`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wall {
-    pub unix_s: i64,
+    pub unix_ms: i64,
     pub utc_offset_s: i32,
+}
+
+impl Wall {
+    /// A wall time at a whole Unix second.
+    pub const fn from_secs(unix_s: i64, utc_offset_s: i32) -> Self {
+        Wall { unix_ms: unix_s.saturating_mul(1_000), utc_offset_s }
+    }
+
+    /// The Unix second it falls in (rounded toward negative infinity): what the clock faces, the
+    /// airing phase and its progress read.
+    pub const fn unix_s(self) -> i64 {
+        self.unix_ms.div_euclid(1_000)
+    }
 }
 
 /// Which surface an airing's line is worded for: the two shapes differ in what a recent start says.
@@ -250,11 +268,11 @@ pub fn phase(begin: i64, end: i64, now: i64) -> AiringPhase {
 /// How far into its airing `wall` is, `0.0..=1.0`: the amber bar's and the banner progress's input.
 /// `None` for an airing the guide does not have; not yet begun is 0, over is 1.
 pub fn frac(begin: i64, end: i64, wall: Wall) -> Option<f32> {
-    match phase(begin, end, wall.unix_s) {
+    match phase(begin, end, wall.unix_s()) {
         AiringPhase::Unknown => None,
         AiringPhase::Upcoming { .. } => Some(0.0),
         AiringPhase::Over => Some(1.0),
-        AiringPhase::JustStarted { .. } | AiringPhase::Running { .. } => Some((wall.unix_s - begin) as f32 / (end - begin) as f32),
+        AiringPhase::JustStarted { .. } | AiringPhase::Running { .. } => Some((wall.unix_s() - begin) as f32 / (end - begin) as f32),
     }
 }
 
@@ -265,7 +283,7 @@ pub fn frac(begin: i64, end: i64, wall: Wall) -> Option<f32> {
 /// ([`remaining_minutes`], as [`footer_left`] counts). `None` unless the programme is on air: one
 /// the guide does not have, one not yet begun and one that is over have no time left.
 pub fn left_in(cx: &LocaleContext, begin: i64, end: i64, wall: Wall) -> Option<String> {
-    match phase(begin, end, wall.unix_s) {
+    match phase(begin, end, wall.unix_s()) {
         AiringPhase::JustStarted { left, .. } | AiringPhase::Running { left } => Some(footer_left_minutes_in(cx, left)),
         AiringPhase::Unknown | AiringPhase::Upcoming { .. } | AiringPhase::Over => None,
     }
@@ -298,7 +316,7 @@ fn face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
 /// the one offset published for `wall`, so an airing that spans a daylight-saving change draws its
 /// far end an hour off (stated in the plan, D1).
 pub fn airing_line_in(cx: &LocaleContext, surface: Airing, begin: i64, end: i64, wall: Wall) -> Option<String> {
-    let phase = phase(begin, end, wall.unix_s);
+    let phase = phase(begin, end, wall.unix_s());
     if phase == AiringPhase::Unknown {
         return None;
     }
@@ -838,7 +856,7 @@ mod airing_tests {
     const NINE_PM: i64 = 1_795_640_400;
     const MIN: i64 = 60;
 
-    fn at(now: i64, offset: i64) -> Wall { Wall { unix_s: now, utc_offset_s: i32::try_from(offset).unwrap() } }
+    fn at(now: i64, offset: i64) -> Wall { Wall::from_secs(now, i32::try_from(offset).unwrap()) }
 
     fn line(surface: Airing, begin: i64, end: i64, now: i64, offset: i64) -> Option<String> {
         airing_line_in(&en24(), surface, begin, end, at(now, offset))

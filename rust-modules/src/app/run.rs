@@ -788,8 +788,9 @@ fn hud_model(
         is_episode,
         is_live,
         end_time: projected_end_time,
-        // `wall` is the screen's to take from `PlayerLike::wall` when it applies the model.
-        wall: None,
+        // The frame's published wall time: the live airing line is worded from it at draw, and the
+        // screen's clock fingerprint follows it.
+        wall,
         scrub_ns,
         playpos_ns,
         seek_display_ns: plx_media::player::seek_display_ns(ps).unwrap_or(-1),
@@ -6655,7 +6656,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
         }
         // A projected attempt alone does not install a common backend runner.
         // Supply the viewer goal explicitly, opposite to the idle physical mailbox.
-        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false, None);
+        let wall = plx_ui::fmt::Wall::from_secs(1_795_640_400, 3_600);
+        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false, Some(wall));
         model.marker_prefs = app.runtime.bridge(&mut app.bridge).marker_preferences();
         model.covered = app.pages.surface_up();
         // restore before grading: a failed assertion must not leak a scrub target into the next test
@@ -6665,6 +6667,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         tx.scrub_ns.store(before.0, Relaxed);
         shared.desired_sub_idx.store(before.1, Relaxed);
         assert!(model.paused, "the common viewer pause goal");
+        assert_eq!(model.wall, Some(wall), "the frame's published wall time rides the model; the screen adds nothing");
         assert_eq!(model.scrub_ns, 42_000_000_000, "TX.scrub_ns");
         assert_eq!(model.playpos_ns, 7_000_000_000, "playpos_ns()");
         assert_eq!(model.seek_display_ns, 9_000_000_000, "seek_display_ns()");

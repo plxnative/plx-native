@@ -90,12 +90,6 @@ impl crate::registry::PlayerLike for TestHost {
         cx.views
     }
     fn transport_paused(_cx: &Cx<'_, Self>) -> bool { false }
-    fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { TEST_WALL.with(|w| w.get()) }
-}
-
-thread_local! {
-    /// The wall time this host publishes to the player (`PlayerLike::wall`); `None` unless a case sets it.
-    pub(super) static TEST_WALL: std::cell::Cell<Option<plx_ui::fmt::Wall>> = const { std::cell::Cell::new(None) };
 }
 
 pub(super) fn playback_session(position_ns: i64, duration_ns: i64) -> plx_media::route::PlaybackSession {

@@ -565,7 +565,7 @@ impl PlayerScreen {
             // phase does (a minute counted up or down, just started becoming running, its end) or the
             // zone does, never with the second: its stamp is the term, so no line is worded to compare.
             if let (true, Some(info), Some(wall)) = (self.model.is_live, plx_media::route::live_info(ps), self.model.wall) {
-                mix(plx_ui::fmt::phase(info.channel.begins_at, info.channel.ends_at, wall.unix_s).stamp());
+                mix(plx_ui::fmt::phase(info.channel.begins_at, info.channel.ends_at, wall.unix_s()).stamp());
                 mix(i64::from(wall.utc_offset_s) as u64);
             }
             mix(plx_media::player::seek_display_ns(ps).unwrap_or(-1) as u64);
@@ -867,9 +867,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::PlayerModel(model)) => {
-                // The frame's wall time arrives as the host's input (`PlayerLike::wall`), beside the
-                // facts the app sampled into the model: the live airing line is worded from it at draw.
-                self.set_model(HudModel { wall: H::wall(cx), ..*model });
+                self.set_model(*model);
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::PlayerCompiled(compiled)) => {
@@ -3765,7 +3763,7 @@ pub(crate) mod step_ladder_tests {
         let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
         page.hud.until = 5_000;
         let at = |page: &mut PlayerScreen, ps: &plx_media::route::PlaybackSession, unix_s: Option<i64>, offset: i32| {
-            page.set_model(HudModel { is_live: true, wall: unix_s.map(|unix_s| plx_ui::fmt::Wall { unix_s, utc_offset_s: offset }), ..Default::default() });
+            page.set_model(HudModel { is_live: true, wall: unix_s.map(|unix_s| plx_ui::fmt::Wall::from_secs(unix_s, offset)), ..Default::default() });
             assert!(page.hud_up(ps, 1_000), "the transport is up");
             page.clock_fingerprint(ps, 1_000)
         };
@@ -3782,27 +3780,24 @@ pub(crate) mod step_ladder_tests {
         assert_eq!(a, b);
     }
 
-    /// The wall time reaches the model through the host's `PlayerLike::wall` as the screen applies it.
+    /// The wall time arrives on the model the app sends and is what the screen keeps: it has no second
+    /// route to it, so a model without one leaves the screen with none.
     #[test]
-    fn the_screen_takes_the_wall_time_from_the_host_when_it_applies_the_model() {
+    fn the_screen_keeps_the_wall_time_the_model_carries() {
         let _g = plx_base::testlock::serial();
         let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
         let cx = cx();
-        let wall = plx_ui::fmt::Wall { unix_s: 1_795_640_400, utc_offset_s: 3_600 };
-        let step = |page: &mut PlayerScreen| {
+        let wall = plx_ui::fmt::Wall::from_secs(1_795_640_400, 3_600);
+        let step = |page: &mut PlayerScreen, wall| {
             super::overlay_tests::publish_presentation_fixture(page.presentation.clone());
             let mut out = Vec::new();
             let mut present = plx_machine::present::Present::new();
-            let model = HudModel { wall: None, ..Default::default() };
+            let model = HudModel { wall, ..Default::default() };
             page.step(&ScreenEvent::App(AppMsg::PlayerModel(model)), &cx, &mut Effects::new(&mut out, MachineId::Instance(INST), &mut present));
         };
-        step(&mut page);
-        assert_eq!(page.model.wall, None, "before the host has published one");
-        super::overlay_tests::TEST_WALL.with(|w| w.set(Some(wall)));
-        step(&mut page);
+        step(&mut page, Some(wall));
         assert_eq!(page.model.wall, Some(wall));
-        super::overlay_tests::TEST_WALL.with(|w| w.set(None));
-        step(&mut page);
+        step(&mut page, None);
         assert_eq!(page.model.wall, None, "a replay's publication of nothing is nothing");
     }
 

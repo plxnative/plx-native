@@ -411,14 +411,14 @@ mod live_summary_tests {
     fn the_airing_line_is_worded_from_the_wall_time_at_draw() {
         let _locale = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
         let info = info(NINE_PM, NINE_PM + 3_600);
-        let at = |now: i64| live_summary(&info, Some(Wall { unix_s: now, utc_offset_s: 0 }));
+        let at = |now: i64| live_summary(&info, Some(Wall::from_secs(now, 0)));
         let lines = |text: String| text.lines().map(str::to_owned).collect::<Vec<_>>();
         let early = lines(at(NINE_PM + 38 * 60));
         let later = lines(at(NINE_PM + 50 * 60));
         assert_eq!(early[0], "Family Show");
         assert_eq!(early[2], "About the show");
         assert_eq!(early[1], plx_ui::fmt::airing_line(plx_ui::fmt::Airing::Banner, NINE_PM, NINE_PM + 3_600,
-            Wall { unix_s: NINE_PM + 38 * 60, utc_offset_s: 0 }).unwrap());
+            Wall::from_secs(NINE_PM + 38 * 60, 0)).unwrap());
         assert_ne!(early[1], later[1], "the same info, worded for a later second");
         assert_eq!(later[0], "Family Show");
     }
@@ -429,7 +429,7 @@ mod live_summary_tests {
         let _locale = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
         let timed = info(NINE_PM, NINE_PM + 3_600);
         assert_eq!(live_summary(&timed, None), "Family Show\nAbout the show");
-        let wall = Some(Wall { unix_s: NINE_PM + 60, utc_offset_s: 0 });
+        let wall = Some(Wall::from_secs(NINE_PM + 60, 0));
         assert_eq!(live_summary(&info(0, 0), wall), "Family Show\nAbout the show");
     }
 }
