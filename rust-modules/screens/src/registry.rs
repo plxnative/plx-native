@@ -3143,10 +3143,13 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `screens::versions_panel::SHAPE` is appended. One bump; the three replay fixtures were
 // re-recorded against it; the previous pin was 0x209b_8063_1907_d7c8.
 // Preplay tracks (#1532): `AppArg` gains `PreplayPanel{host,sid,rk,anchor,source}` (canon tag 15, page id
-// 32) and `screens::preplay_panel::SHAPE` is appended. The replay fixtures are NOT re-recorded on this
-// commit (the owner's lane does it); the previous pin was 0x17bd_9205_2e59_cd6e. The same bump: the item menu's
-// kind list gains `HeroOverflow{rows:len}` (canon kind tag 6: the hero's ... menu, its row count), which the
-// Detail hero's overflow already presented.
+// 32) and `screens::preplay_panel::SHAPE` is appended; the previous pin was 0x17bd_9205_2e59_cd6e. The same
+// bump: the item menu's kind list gains `HeroOverflow{rows:len}` (canon kind tag 6: the hero's ... menu, its
+// row count), which the Detail hero's overflow already presented. The hero row (#1553) then moved it again:
+// `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14), from
+// 0x8e79_1d31_a441_fb57 to 0xde99_c01f_cb88_02a4. The replay fixtures v13-owned-input-content and
+// 13-by-id-filmography were re-recorded against that shape (the app census is 0xc0b2_71bb_16d2_d02f, pinned
+// in `app/recorder.rs`); this screen-half pin only asserts the inventory, it is not a recorded value.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.
@@ -3167,7 +3170,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
 // Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
-const SCREEN_SHAPES_PIN: u64 = 0x8e79_1d31_a441_fb57;
+const SCREEN_SHAPES_PIN: u64 = 0xde99_c01f_cb88_02a4;
 
 #[cfg(test)]
 mod arg_tests {
