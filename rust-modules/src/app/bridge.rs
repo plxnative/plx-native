@@ -351,7 +351,6 @@ fn execute_endpoint_outcomes_with(
 impl plx_screens::registry::PlayerLike for AppHost {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession { cx.views.session }
     fn transport_paused(cx: &Cx<'_, Self>) -> bool { cx.views.transport_paused }
-    fn wall(cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { cx.views.wall }
 }
 
 impl plx_screens::registry::SearchLike for AppHost {
@@ -3036,8 +3035,8 @@ impl Bridge<'_> {
         self.retained.unix_s = unix_s;
     }
 
-    /// The wall time last published ([`Self::publish_wall`]), for the app code that words a live
-    /// banner outside any screen's views.
+    /// The wall time last published ([`Self::publish_wall`]), for the app code that derives from it
+    /// outside any screen's views (the HUD model's projected finish time).
     pub(crate) fn wall(&self) -> Option<plx_ui::fmt::Wall> {
         self.retained.wall
     }
@@ -3553,7 +3552,7 @@ impl Rig<AppHost> for Bridge<'_> {
         #[cfg(test)]
         self.retained.keyboard_calls.push(up);
         #[cfg(not(test))]
-        if up { crate::textinput::start(); } else { crate::textinput::stop(); }
+        if up { crate::textinput::start(self.shell()); } else { crate::textinput::stop(self.shell()); }
     }
     fn adopt_system_keyboard(&mut self) {
         #[cfg(test)]
