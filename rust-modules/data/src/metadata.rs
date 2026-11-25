@@ -102,6 +102,11 @@ impl<'a> MetadataView<'a> {
     pub fn preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
         preplay_tracks(self.state, sid, rk)
     }
+    /// Would [`Self::preplay_tracks`] return `Some`, without cloning the lists: the hero's Audio &
+    /// Subtitles disc gate, asked every frame.
+    pub fn has_preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> bool {
+        has_preplay_tracks(self.state, sid, rk)
+    }
     /// Has the viewer already put this exact segment behind them? Keyed on the segment, not the
     /// marker value (the server can re-send the same marker with another end), and shared by the
     /// server-marker and synthesized-tail paths so neither can re-offer a dismissed segment.
@@ -2951,26 +2956,39 @@ fn hero_episode<'a>(d: &'a Detail, rk: &str) -> Option<&'a Episode> {
 /// episode's tracks and part, never "the show's"). The same two refusals as [`cached_playing`]: the
 /// pair identity, and an item that has played since the page loaded, whose selection has moved
 /// under the page's copy.
-fn preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
+/// **Where the picker's tracks come from**, borrowed: the loaded page `d` and the identity of the item
+/// they describe — `(kind, show_rk, part)`. `None` is "nothing to show" (the item has played since
+/// the page loaded, no streams, no part), the ONE rule [`preplay_tracks`] (the rows) and
+/// [`has_preplay_tracks`] (the hero's disc gate, asked every frame) both follow.
+fn preplay_source<'a>(state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> Option<(&'a Detail, &'a str, &'a str, &'a str)> {
     if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (sid, rk))) {
         return None;
     }
     let d = current(state).filter(|d| d.sid == sid && !d.audio.is_empty())?;
     let (kind, show_rk, part) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
-        (d.kind.clone(), d.show_rk.clone(), d.part.clone())
+        (d.kind.as_str(), d.show_rk.as_str(), d.part.as_str())
     } else {
         let ep = hero_episode(d, rk)?;
-        ("episode".to_string(), d.rk.clone(), ep.part.clone())
+        ("episode", d.rk.as_str(), ep.part.as_str())
     };
-    (!part.is_empty()).then(|| PreplayTracks {
+    (!part.is_empty()).then_some((d, kind, show_rk, part))
+}
+
+fn preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
+    let (d, kind, show_rk, part) = preplay_source(state, sid, rk)?;
+    Some(PreplayTracks {
         sid,
         rk: rk.to_string(),
-        kind,
-        show_rk,
-        part,
+        kind: kind.to_string(),
+        show_rk: show_rk.to_string(),
+        part: part.to_string(),
         audio: d.audio.clone(),
         subs: d.subs.clone(),
     })
+}
+
+fn has_preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> bool {
+    preplay_source(state, sid, rk).is_some()
 }
 
 /// MAIN THREAD: the server took `audio_sid` / `subtitle_sid` (`0` = Off) for `(sid, rk)` before it

@@ -82,10 +82,10 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
         assert!(ctl.writes_account(), "{ctl:?} changes the household's record");
     }
     for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-        for bits in 0..64u32 {
+        for bits in 0..128u32 {
             let set = hero::HeroSet {
                 watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
-                trailer: bits & 16 != 0, alt: bits & 32 != 0, mark,
+                trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark,
             };
             let (all, drawn) = hero::hero_ctls(set);
             for stops in [hero::Stops::default(), hero::Stops { no_playback: true, ..Default::default() }] {
@@ -105,7 +105,7 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
                         "{set:?} {stops:?}: column {col}");
                 }
                 // The default stop is the first stop that does not write: Play with a driver, and
-                // without one the first of Go to Show, More, Version, Also available the row has,
+                // without one the first of Go to Show, More, Version, Audio & Subtitles, Also available the row has,
                 // or none at all when every stop the row has writes.
                 let default = hero::default_stop(set, stops);
                 assert_eq!(default, visible[..n].iter().copied().find(|c| !c.writes_account()), "{set:?} {stops:?}");
@@ -113,7 +113,7 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
                 if !stops.no_playback {
                     assert_eq!(default, Some(hero::HeroCtl::Play), "{set:?} {stops:?}: with a driver Play stays the default");
                 }
-                if stops.no_playback && !(set.go_show || set.restart || set.version || set.alt) {
+                if stops.no_playback && !(set.go_show || set.restart || set.version || set.tracks || set.alt) {
                     assert_eq!(default, None, "{set:?}: a row of writes only has no default stop of its own");
                 }
             }

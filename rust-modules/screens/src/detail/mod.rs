@@ -3389,6 +3389,7 @@ impl DetailScreen {
                         hero::HeroCtl::Watchlist => plx_appkit::watchlist_disc::paint(self.watchlist.pos()).0,
                         hero::HeroCtl::GoToShow => hero::GO_TO_SHOW_ICON,
                         hero::HeroCtl::Version => hero::VERSION_ICON,
+                        hero::HeroCtl::AudioSubtitles => plx_ui::icons::Icon::Audio,
                         _ => unreachable!(),
                     };
                     let mut button = CircleButton::new(c"".as_ptr())
@@ -4628,6 +4629,7 @@ impl DetailScreen {
         // handling stays correct even though the disc itself is never shown.)
         hero::HeroSet {
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
+            tracks: self.detail(meta).is_some_and(|d| play_subject(d).is_some_and(|rk| meta.has_preplay_tracks(d.sid, rk))),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
             restart,
             trailer: false,
@@ -4824,7 +4826,7 @@ impl DetailScreen {
                     from_home: false,
                 })));
             }
-            hero::HeroCtl::Alt | hero::HeroCtl::Version => {
+            hero::HeroCtl::Alt | hero::HeroCtl::Version | hero::HeroCtl::AudioSubtitles => {
                 let set = self.hero_set(meta);
                 if let Some(i) = hero::index_of(set, ctl) {
                     let widths = hero::hero_widths(
@@ -4839,10 +4841,10 @@ impl DetailScreen {
                     // The ANCHOR travels on the argument, bit for bit, so the surface places
                     // itself off the control without the page or a static holding a `Rect` for it.
                     let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
-                    let panel = if ctl == hero::HeroCtl::Version {
-                        ContentPanel::Versions { anchor }
-                    } else {
-                        ContentPanel::AltSources { anchor }
+                    let panel = match ctl {
+                        hero::HeroCtl::Version => ContentPanel::Versions { anchor },
+                        hero::HeroCtl::AudioSubtitles => ContentPanel::PreplayTracks { anchor },
+                        _ => ContentPanel::AltSources { anchor },
                     };
                     self.content(fx, ContentReq::Panel(panel));
                 }
@@ -5058,7 +5060,7 @@ pub(crate) fn hero_control_subject<'a>(
         }),
         HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(hero::hero_episode(d).map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
         HeroCtl::Watchlist | HeroCtl::Trailer => Some(d.rk.as_str()),
-        HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::More => None,
+        HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::AudioSubtitles | HeroCtl::More => None,
     }
 }
 

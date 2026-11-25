@@ -106,11 +106,11 @@ fn a_started_show_page_has_the_ordinary_overflow() {
 /// exactly when at least two actions moved, holds in the pinned order, and never holds one item.
 #[test]
 fn more_is_never_a_single_item_and_always_ends_the_round_buttons() {
-    for bits in 0..64u32 {
+    for bits in 0..128u32 {
         for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
             let s = HeroSet {
                 watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
-                trailer: bits & 16 != 0, alt: bits & 32 != 0, mark,
+                trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark,
             };
             let moved = under_more(s);
             let r = row(s);
@@ -127,11 +127,41 @@ fn more_is_never_a_single_item_and_always_ends_the_round_buttons() {
                 let (v, n) = actions(s);
                 v[..n].to_vec()
             };
-            let movable: Vec<_> = all.iter().filter(|c| matches!(c, GoToShow | Restart | Version)).collect();
-            let want = [GoToShow, Restart, Version];
+            let movable: Vec<_> = all.iter().filter(|c| matches!(c, GoToShow | Restart | Version | AudioSubtitles)).collect();
+            let want = [GoToShow, Restart, Version, AudioSubtitles];
             assert!(movable.windows(2).all(|w| want.iter().position(|c| c == w[0]) < want.iter().position(|c| c == w[1])), "{s:?}");
             // Alt and the hidden Trailer never count and never move.
             assert!(!moved.contains(&Alt) && !moved.contains(&Trailer), "{s:?}");
         }
     }
+}
+
+/// Audio & Subtitles is the LAST movable action: an unwatched one-version movie with tracks is
+/// Watchlist, Watched, Audio & Subtitles — three round buttons, no …; a part-watched one tips into …
+/// with Play from Start and Audio & Subtitles under it, in that order, and a second version adds
+/// Select Version between them. No special case: the rule is `split_actions` over `actions`.
+#[test]
+fn audio_and_subtitles_is_the_last_movable_action_and_the_rule_places_it() {
+    let with_tracks = |watchlist, mark, go_show, restart, version| HeroSet { tracks: true, ..set(watchlist, mark, go_show, restart, version) };
+
+    let unwatched = with_tracks(true, PosterMark::None, false, false, false);
+    assert_eq!(row(unwatched), [Play, Watchlist, MarkWatched, AudioSubtitles]);
+    assert!(under_more(unwatched).is_empty());
+
+    let part_watched = with_tracks(true, PosterMark::InProgress, false, true, false);
+    assert_eq!(row(part_watched), [Play, Watchlist, MarkWatched, More]);
+    assert_eq!(under_more(part_watched), [Restart, AudioSubtitles]);
+
+    let versions = with_tracks(true, PosterMark::InProgress, false, true, true);
+    assert_eq!(under_more(versions), [Restart, Version, AudioSubtitles]);
+
+    let episode = with_tracks(true, PosterMark::None, true, false, false);
+    assert_eq!(row(episode), [Play, Watchlist, MarkWatched, More]);
+    assert_eq!(under_more(episode), [GoToShow, AudioSubtitles]);
+
+    // the a11y word round-trips and the ELEM id is its own, below the section block
+    assert_eq!(HeroCtl::of_a11y_name(AudioSubtitles.a11y_name()), Some(AudioSubtitles));
+    assert_eq!(HeroCtl::of_elem(AudioSubtitles.elem()), Some(AudioSubtitles));
+    assert!(AudioSubtitles.elem() < HERO_ELEM_RANGE_END);
+    assert!(disc_slot(AudioSubtitles).is_some_and(|slot| slot < DISCS));
 }

@@ -1412,6 +1412,7 @@ fn hero_focus_stays_in_place_when_also_available_lands() {
         watchlist: true,
         go_show: false,
         version: false,
+        tracks: false,
         restart: true,
         trailer: false,
         alt: false,
@@ -1581,6 +1582,7 @@ fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
         watchlist: true,
         go_show: false,
         version: false,
+        tracks: false,
         restart: true,
         trailer: false,
         alt: false,
@@ -1589,7 +1591,7 @@ fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
     let index = hero::watch_index(set).unwrap();
     assert_eq!(hero::ctl_at(set, index - 1), Some(hero::HeroCtl::Watchlist));
     for unfurl in [0.2, 0.6, 1.0] {
-        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl, 0.0, 0.0], [201.0, 0.0, 267.0, 0.0, 0.0]);
+        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl, 0.0, 0.0, 0.0], [201.0, 0.0, 267.0, 0.0, 0.0, 0.0]);
         let widths = hero::HeroWidths {
             pill: 230.0,
             alt: 0.0,
@@ -1661,12 +1663,12 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
                     assert_eq!(n, 3 + usize::from(restart) + usize::from(alt));
                     sizes.insert(n);
                     for unfurl in [
-                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                        [0.3, 0.0, 0.7, 0.0, 0.0],
-                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.3, 0.0, 0.7, 0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
                     ] {
                         screen.disc_unfurl = unfurl.map(Spring::at);
                         for scroll in [0.0, 48.0] {
@@ -5771,6 +5773,50 @@ fn a_show_page_offers_and_selects_its_hero_episodes_versions() {
     clear();
 }
 
+fn stream(id: i64, selected: bool) -> plx_data::metadata::Stream {
+    plx_data::metadata::Stream { id, selected, ..Default::default() }
+}
+
+/// The Audio & Subtitles disc exists where the loaded page has tracks to show (a movie, an
+/// episode's own page, a started show's on-deck episode) and not where it has none, and OK sends the
+/// panel request anchored on the disc, as the Select Version disc does.
+#[test]
+fn the_audio_and_subtitles_disc_follows_the_pages_tracks_and_opens_the_picker() {
+    let with_tracks = || Detail { audio: vec![stream(1, true), stream(2, false)], subs: vec![stream(3, false)], ..versioned("movie", 1) };
+    let _guard = install(with_tracks());
+    let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
+    let set = screen.hero_set(test_store().view());
+    assert!(set.tracks);
+    assert!(hero::hero_ctls(set).0[..hero::hero_ctls(set).1].contains(&hero::HeroCtl::AudioSubtitles) || hero::overflow_ctls(set).0.contains(&hero::HeroCtl::AudioSubtitles));
+    // On the drawn row (3 or fewer actions) the press asks for the panel; behind … the menu row does.
+    let (_, effects) = step(&mut screen, &ScreenEvent::Activate(hero::ELEM_AUDIO_SUBTITLES), Some(hero::ELEM_AUDIO_SUBTITLES));
+    assert!(
+        effects.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { .. }))))),
+        "OK on the disc opens the picker: {}",
+        effects.len()
+    );
+    clear();
+    drop(_guard);
+
+    let _guard = install(Detail { audio: Vec::new(), ..with_tracks() });
+    let screen = bare(&_guard, ServerId::UNSET, "leaf");
+    assert!(!screen.hero_set(test_store().view()).tracks, "no streams, no disc");
+    clear();
+    drop(_guard);
+
+    // A show page with an on-deck episode offers THAT episode's tracks (the page's backfilled streams).
+    let on_deck = plx_data::metadata::Episode { resume_ms: 30_000, part: "/library/parts/e2".into(), ..episode("e2", 2) };
+    let mut d = detail(ServerId::UNSET, "show");
+    d.episodes = vec![episode("e1", 1), on_deck.clone()].into();
+    d.on_deck = Some(on_deck);
+    d.audio = vec![stream(1, true)];
+    d.episode_streams = plx_data::metadata::EpisodeStreams::Loaded("e2".into());
+    let _guard = install(d);
+    let screen = bare(&_guard, ServerId::UNSET, "show");
+    assert!(screen.hero_set(test_store().view()).tracks, "a started show offers its on-deck episode's tracks");
+    clear();
+}
+
 #[test]
 fn pdf_proposal_on_deck_watched_action_targets_one_episode() {
     let _guard = plx_base::testlock::serial();
@@ -5949,6 +5995,7 @@ fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none() 
         (hero::HeroCtl::GoToShow, false),
         (hero::HeroCtl::Alt, false),
         (hero::HeroCtl::Version, false),
+        (hero::HeroCtl::AudioSubtitles, false),
         (hero::HeroCtl::More, false),
     ] {
         assert_eq!(hero_control_subject(ctl, &d, None).is_some(), acts, "{}", ctl.a11y_name());

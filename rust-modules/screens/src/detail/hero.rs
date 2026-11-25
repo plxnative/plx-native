@@ -52,6 +52,8 @@ pub const ELEM_VERSION: u32 = 7;
 /// `show_rk`), never on a show's page, whose hero is already about the show.
 pub const ELEM_GO_TO_SHOW: u32 = 8;
 pub const ELEM_MORE: u32 = 9;
+/// The Audio & Subtitles disc: opens the picker for the tracks the page's Play starts with (#1532).
+pub const ELEM_AUDIO_SUBTITLES: u32 = 10;
 
 /// The hero's one focus group. Local to this screen — nothing outside `screens::detail` ever names
 /// it — so, like `screens::profiles`'s `ROSTER_GROUP`/`FOOTER_GROUP`, any small integer would do;
@@ -87,6 +89,7 @@ fn play_from_start_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_p
 fn trailer_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_trailer_c() }
 fn select_version_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_select_version_c() }
 fn go_to_show_label() -> &'static CStr { plx_os::i18n::msg::browse_menu_go_show_c() }
+pub fn audio_subtitles_label() -> &'static CStr { plx_os::i18n::msg::settings_audio_title_c() }
 
 /// The Select Version disc's mark: a portrait card with another behind it — several copies of one
 /// title, which is what a version list is. It used to be [`plx_ui::icons::Icon::Show`], the item
@@ -125,6 +128,9 @@ pub enum HeroCtl {
     /// the Play Version disc, present only while the loaded movie or episode has two or more
     /// versions; it opens the list of them (`screens::versions_panel`)
     Version,
+    /// The Audio & Subtitles disc, present wherever the page has tracks to show
+    /// (`MetadataView::preplay_tracks`); it opens the picker (`screens::preplay_panel`)
+    AudioSubtitles,
     /// The remaining item actions, through the shared item menu.
     More,
 }
@@ -142,6 +148,7 @@ impl HeroCtl {
             HeroCtl::Watchlist => ELEM_WATCHLIST,
             HeroCtl::GoToShow => ELEM_GO_TO_SHOW,
             HeroCtl::Version => ELEM_VERSION,
+            HeroCtl::AudioSubtitles => ELEM_AUDIO_SUBTITLES,
             HeroCtl::More => ELEM_MORE,
         }
     }
@@ -159,6 +166,7 @@ impl HeroCtl {
             ELEM_WATCHLIST => Some(HeroCtl::Watchlist),
             ELEM_GO_TO_SHOW => Some(HeroCtl::GoToShow),
             ELEM_VERSION => Some(HeroCtl::Version),
+            ELEM_AUDIO_SUBTITLES => Some(HeroCtl::AudioSubtitles),
             ELEM_MORE => Some(HeroCtl::More),
             _ => None,
         }
@@ -200,13 +208,14 @@ impl HeroCtl {
             HeroCtl::Watchlist => "watchlist",
             HeroCtl::GoToShow => "go_to_show",
             HeroCtl::Version => "version",
+            HeroCtl::AudioSubtitles => "audio_subtitles",
             HeroCtl::More => "more",
         }
     }
     /// The inverse of [`a11y_name`](Self::a11y_name): the control a word names, whether the row
     /// shows it or not (the caller checks that).
     pub fn of_a11y_name(word: &str) -> Option<Self> {
-        const ALL: [HeroCtl; 10] = [
+        const ALL: [HeroCtl; 11] = [
             HeroCtl::Play,
             HeroCtl::Restart,
             HeroCtl::Trailer,
@@ -216,6 +225,7 @@ impl HeroCtl {
             HeroCtl::Watchlist,
             HeroCtl::GoToShow,
             HeroCtl::Version,
+            HeroCtl::AudioSubtitles,
             HeroCtl::More,
         ];
         ALL.into_iter().find(|ctl| ctl.a11y_name() == word)
@@ -234,6 +244,8 @@ pub struct HeroSet {
     pub go_show: bool,
     /// the loaded movie or episode has two or more versions — the Play Version disc exists only then
     pub version: bool,
+    /// the page has tracks to show — the Audio & Subtitles disc exists only then
+    pub tracks: bool,
     pub restart: bool,
     pub trailer: bool,
     pub alt: bool,
@@ -245,10 +257,10 @@ pub struct HeroSet {
 pub const ROUND_SLOTS: usize = 3;
 
 /// The longest action list a page can have: Watchlist, the watch toggle and the movable ones.
-const MAX_ACTIONS: usize = 8;
+const MAX_ACTIONS: usize = 9;
 
 /// **The page's actions, in priority order**: Watchlist, the watch toggle, then the movable ones —
-/// Go to Show, Play from Start, Play Version. A new action (Audio & Subtitles) is one more `push` at
+/// Go to Show, Play from Start, Play Version, Audio & Subtitles. A new action is one more `push` at
 /// the END of this list; [`split_actions`] and the row follow from it. Play/Resume, the hidden
 /// Trailer and *Also available* are not actions in this sense: they never count toward
 /// [`ROUND_SLOTS`] and are never moved.
@@ -266,6 +278,7 @@ pub fn actions(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
     push(HeroCtl::GoToShow, set.go_show);
     push(HeroCtl::Restart, set.restart);
     push(HeroCtl::Version, set.version);
+    push(HeroCtl::AudioSubtitles, set.tracks);
     (v, n)
 }
 
@@ -409,7 +422,7 @@ pub fn first_stop(set: HeroSet, stops: Stops) -> HeroCtl {
 
 /// The row's stop the page opens on when nothing says which: its first stop that does not write to
 /// the account ([`HeroCtl::writes_account`]). That is Play with a playback driver composed, and
-/// without one Go to Show, More, the versions control or Also available, whichever the row has.
+/// without one Go to Show, More, the versions or tracks control or Also available, whichever the row has.
 /// `None` when every stop the row has writes (a movie with no driver: the bookmark and the watched
 /// toggle), which sends the page's default below the row (`DetailScreen::default_elem`).
 pub fn default_stop(set: HeroSet, stops: Stops) -> Option<HeroCtl> {
@@ -529,7 +542,23 @@ pub fn disc_verb(ctl: HeroCtl, name_episode: bool) -> Option<(usize, &'static CS
         (HeroCtl::MarkUnwatched, true) => Some((2, mark_episode_unwatched_label())),
         (HeroCtl::Version, _) => Some((3, select_version_label())),
         (HeroCtl::GoToShow, _) => Some((4, go_to_show_label())),
+        (HeroCtl::AudioSubtitles, _) => Some((5, audio_subtitles_label())),
         _ => None,
+    }
+}
+
+/// **The disc slot a control's width is read from** (`HeroWidths::disc`): the one index rule
+/// [`disc_verb`]'s slots, [`control_widths`] and the tests' reference layout all follow. `None` for the
+/// two pills and for the circles that never unfurl (the bookmark, …).
+pub const fn disc_slot(ctl: HeroCtl) -> Option<usize> {
+    match ctl {
+        HeroCtl::Restart => Some(0),
+        HeroCtl::Trailer => Some(1),
+        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(2),
+        HeroCtl::Version => Some(3),
+        HeroCtl::GoToShow => Some(4),
+        HeroCtl::AudioSubtitles => Some(5),
+        HeroCtl::Play | HeroCtl::Alt | HeroCtl::Watchlist | HeroCtl::More => None,
     }
 }
 
@@ -593,13 +622,9 @@ fn control_widths(set: HeroSet, cw: HeroWidths) -> ([f32; MAX_CTLS], usize) {
         *slot = match c {
             HeroCtl::Play => cw.pill,
             HeroCtl::Alt => cw.alt,
-            HeroCtl::Restart => cw.disc[0],
             // no verb to unfurl: a circle at every instant
             HeroCtl::Watchlist | HeroCtl::More => CD,
-            HeroCtl::Trailer => cw.disc[1],
-            HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => cw.disc[2],
-            HeroCtl::Version => cw.disc[3],
-            HeroCtl::GoToShow => cw.disc[4],
+            disc => cw.disc[disc_slot(*disc).expect("every other control is a disc")],
         };
     }
     (widths, n)
@@ -1123,6 +1148,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart,
             trailer,
             alt,
@@ -1332,7 +1358,7 @@ mod tests {
     /// the unfurl budget. A set's logical order and its measured width order must agree.
     #[test]
     fn the_row_geometry_uses_shared_spacing_for_every_control_set() {
-        let cw = HeroWidths { pill: 211.0, alt: 263.0, disc: [57.0, 61.0, 67.0, 71.0, 73.0] };
+        let cw = HeroWidths { pill: 211.0, alt: 263.0, disc: [57.0, 61.0, 67.0, 71.0, 73.0, 79.0] };
         for restart in [false, true] {
             for alt in [false, true] {
                 for trailer in [false, true] {
@@ -1342,12 +1368,8 @@ mod tests {
                         let widths: Vec<f32> = controls[..n].iter().map(|ctl| match ctl {
                             HeroCtl::Play => cw.pill,
                             HeroCtl::Alt => cw.alt,
-                            HeroCtl::Restart => cw.disc[0],
-                            HeroCtl::Trailer => cw.disc[1],
                             HeroCtl::Watchlist | HeroCtl::More => CD,
-                            HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => cw.disc[2],
-                            HeroCtl::Version => cw.disc[3],
-                            HeroCtl::GoToShow => cw.disc[4],
+                            disc => cw.disc[disc_slot(*disc).unwrap()],
                         }).collect();
                         for i in 0..=n + 1 {
                             let got = hero_btn_rect_at(set, i, 13.0, cw);
@@ -1611,6 +1633,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: false,
@@ -1629,6 +1652,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: false,
             trailer: false,
             alt: false,
@@ -1638,6 +1662,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             alt: true,
             ..without
         };
@@ -1653,6 +1678,7 @@ mod tests {
                     watchlist: true,
                     go_show: false,
                     version: false,
+            tracks: false,
                     restart: true,
                     trailer,
                     alt,
@@ -1788,6 +1814,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: false,
             trailer: false,
             alt: false,
@@ -1797,6 +1824,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: true,
@@ -1816,6 +1844,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: true,
@@ -1824,7 +1853,7 @@ mod tests {
         let widths = HeroWidths {
             pill: 210.0,
             alt: 300.0,
-            disc: [90.0, 120.0, 120.0, 150.0, 160.0],
+            disc: [90.0, 120.0, 120.0, 150.0, 160.0, 170.0],
         };
         let (controls, n) = hero_ctls(set);
         for i in 1..n {
@@ -1850,24 +1879,24 @@ mod tests {
                             let set = HeroSet { version, go_show, ..set_full(restart, alt, mark, trailer) };
                             let (_, n) = hero_ctls(set);
                             for labels in [
-                                [10.0, 12.0, 12.0, 11.0, 10.0],
-                                [201.0, 80.0, 316.0, 150.0, 132.0],
-                                [400.0, 400.0, 400.0, 400.0, 400.0],
-                                [900.0, 40.0, 40.0, 40.0, 40.0],
-                                [40.0, 40.0, 40.0, 900.0, 40.0],
-                                [40.0, 40.0, 40.0, 40.0, 900.0],
+                                [10.0, 12.0, 12.0, 11.0, 10.0, 0.0],
+                                [201.0, 80.0, 316.0, 150.0, 132.0, 0.0],
+                                [400.0, 400.0, 400.0, 400.0, 400.0, 0.0],
+                                [900.0, 40.0, 40.0, 40.0, 40.0, 0.0],
+                                [40.0, 40.0, 40.0, 900.0, 40.0, 0.0],
+                                [40.0, 40.0, 40.0, 40.0, 900.0, 0.0],
                             ] {
                                 for e in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
                                     for unfurl in [
-                                        [e, 0.0, 1.0 - e, 0.0, 0.0],
-                                        [1.0 - e, 0.0, e, 0.0, 0.0],
-                                        [e, e, 0.0, 0.0, 0.0],
-                                        [0.0, e, e, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0 - e, e, 0.0],
-                                        [1.0 - e, 0.0, 0.0, e, 0.0],
-                                        [e, e, e, e, e],
-                                        [0.0, 0.0, 0.0, 0.0, e],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0 - e],
+                                        [e, 0.0, 1.0 - e, 0.0, 0.0, 0.0],
+                                        [1.0 - e, 0.0, e, 0.0, 0.0, 0.0],
+                                        [e, e, 0.0, 0.0, 0.0, 0.0],
+                                        [0.0, e, e, 0.0, 0.0, 0.0],
+                                        [0.0, 0.0, 1.0 - e, e, 0.0, 0.0],
+                                        [1.0 - e, 0.0, 0.0, e, 0.0, 0.0],
+                                        [e, e, e, e, e, 0.0],
+                                        [0.0, 0.0, 0.0, 0.0, e, 0.0],
+                                        [0.0, 0.0, 0.0, 0.0, 1.0 - e, 0.0],
                                     ] {
                                         let disc = disc_caps_at(set, PW + 62.0, 340.0, unfurl, labels);
                                         let last = hero_btn_rect_at(
@@ -1901,6 +1930,7 @@ mod tests {
             watchlist: true,
             go_show: true,
             version: true,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -1933,6 +1963,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -1959,6 +1990,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: false,
             trailer: true,
             alt: false,
@@ -1988,6 +2020,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -2030,6 +2063,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -2332,7 +2366,7 @@ mod tests {
         for restart in [false, true] {
             for version in [false, true] {
                 for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-                    let set = HeroSet { watchlist: false, version, restart, trailer: false, alt: false, mark, go_show: true };
+                    let set = HeroSet { watchlist: false, version, tracks: false, restart, trailer: false, alt: false, mark, go_show: true };
                     for language in SHIPPED {
                         let _guard = language_on_this_thread_for_test(language);
                         let mut unfurl = [0.0; DISCS];
