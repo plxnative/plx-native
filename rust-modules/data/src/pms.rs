@@ -1173,30 +1173,35 @@ struct Shelf {
     /// ([`HubRef::epoch`]). Bookkeeping of this run: not recorded, not hashed.
     #[serde(skip)]
     epoch: u32,
-    /// Which library this row belongs to ([`ShelfLibrary`]): decided at projection from the cards the row
-    /// holds, again by each refresh that brings a full preview, re-decided by [`admit`] from what its hub names alone, no cards, once its window has moved ([`Shelf::paged`]), and carried across every replacement
-    /// of a row that has given its cards up (a refresh, a window read, a landing), so Library order
-    /// ranks the row the same whether it holds its cards or gave them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
-    #[serde(skip)]
+    /// Which library this row belongs to ([`ShelfLibrary`]): **decided once**, when the row is projected
+    /// from `/hubs`, from what its hub names (id, else its key's `sectionID`) and else the cards of
+    /// its FIRST page. No window move alters it: a page read decides nothing ([`adopt_window`]
+    /// hands the projected row's decision on, [`land_page`] and [`land_reload`] replace window fields
+    /// only), and a refresh that finds the row's cards given up keeps the decision made while it held them
+    /// ([`carry_descriptors`]). It is recorded with the row, so a replay reads what the live run
+    /// decided instead of re-deriving it from a window whose first page is not in the recording.
+    /// An older recording has no such field and decodes `Unknown` ([`admit`] decides it).
+    #[serde(default, skip_serializing_if = "ShelfLibrary::is_unknown")]
     library: ShelfLibrary,
 }
 
 /// **Which library a Home row belongs to**: three states, not a number with a sentinel.
 ///
 /// Library order ranks a row by its library, and a row's cards cannot be asked for it later (a row in
-/// the ring has given them up), so the answer is computed while the row holds its cards (at projection, and again
-/// by a refresh's full preview), and travels with the row once it gives them up.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// the ring has given them up, a row paged past its first page holds a window of its listing), so the
+/// answer is decided ONCE, at projection, and travels with the row, in the recording too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ShelfLibrary {
-    /// Not computed: a row built from a page read (it replaces a window of a row that was projected, and
-    /// never stands alone), or decoded from a recording. A full build is decided as it is admitted
-    /// ([`admit`], [`Shelf::decide_library`]); a row that is still `Unknown` is read from its hub id
-    /// alone ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
+    /// Not decided. After [`admit`] no row of a source's `last` is `Unknown`: projection decides every
+    /// row, a page read's row (`fetch_row`, which replaces a window of a row that was projected and never
+    /// stands alone) hands its window over without touching the decision, and a row decoded from a
+    /// recording that predates the field is decided by [`admit`] ([`Shelf::decide_library`]). A build that
+    /// never went through [`admit`] (a test's) is read from its hub id alone ([`ShelfLibrary::resolve`]).
     #[default]
     Unknown,
-    /// Computed: the row belongs to no single library (a whole-server hub, or cards of several).
+    /// Decided: the row belongs to no single library (a whole-server hub, or first-page cards of several).
     Mixed,
-    /// Computed: the row's cards (or its hub id) name this one library (`librarySectionID`).
+    /// Decided: the row's hub (id or key) or its first-page cards name this one library (`librarySectionID`).
     One(i64),
 }
 
@@ -1205,7 +1210,8 @@ impl ShelfLibrary {
     /// its id, else the `sectionID` of its key, which is how a `home.<type>.recent` hub, one per library
     /// when a household owns two of a type, finds its library), none for a hub that spans the server
     /// (`plex::library_order::is_whole_server_hub`), else the one `librarySectionID` every card
-    /// shares. A moved window passes no cards ([`Shelf::decide_library`]), so the last step is `Mixed`.
+    /// shares, else `Mixed`. Called with the cards of a row's FIRST page (projection) and, for a row
+    /// decoded from a recording that predates the recorded decision, with the cards it holds ([`Shelf::decide_library`]).
     fn projected(hub_id: &str, key: &str, items: &[Arc<PmsMovie>]) -> Self {
         if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id, key) { return Self::One(library); }
         if plx_plex::plex::library_order::is_whole_server_hub(hub_id) { return Self::Mixed; }
@@ -1225,27 +1231,21 @@ impl ShelfLibrary {
     }
     /// What a row that replaces another knows: its own decision, else the one it replaces.
     fn or(self, other: Self) -> Self { if self == Self::Unknown { other } else { self } }
+    fn is_unknown(&self) -> bool { *self == Self::Unknown }
 }
 
 impl Shelf {
     fn is(&self, id: &str, key: &str) -> bool { self.hub_id == id && self.key == key }
     /// A descriptor: the row gave its cards up to the ring and keeps what is needed to ask for them.
     fn released(&self) -> bool { self.items.is_empty() && self.shown > 0 }
-    /// The window has moved off the row's first page: it starts past the head of the listing, or the
-    /// row has left the state its preview began in (a ledger, a sample, a probed listing). Such a
-    /// window's cards say nothing of the row's library, and the first-page preview that did is not
-    /// in a recording. (A Recently Added row that grew from the head and never slid keeps `Head`
-    /// mode and offset 0, so it counts as its first page; its hub names its library, so its cards
-    /// are never asked.)
-    fn paged(&self) -> bool { self.offset > 0 || self.row != paging::preview_state(&self.hub_id, &self.key) }
-    /// **The one rule for a row's library**, run by [`admit`] on every full build, live or replayed:
-    /// what the hub names (its id, else its key's `sectionID`: `hub_library`), then, ONLY for a row
-    /// still on its first page, the cards it holds (a decision projection already made is kept, one a
-    /// recording decoded as `Unknown` is made now), else `Mixed`. A moved window ([`Shelf::paged`])
-    /// never reads its cards.
+    /// Decides a row that arrived undecided, which only a recording that predates the recorded
+    /// decision brings ([`ShelfLibrary::Unknown`]): what the hub names, else the cards the row holds. A
+    /// decided row is never touched, whatever its window, so one row has one answer for its whole life
+    /// and the live run and its replay rank it alike.
     fn decide_library(&mut self) {
-        self.library = if self.paged() { ShelfLibrary::projected(&self.hub_id, &self.key, &[]) }
-            else { self.library.or(ShelfLibrary::projected(&self.hub_id, &self.key, &self.items)) };
+        if self.library == ShelfLibrary::Unknown {
+            self.library = ShelfLibrary::projected(&self.hub_id, &self.key, &self.items);
+        }
     }
 }
 
@@ -1656,10 +1656,9 @@ fn land_reload(source: &mut Src, page: &PageQuery, build: SourceBuild) -> bool {
 }
 
 /// A window read replaces the first-page shelf `/hubs` just projected. The row keeps the title and the
-/// library the projection gave it: a page read has no title of its own and its cards are no evidence
-/// of the row's library (a window of a mixed row may hold cards of one). That library is only
-/// provisional: [`admit`] decides a row whose window has moved without reading its cards ([`Shelf::paged`]),
-/// the one answer a replay can also reach, since the first-page projection is not in the recording.
+/// library the projection gave it: a page read has no title of its own and decides no library (its cards
+/// are a window of the listing, no evidence of the row's library: a window of a mixed row may hold cards
+/// of one). The decision is the projection's, from the row's first page, and stays.
 fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
     refreshed.title = shelf.title.clone();
     if let Some(mut ledger) = old.row.ledger.clone() {
@@ -1667,24 +1666,15 @@ fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
         ledger.note(&rows);
         refreshed.row.ledger = Some(ledger);
     }
-    refreshed.library = refreshed.library.or(shelf.library);
+    refreshed.library = shelf.library;
     *shelf = refreshed;
 }
 
 /// **Where a full build is admitted as a source's `last`**: every landing path ends here, live and
-/// replayed, so a row leaves it with its library DECIDED by ONE rule ([`Shelf::decide_library`]) that
-/// reads nothing but what the recording holds:
-/// - what the hub names decides first: its id, else its key's `sectionID` (`hub_library`), which a
-///   recording keeps for a row whatever its window;
-/// - a row still on its first page (offset 0, the state its preview began in) then keeps the
-///   decision projection made from its cards, and a row decoded from a recording
-///   ([`ShelfLibrary::Unknown`]) is decided now from the cards it holds, which is what projection did;
-/// - a row whose window has moved ([`Shelf::paged`]) reads no cards, whatever it was decided before:
-///   its first page is not in the recording, and the cards of a window are no evidence of the row's
-///   library. It is `Mixed` when the hub names none.
-///
-/// So the live run and its replay rank every row alike. Then what the build replaces hands its rows'
-/// libraries and descriptors on ([`carry_descriptors`]).
+/// replayed. A row arrives with its library decided (projection decided it and the recording kept it),
+/// and a row decoded from a recording that predates that is decided now ([`Shelf::decide_library`]).
+/// A decided row is left alone: nothing about its window changes its library. Then what the build
+/// replaces hands its rows' libraries and descriptors on ([`carry_descriptors`]).
 fn admit(old: Option<&SourceBuild>, new: &mut SourceBuild) {
     for shelf in &mut new.shelves { shelf.decide_library(); }
     if let Some(old) = old { carry_descriptors(old, new); }
@@ -1699,8 +1689,7 @@ fn carry_descriptors(old: &SourceBuild, new: &mut SourceBuild) {
         if !was.released() { continue; }
         // a row that gave its cards up keeps the decision made while it held them: nothing of it is
         // left to decide from, and the refresh's own preview is a sample. A row that still holds a
-        // full fresh preview (the early `continue` above) keeps what `admit` decided from that preview;
-        // one whose window moved was decided by `admit` from its hub id alone, live and replayed.
+        // full fresh preview (the early `continue` above) keeps the decision its first page just got.
         shelf.library = was.library.or(shelf.library);
         if !pages(&shelf.key) {
             // nothing but the refresh's own preview says what the row shows now (a row the refresh

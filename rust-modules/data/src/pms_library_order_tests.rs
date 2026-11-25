@@ -366,8 +366,8 @@ fn a_window_read_keeps_the_library_of_the_row_it_replaces() {
     assert_eq!(shelf.title, "Mixed");
 }
 
-/// F7, the replay case: a row decoded from a recording has decided nothing, so it ranks by its hub id
-/// alone, and gives the same place before and after it gives its cards up.
+/// F7, the replay case: a row decoded from a recording keeps the decision it was recorded with, and
+/// gives the same place before and after it gives its cards up.
 #[test]
 fn a_replayed_row_ranks_the_same_before_and_after_it_gives_its_cards_up() {
     let mut srcs = two_sources();
@@ -387,8 +387,8 @@ fn a_replayed_row_ranks_the_same_before_and_after_it_gives_its_cards_up() {
 }
 
 /// F7, the live-versus-replay case: a row whose hub id names no library is ranked by the library its
-/// cards share. A recording decodes it as `Unknown`, and admission decides it the way projection did,
-/// so the replayed run shows the same order as the live one, and keeps it when the row is released.
+/// first-page cards share. Projection decided it and the recording KEEPS the decision, so the replayed
+/// run reads what the live run decided and shows the same order, and keeps it when the row is released.
 #[test]
 fn a_card_derived_row_ranks_the_same_replayed_as_live() {
     let recent = |sec: i64, id: &str| shelf_in(0, sec, id, id, &[&format!("{id}-a")]);
@@ -399,25 +399,37 @@ fn a_card_derived_row_ranks_the_same_replayed_as_live() {
     let show = |srcs: &[Src; 1]| ids(&merge_with_scope(srcs, &scope(&order, &defaults(&order))).1);
     let before = show(&live);
     assert_eq!(before, ["mock.shelf.0", "tv.recentlyadded.2", "movie.recentlyadded.1"], "the mixed row travels with library 2");
-    // what a replay hands the landing: every row decoded, deciding nothing
+    // what a replay hands the landing: every row decoded, the decision it was recorded with intact
     let build = live[0].last.as_mut().unwrap();
-    for shelf in &mut build.shelves {
-        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
-        assert_eq!(shelf.library, ShelfLibrary::Unknown);
-    }
+    let decided: Vec<ShelfLibrary> = build.shelves.iter().map(|shelf| shelf.library).collect();
+    for shelf in &mut build.shelves { *shelf = round_trip(shelf); }
+    assert_eq!(build.shelves.iter().map(|shelf| shelf.library).collect::<Vec<_>>(), decided);
     admit(None, build);
-    assert_eq!(show(&live), before, "admission decided it from the cards, as projection had");
+    assert_eq!(show(&live), before, "the replayed run ranks it as the live run did");
     let mixed = &mut live[0].last.as_mut().unwrap().shelves[1];
     mixed.shown = mixed.items.len();
     mixed.items = Vec::new();
     assert_eq!(show(&live), before, "and it keeps its place when it gives its cards up");
 }
 
+/// A recording from before the decision was recorded has no `library` field: it decodes `Unknown`, and
+/// admission decides it from what the hub names, else the cards the row holds (what projection did).
+#[test]
+fn a_recording_without_the_decision_is_decided_at_admission() {
+    let mut json = serde_json::to_value(shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"])).unwrap();
+    assert!(json.as_object_mut().unwrap().remove("library").is_some(), "the decision is recorded");
+    let mut build = built(0, &[], vec![serde_json::from_value(json).unwrap()]);
+    assert_eq!(build.shelves[0].library, ShelfLibrary::Unknown);
+    admit(None, &mut build);
+    assert_eq!(build.shelves[0].library, ShelfLibrary::One(2));
+}
+
+fn round_trip(shelf: &Shelf) -> Shelf { serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap() }
+
 /// F7, live versus replay for a held row paged past its first page: its first page was mixed, the
 /// window it holds now has cards of one library. Live, the refresh's window read keeps the first-page
-/// projection's `Mixed` ([`adopt_window`]); a recording holds only the window and decodes the row
-/// `Unknown`. One rule decides both ([`Shelf::decide_library`]): a moved window is read from its hub
-/// id alone, so the live run and the replayed run publish the same Home order.
+/// projection's `Mixed` ([`adopt_window`]); the recording keeps that decision, so the replayed run
+/// publishes the same Home order as the live one.
 #[test]
 fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
     let recent = |sec: i64, id: &str| shelf_in(0, sec, id, id, &[&format!("{id}-a")]);
@@ -433,15 +445,13 @@ fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
     window.library = ShelfLibrary::Unknown; // what the window read builds: it decided nothing
     let mut live_row = first;
     adopt_window(&mut live_row, window, &old);
-    assert!(live_row.paged());
+    assert_eq!(live_row.offset, 40);
     let mut live = built(0, &[], vec![recent(1, "movie.recentlyadded.1"), live_row, recent(2, "tv.recentlyadded.2")]);
     admit(None, &mut live); // the live landing is admitted like the replayed one
     let mut replayed = live.clone();
-    for shelf in &mut replayed.shelves {
-        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
-        assert_eq!(shelf.library, ShelfLibrary::Unknown);
-    }
+    for shelf in &mut replayed.shelves { *shelf = round_trip(shelf); }
     admit(None, &mut replayed);
+    assert_eq!(replayed.shelves[1].library, ShelfLibrary::Mixed, "the recording holds what the live run decided");
     let order = [(sid(0), 2), (sid(0), 1)];
     let show = |build: SourceBuild| {
         let srcs = [src(0, "", HubState::Ready, Some(build))];
@@ -449,14 +459,14 @@ fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
     };
     assert_eq!(show(live), show(replayed.clone()));
     assert_eq!(show(replayed), ["tv.recentlyadded.2", "movie.recentlyadded.1", "mock.shelf.0"],
-        "a paged row no hub id names ranks nowhere, so it follows the shelf before it");
+        "a mixed row ranks nowhere, so it follows the shelf before it");
 }
 
 /// Two libraries of one type: PMS answers a `home.television.recent` hub per library, each told
 /// apart only by the `sectionID` of its key (`twin_tv_libraries_home`). Paged past their first pages
-/// (windows at offset 40 whose cards are all one library's anyway), neither row can be decided by its
-/// cards, and the hub id names no library: the key does, so both still swap under a reorder, live and
-/// replayed. The key is recorded, which is what makes that the same answer in both.
+/// (windows at offset 40 whose cards are all one library's anyway), the hub id names no library: the
+/// key does, so both still swap under a reorder, live and replayed. The decision is recorded with the
+/// key, which is what makes that the same answer in both.
 #[test]
 fn twin_recent_rows_paged_past_their_first_page_still_swap_live_and_replayed() {
     let twin = |sec: i64, rk: &str| {
@@ -468,14 +478,11 @@ fn twin_recent_rows_paged_past_their_first_page_still_swap_live_and_replayed() {
     };
     let keys = |hubs: &[HubRow]| hubs.iter().map(|hub| hub.key.clone()).collect::<Vec<_>>();
     let mut live = built(0, &[], vec![twin(1, "t1"), twin(2, "t2")]);
-    assert!(live.shelves.iter().all(Shelf::paged));
     admit(None, &mut live);
     let mut replayed = live.clone();
-    for shelf in &mut replayed.shelves {
-        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
-        assert_eq!(shelf.library, ShelfLibrary::Unknown);
-    }
+    for shelf in &mut replayed.shelves { *shelf = round_trip(shelf); }
     admit(None, &mut replayed);
+    assert_eq!(replayed.shelves.iter().map(|shelf| shelf.library).collect::<Vec<_>>(), [ShelfLibrary::One(1), ShelfLibrary::One(2)]);
     let show = |build: &SourceBuild, order: &[(ServerId, i64)]| {
         let srcs = [src(0, "", HubState::Ready, Some(build.clone()))];
         keys(&merge_with_scope(&srcs, &scope(order, &defaults(order))).1)
@@ -486,4 +493,142 @@ fn twin_recent_rows_paged_past_their_first_page_still_swap_live_and_replayed() {
         assert_eq!(show(build, &natural), ["/hubs/home/recentlyAdded?type=2&sectionID=1", "/hubs/home/recentlyAdded?type=2&sectionID=2"]);
         assert_eq!(show(build, &swapped), ["/hubs/home/recentlyAdded?type=2&sectionID=2", "/hubs/home/recentlyAdded?type=2&sectionID=1"]);
     }
+}
+
+/// A lone `home.<type>.recent` hub: its key has no `sectionID` (`/hubs/home/recentlyAdded?type=1`,
+/// `docs/pms-api.md` §3), so its first page's cards name its library, once. `with_window` pages it.
+const LONE_MOVIES: &str = "/hubs/home/recentlyAdded?type=1";
+
+fn lone_movies(first_page: &[&str]) -> Shelf {
+    let mut shelf = shelf_in(0, 1, "Recently Added Movies", "home.movies.recent", first_page);
+    shelf.key = LONE_MOVIES.into();
+    shelf.library = ShelfLibrary::projected(&shelf.hub_id, &shelf.key, &shelf.items);
+    shelf.more = true;
+    shelf
+}
+
+fn library_tv() -> Shelf { shelf_in(0, 2, "TV", "tv.recentlyadded.2", &["tv-a"]) }
+
+/// The row as a window read leaves it: cards `from..`, so offset `from`, deciding no library.
+fn with_window(mut shelf: Shelf, from: usize, cards: &[&str]) -> Shelf {
+    let window = shelf_in(0, 1, "", &shelf.hub_id, cards);
+    shelf.items = window.items;
+    shelf.positions = (0..cards.len()).collect();
+    shelf.offset = from;
+    shelf.end = from + cards.len();
+    shelf
+}
+
+/// Home's rows for a source holding `build`, under TV then Movies.
+fn tv_then_movies(build: &SourceBuild) -> Vec<String> {
+    let order = [(sid(0), 2), (sid(0), 1)];
+    let srcs = [src(0, "", HubState::Ready, Some(build.clone()))];
+    ids(&merge_with_scope(&srcs, &scope(&order, &defaults(&order))).1)
+}
+
+/// A lone Recently Added Movies row the user paged past its first window, then a refresh lands while
+/// the row is held: the refresh projects the first page again (one library's cards) and the window
+/// read puts the row back where it was. The row keeps the library its first page named: Movies must
+/// not jump above TV under the user's focus because the window moved.
+#[test]
+fn a_refresh_of_a_held_paged_lone_recent_row_keeps_its_place() {
+    let paged_row = with_window(lone_movies(&["m0", "m1"]), 40, &["m40", "m41"]);
+    let old = built(0, &[], vec![paged_row.clone(), library_tv()]);
+    assert_eq!(old.shelves[0].library, ShelfLibrary::One(1));
+    let before = tv_then_movies(&old);
+    assert_eq!(before, ["tv.recentlyadded.2", "home.movies.recent"]);
+    // the refresh: the first page, then the window read of the row the user held
+    let mut fresh = lone_movies(&["m0", "m1"]);
+    let mut window = with_window(fresh.clone(), 40, &["m40", "m41"]);
+    window.library = ShelfLibrary::Unknown; // a page read decides nothing
+    adopt_window(&mut fresh, window, &paged_row);
+    assert_eq!(fresh.offset, 40);
+    let mut new = built(0, &[], vec![fresh, library_tv()]);
+    admit(Some(&old), &mut new);
+    assert_eq!(new.shelves[0].library, ShelfLibrary::One(1));
+    assert_eq!(tv_then_movies(&new), before, "Movies stays below TV");
+}
+
+/// One row, one library, whatever its window does: card-decided, paged to offset 40, released, then
+/// refreshed (a quiet read is admitted when it lands AND when it is published), reloaded and refreshed
+/// again. The decision is the same at every step, so the same row at the same offset never holds
+/// `One` or `Mixed` by the timing of a refresh.
+#[test]
+fn a_rows_library_is_constant_across_every_window_move_and_replacement() {
+    let mut source = src(0, "", HubState::Ready, Some(built(0, &[], vec![lone_movies(&["m0", "m1"]), library_tv()])));
+    let library = |source: &Src| find_shelf(&source.last.as_ref().unwrap().shelves, "home.movies.recent", LONE_MOVIES).unwrap().library;
+    let place = |source: &Src| tv_then_movies(source.last.as_ref().unwrap());
+    let natural = place(&source);
+    assert_eq!(library(&source), ShelfLibrary::One(1));
+    assert_eq!(natural, ["tv.recentlyadded.2", "home.movies.recent"]);
+    let ask = |reload: bool| PageQuery { id: "home.movies.recent".into(), key: LONE_MOVIES.into(), start: 40, before: false, hidden: Vec::new(), reload };
+    // the user pages to offset 40
+    let window = |cards: &[&str]| built(0, &[], vec![with_window(lone_movies(&["m0", "m1"]), 40, cards)]);
+    let mut moved = window(&["m40", "m41"]);
+    moved.shelves[0].library = ShelfLibrary::Unknown;
+    assert!(land_page(&mut source, &ask(false), moved));
+    assert_eq!(library(&source), ShelfLibrary::One(1), "a window move decides nothing");
+    // a refresh lands while the row is held: the first page again, then the window read of the row
+    let held = find_shelf(&source.last.as_ref().unwrap().shelves, "home.movies.recent", LONE_MOVIES).unwrap().clone();
+    let mut fresh = lone_movies(&["n0", "n1"]);
+    let mut again = with_window(fresh.clone(), 40, &["m40", "m41"]);
+    again.library = ShelfLibrary::Unknown;
+    adopt_window(&mut fresh, again, &held);
+    let mut new = built(0, &[], vec![fresh, library_tv()]);
+    admit(source.last.as_ref(), &mut new);
+    source.last = Some(new);
+    assert_eq!(library(&source), ShelfLibrary::One(1), "a held row at offset 40 is the row it was");
+    assert_eq!(place(&source), natural);
+    // the ring takes its cards
+    let row = &mut source.last.as_mut().unwrap().shelves[0];
+    row.shown = row.items.len();
+    row.items = Vec::new();
+    assert!(row.released() && row.offset == 40);
+    // a refresh: admitted when the quiet read lands, and AGAIN when it is published, the second time
+    // over a row the first already carried to offset 40
+    let mut fresh = built(0, &[], vec![lone_movies(&["n0", "n1"]), library_tv()]);
+    admit(source.last.as_ref(), &mut fresh);
+    assert_eq!(fresh.shelves[0].offset, 40, "the refresh returns the row where it was");
+    assert_eq!(fresh.shelves[0].library, ShelfLibrary::One(1));
+    admit(source.last.as_ref(), &mut fresh);
+    source.last = Some(fresh);
+    assert!(find_shelf(&source.last.as_ref().unwrap().shelves, "home.movies.recent", LONE_MOVIES).unwrap().released());
+    assert_eq!(library(&source), ShelfLibrary::One(1));
+    assert_eq!(place(&source), natural);
+    // the row comes back into the ring: its window is read again where it stood
+    let mut reloaded = window(&["m40", "m41"]);
+    reloaded.shelves[0].library = ShelfLibrary::Unknown;
+    assert!(land_reload(&mut source, &ask(true), reloaded));
+    assert_eq!(library(&source), ShelfLibrary::One(1));
+    // and one more refresh over the held, paged row
+    let mut fresh = built(0, &[], vec![lone_movies(&["o0", "o1"]), library_tv()]);
+    admit(source.last.as_ref(), &mut fresh);
+    source.last = Some(fresh);
+    assert_eq!(library(&source), ShelfLibrary::One(1));
+    assert_eq!(place(&source), natural);
+}
+
+/// The decision is part of the recording: a landing written out and read back (what a replay does) holds
+/// the library the live run decided for every row, paged or released or not, and a page read's row,
+/// which decides nothing, is written without the field so its recording is what it always was.
+#[test]
+fn a_recorded_landing_keeps_every_rows_decided_library() {
+    let mut mixed = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"]);
+    Arc::make_mut(&mut mixed.items[1]).sec = 5;
+    mixed.library = ShelfLibrary::projected(&mixed.hub_id, &mixed.key, &mixed.items);
+    let paged_lone = with_window(lone_movies(&["m0"]), 40, &["m40"]);
+    let mut released = lone_movies(&["r0"]);
+    released.shown = released.items.len();
+    released.items = Vec::new();
+    let mut live = built(0, &[], vec![mixed, paged_lone, released, library_tv()]);
+    admit(None, &mut live);
+    let decided: Vec<ShelfLibrary> = live.shelves.iter().map(|shelf| shelf.library).collect();
+    assert_eq!(decided, [ShelfLibrary::Mixed, ShelfLibrary::One(1), ShelfLibrary::One(1), ShelfLibrary::One(2)]);
+    let mut replayed: SourceBuild = serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
+    admit(None, &mut replayed);
+    assert_eq!(replayed.shelves.iter().map(|shelf| shelf.library).collect::<Vec<_>>(), decided);
+    assert_eq!(tv_then_movies(&replayed), tv_then_movies(&live));
+    let mut page_read = with_window(lone_movies(&["m0"]), 40, &["m40"]);
+    page_read.library = ShelfLibrary::Unknown;
+    assert!(!serde_json::to_string(&page_read).unwrap().contains("library"), "an undecided row writes no decision");
 }

@@ -231,18 +231,14 @@ pub fn related_collection_hub(hub_identifier: &str, key: &str) -> Option<(i64, i
     if !(tail.is_empty() || tail.starts_with('.')) {
         return None;
     }
-    let (path, query) = key.split_once('?').unwrap_or((key, ""));
+    let path = key.split_once('?').map_or(key, |(path, _)| path);
     let section = path
         .strip_prefix("/library/sections/")
         .and_then(|rest| rest.split('/').next())
         .and_then(|s| s.parse().ok())
         .or_else(|| tail.strip_prefix('.')?.split('.').next()?.parse().ok())
         .unwrap_or(0);
-    let tag = query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("tagId="))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let tag = super::paging::query_value(key, "tagId").and_then(|v| v.parse().ok()).unwrap_or(0);
     Some((section, tag))
 }
 
