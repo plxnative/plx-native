@@ -773,25 +773,12 @@ pub fn local_calendar_date(seconds: i64) -> Option<[i32; 3]> {
     civil_date_of(libc::time_t::try_from(seconds).ok()?)
 }
 
-/// The local wall-clock hour and minute for a Unix timestamp, using the operating system's
-/// timezone rules (including daylight-saving transitions). A value outside this television's
-/// `time_t` range, or a timestamp the C library cannot convert, remains unknown.
-pub fn local_clock_time(seconds: i64) -> Option<[i32; 2]> {
-    if seconds <= 0 { return None; }
-    let stamp = libc::time_t::try_from(seconds).ok()?;
-    let mut out = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // SAFETY: both pointers are valid for localtime_r; the result is read only on success.
-    if unsafe { libc::localtime_r(&stamp, out.as_mut_ptr()) }.is_null() { return None; }
-    let local = unsafe { out.assume_init() };
-    Some([local.tm_hour, local.tm_min])
-}
-
 /// The operating system's UTC offset at a Unix timestamp, in seconds east of UTC (daylight saving
 /// included), as the C library's own conversion reports it (`tm_gmtoff` of `localtime_r`, present
 /// in the television's glibc and the libc crate's `tm` for it). The ONE answer to "what zone is
 /// this", so no caller derives it from two faces of the clock. A timestamp outside this
 /// television's `time_t` range, one the C library cannot convert, or one at or before the epoch
-/// remains unknown, like [`local_clock_time`]. Like [`local_calendar_date`] it is the os layer's
+/// remains unknown, like [`local_calendar_date`]. Like it, this is the os layer's
 /// read of the zone: the application's clock door is its caller and publishes the answer.
 pub fn local_utc_offset(seconds: i64) -> Option<i32> {
     if seconds <= 0 { return None; }

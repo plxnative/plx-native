@@ -45,6 +45,10 @@ thread_local! {
     /// The last read of the platform's zone (calendar date and UTC offset) and the minute (of the
     /// frame clock) it was read in.
     static ZONE: Cell<Option<(u32, Zone)>> = const { Cell::new(None) };
+    /// The last read of the zone's UTC offset at one other instant (a projected finish) and the Unix
+    /// second it was read for. Dropped whenever [`ZONE`] is read again, so a changed time-zone setting
+    /// reaches it within a minute like everything else.
+    static OFFSET_AT: Cell<Option<(i64, Option<i32>)>> = const { Cell::new(None) };
     /// A wall-clock Unix sample and its monotonic frame tick; advanced between five-second refreshes.
     static UNIX: Cell<Option<(u32, Option<i64>)>> = const { Cell::new(None) };
 }
@@ -112,7 +116,24 @@ fn zone(unix_s: i64) -> Zone {
         utc_offset_s: plx_os::i18n::local_utc_offset(unix_s),
     };
     ZONE.with(|c| c.set(Some((minute, zone))));
+    OFFSET_AT.with(|c| c.set(None));
     zone
+}
+
+/// **The OS zone's UTC offset at any Unix second** (seconds east of UTC, daylight saving included), for
+/// an instant that is not this frame's: the HUD's projected finish time, which may lie past a clock
+/// change that [`wall`]'s offset (the one in force now) does not know of. [`zone`]'s per-minute memo
+/// answers for NOW only, so this has its own single-entry memo keyed by the second asked for (a steady
+/// playback asks for the same finish second frame after frame) and dropped with the minute's zone read.
+/// `None` where the platform cannot say. **Only the loop calls it** (through the HUD model).
+pub(crate) fn utc_offset_at(unix_s: i64) -> Option<i32> {
+    plx_base::step::assert_io_allowed("app::clock::utc_offset_at");
+    if let Some((at, offset)) = OFFSET_AT.with(|c| c.get()) {
+        if at == unix_s { return offset; }
+    }
+    let offset = plx_os::i18n::local_utc_offset(unix_s);
+    OFFSET_AT.with(|c| c.set(Some((unix_s, offset))));
+    offset
 }
 
 /// **The wall time of this frame** for the loop to publish (`run::publish_frame` ->
@@ -163,7 +184,7 @@ mod tests {
         super::set_replay(4242);
         let _allowed = plx_base::task::allow_blocking(const { &plx_base::task::BlockingLabel::new("fixture") });
         let step = plx_base::step::StepScope::enter();
-        for read in [|| { super::now(); }, || { super::unix_ms(); }, || { super::today(); }, || { super::wall(); }] {
+        for read in [|| { super::now(); }, || { super::unix_ms(); }, || { super::today(); }, || { super::wall(); }, || { super::utc_offset_at(1_795_649_400); }] {
             assert!(std::panic::catch_unwind(read).is_err());
         }
         drop(step);
@@ -289,6 +310,29 @@ mod tests {
         assert_eq!(today, plx_os::i18n::local_calendar_date(wall.unix_s), "the date is of the same second as the offset");
         super::ZONE.with(|c| c.set(Some((0, super::Zone { today: Some([2001, 2, 3]), utc_offset_s: Some(60) }))));
         assert_eq!((super::today(), super::wall().map(|w| w.utc_offset_s)), (Some([2001, 2, 3]), Some(60)));
+        super::ZONE.with(|c| c.set(None));
+        super::UNIX.with(|c| c.set(None));
+    }
+
+    #[test]
+    fn the_offset_at_another_instant_is_its_own_lookup_kept_for_that_second_and_dropped_with_the_zone() {
+        super::REPLAY.with(|c| c.set(None));
+        super::OFFSET_AT.with(|c| c.set(None));
+        super::ZONE.with(|c| c.set(None));
+        const AT: i64 = 1_795_649_400;
+        assert_eq!(super::utc_offset_at(AT), plx_os::i18n::local_utc_offset(AT), "the platform's answer for that second");
+        assert_eq!(super::utc_offset_at(0), None, "an instant the zone cannot convert is no offset");
+        // A second asked for again within the zone's minute is the memo, not a new read.
+        super::OFFSET_AT.with(|c| c.set(Some((AT, Some(-4_500)))));
+        assert_eq!(super::utc_offset_at(AT), Some(-4_500));
+        assert_eq!(super::utc_offset_at(AT + 1), plx_os::i18n::local_utc_offset(AT + 1), "another second is another lookup");
+        // The minute's zone read drops it: a changed time-zone setting is noticed.
+        super::OFFSET_AT.with(|c| c.set(Some((AT, Some(-4_500)))));
+        super::ZONE.with(|c| c.set(None));
+        super::UNIX.with(|c| c.set(Some((0, Some(AT * 1_000)))));
+        assert!(super::wall().is_some());
+        assert_eq!(super::utc_offset_at(AT), plx_os::i18n::local_utc_offset(AT));
+        super::OFFSET_AT.with(|c| c.set(None));
         super::ZONE.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(None));
     }

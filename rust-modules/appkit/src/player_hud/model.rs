@@ -167,8 +167,7 @@ pub fn end_time_is_eligible(state: EndTimeEligibility) -> bool {
 ///
 /// Keep the wall clock and remaining media time at the precision given (milliseconds; the app passes
 /// the frame's published whole second, [`projected_end_clock`]) until they have been added.
-/// The caller words the result in the zone the frame's wall time published (the UTC offset at
-/// now), so a clock change between now and the end is not applied.
+/// The result is a clock face; [`projected_end_clock`] puts it in the zone at the END second.
 pub fn projected_end_unix_seconds(
     now_utc_ms: i64,
     position_ns: i64,
@@ -187,16 +186,21 @@ pub fn projected_end_unix_seconds(
 }
 
 /// **The finish time the HUD words**: [`projected_end_unix_seconds`] from the frame's published
-/// `wall` time (its second, so no second clock is read) as the viewer's `[hour, minute]` in the zone
-/// that publication carries (`plx_ui::fmt::clock_hm`: the one conversion every clock face shares).
+/// `wall` time (its second, so no second clock is read) as the viewer's `[hour, minute]` in the
+/// zone AT THE FINISH (`utc_offset_at`, the app's clock door: seconds east of UTC at the Unix second
+/// it is given, `None` where the zone cannot say), so a title that spans a clock change ends at the
+/// local time after it. Where the zone cannot be read at the end, `wall`'s own offset stands (a
+/// finish time a clock change off is better than none). The conversion is
+/// `plx_ui::fmt::clock_hm`, the one every clock face shares.
 pub fn projected_end_clock(
     wall: plx_ui::fmt::Wall,
     position_ns: i64,
     duration_ns: i64,
     rate_permille: Option<i32>,
+    utc_offset_at: impl FnOnce(i64) -> Option<i32>,
 ) -> Option<[i32; 2]> {
     let end = projected_end_unix_seconds(wall.unix_s.saturating_mul(1_000), position_ns, duration_ns, rate_permille)?;
-    plx_ui::fmt::clock_hm(end, i64::from(wall.utc_offset_s))
+    plx_ui::fmt::clock_hm(end, i64::from(utc_offset_at(end).unwrap_or(wall.utc_offset_s)))
 }
 
 #[cfg(test)]
@@ -208,12 +212,36 @@ mod end_time_tests {
         // 2026-11-25 21:00:00 UTC, thirty-five minutes of film at 1x, 2x and in three zones.
         let wall = |utc_offset_s| plx_ui::fmt::Wall { unix_s: 1_795_640_400, utc_offset_s };
         let film = 35 * 60 * 1_000_000_000i64;
-        assert_eq!(projected_end_clock(wall(0), 0, film, Some(1000)), Some([21, 35]));
-        assert_eq!(projected_end_clock(wall(3_600), 0, film, Some(1000)), Some([22, 35]));
-        assert_eq!(projected_end_clock(wall(-6 * 3_600), 0, film, Some(1000)), Some([15, 35]));
-        assert_eq!(projected_end_clock(wall(19_800), 0, film, Some(2000)), Some([2, 47]), "past midnight, a half-hour zone, doubled speed");
-        assert_eq!(projected_end_clock(wall(0), 0, film, None), None, "an unknown rate is not assumed");
-        assert_eq!(projected_end_clock(wall(0), film, film, Some(1000)), None, "nothing left to project");
+        // A zone with no clock change: the offset is the published one at every instant.
+        let steady = |offset: i32| move |_end: i64| Some(offset);
+        assert_eq!(projected_end_clock(wall(0), 0, film, Some(1000), steady(0)), Some([21, 35]));
+        assert_eq!(projected_end_clock(wall(3_600), 0, film, Some(1000), steady(3_600)), Some([22, 35]));
+        assert_eq!(projected_end_clock(wall(-6 * 3_600), 0, film, Some(1000), steady(-6 * 3_600)), Some([15, 35]));
+        assert_eq!(projected_end_clock(wall(19_800), 0, film, Some(2000), steady(19_800)), Some([2, 47]), "past midnight, a half-hour zone, doubled speed");
+        assert_eq!(projected_end_clock(wall(0), 0, film, None, steady(0)), None, "an unknown rate is not assumed");
+        assert_eq!(projected_end_clock(wall(0), film, film, Some(1000), steady(0)), None, "nothing left to project");
+    }
+
+    /// **The finish time is read in the zone at the finish, not at now.** A film that spans a clock
+    /// change shows the local time after it: here Central Europe on the night of 2026-10-25, when 03:00
+    /// CEST (+2) becomes 02:00 CET (+1) at 01:00 UTC. The zone is a lookup the caller supplies (the app's
+    /// clock door), so the case needs no process-wide TZ.
+    #[test]
+    fn a_title_spanning_a_clock_change_ends_at_the_local_time_after_it() {
+        const FALL_BACK: i64 = 1_792_890_000; // 2026-10-25 01:00:00 UTC
+        let berlin = |at: i64| Some(if at < FALL_BACK { 7_200 } else { 3_600 });
+        let wall = |unix_s| plx_ui::fmt::Wall { unix_s, utc_offset_s: berlin(unix_s).unwrap() };
+        let hours = |h: i64| h * 3_600 * 1_000_000_000;
+        // 00:30 UTC (02:30 CEST) now, a 2 h film: it ends 02:30 UTC = 03:30 CET, not 04:30 by now's +2.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), berlin), Some([3, 30]));
+        // Wholly before the change the zone is CEST at both ends: 20:30 UTC + 1 h = 21:30 UTC = 23:30 CEST.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 4 * 3_600 - 1_800), 0, hours(1), Some(1000), berlin), Some([23, 30]));
+        // The lookup is asked for the projected end second, not for now.
+        let asked = std::cell::Cell::new(None);
+        let _ = projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), |at| { asked.set(Some(at)); berlin(at) });
+        assert_eq!(asked.get(), Some(FALL_BACK - 1_800 + 7_200));
+        // A zone that cannot be read at the end falls back to the published offset: the finish is still shown.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), |_| None), Some([4, 30]));
     }
 
     #[test]

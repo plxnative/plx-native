@@ -771,9 +771,9 @@ fn hud_model(
         },
     ) {
         let rate = plx_media::player::effective_playback_rate(ps);
-        // The frame's published wall time (a replay has none): its second and zone are the ones every
-        // other clock face of the frame is read from.
-        wall.and_then(|wall| plx_appkit::player_hud::model::projected_end_clock(wall, position_ns?, duration_ns?, rate))
+        // The frame's published wall time (a replay has none) gives the second; the zone is read AT THE
+        // FINISH (`clock::utc_offset_at`), since a clock change may fall between now and then.
+        wall.and_then(|wall| plx_appkit::player_hud::model::projected_end_clock(wall, position_ns?, duration_ns?, rate, clock::utc_offset_at))
     } else {
         None
     };
