@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Ulubione biblioteki wróciły do kolejności, w jakiej wymieniają je serwery.",
   "library_order.state_unsaved": "Nie udało się zapisać kolejności; obowiązuje do ponownego uruchomienia PlxNative.",
   "library_order.preview_caption": "{kind} · Nagłówek biblioteki",
-  "library_order.preview_more": "Biblioteki, które się nie mieszczą, kryją się za ⋯."
+  "library_order.preview_more": "Biblioteki, które się nie mieszczą, kryją się za …."
 }

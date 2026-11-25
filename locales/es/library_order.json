@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Tus bibliotecas favoritas han vuelto al orden en que las listan tus servidores.",
   "library_order.state_unsaved": "No se pudo guardar este orden; se aplica hasta que se reinicie PlxNative.",
   "library_order.preview_caption": "{kind} · Cabecera de Biblioteca",
-  "library_order.preview_more": "Las bibliotecas que no caben van tras ⋯."
+  "library_order.preview_more": "Las bibliotecas que no caben van tras …."
 }

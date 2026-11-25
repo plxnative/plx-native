@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Le tue librerie preferite sono tornate nell’ordine in cui le elencano i tuoi server.",
   "library_order.state_unsaved": "Impossibile salvare questo ordine; vale finché PlxNative non viene riavviato.",
   "library_order.preview_caption": "{kind} · Intestazione Libreria",
-  "library_order.preview_more": "Le librerie che non entrano sono dietro ⋯."
+  "library_order.preview_more": "Le librerie che non entrano sono dietro …."
 }

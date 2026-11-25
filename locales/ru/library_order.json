@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Избранные медиатеки снова идут в том порядке, в котором их перечисляют ваши серверы.",
   "library_order.state_unsaved": "Не удалось сохранить порядок; он действует до перезапуска PlxNative.",
   "library_order.preview_caption": "{kind} · Шапка медиатеки",
-  "library_order.preview_more": "Медиатеки, которые не помещаются, скрыты за ⋯."
+  "library_order.preview_more": "Медиатеки, которые не помещаются, скрыты за …."
 }

@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Vos bibliothèques favorites sont revenues dans l’ordre indiqué par vos serveurs.",
   "library_order.state_unsaved": "Impossible d’enregistrer cet ordre ; il s’applique jusqu’au redémarrage de PlxNative.",
   "library_order.preview_caption": "{kind} · En-tête Bibliothèque",
-  "library_order.preview_more": "Les bibliothèques qui ne tiennent pas passent derrière ⋯."
+  "library_order.preview_more": "Les bibliothèques qui ne tiennent pas passent derrière …."
 }

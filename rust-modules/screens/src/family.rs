@@ -33,6 +33,9 @@ pub enum SettingsPage {
     Root,
     /// Install-wide language choice, applied next launch.
     Language,
+    /// Settings > Libraries > Library order: the order of the favorite libraries on Home and in the
+    /// Library header, moved one library at a time (`settings_library_order`).
+    LibraryOrder,
     /// Settings > Libraries > Under posters: what the focused poster's caption band shows.
     UnderPosters,
     /// Settings > Libraries > Under posters > Movie details / TV show details: the picker of the
@@ -126,6 +129,7 @@ impl SettingsPage {
         match self {
             SettingsPage::Root
             | SettingsPage::Language
+            | SettingsPage::LibraryOrder
             | SettingsPage::UnderPosters
             | SettingsPage::UnderPostersDetails(_)
             | SettingsPage::Contribute
@@ -188,6 +192,7 @@ impl ScreenArg for SettingsPage {
             SettingsPage::Language => 110,
             SettingsPage::Contribute => 111,
             SettingsPage::UnderPosters => 113,
+            SettingsPage::LibraryOrder => 122,
             SettingsPage::UnderPostersDetails(_) => 114,
             SettingsPage::Favourites => 101,
             SettingsPage::LibraryFavourites => 116,
@@ -238,6 +243,7 @@ impl LogicalState for SettingsPage {
         w.u8(match self {
             SettingsPage::Root
             | SettingsPage::Language
+            | SettingsPage::LibraryOrder
             | SettingsPage::UnderPosters
             | SettingsPage::Contribute
             | SettingsPage::Playback
@@ -261,6 +267,7 @@ impl LogicalState for SettingsPage {
             SettingsPage::Root => "root",
             SettingsPage::Language => "language",
             SettingsPage::Contribute => "contribute",
+            SettingsPage::LibraryOrder => "library-order",
             SettingsPage::UnderPosters => "under-posters",
             SettingsPage::UnderPostersDetails(_) => "under-posters-details",
             SettingsPage::Playback => "playback",
@@ -449,6 +456,7 @@ mod tests {
         let pages = [
             SettingsPage::Root,
             SettingsPage::Language,
+            SettingsPage::LibraryOrder,
             SettingsPage::UnderPosters,
             SettingsPage::UnderPostersDetails(PosterKind::Movie),
             SettingsPage::Contribute,

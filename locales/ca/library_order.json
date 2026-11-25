@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Les teves biblioteques preferides han tornat a l’ordre en què les llisten els servidors.",
   "library_order.state_unsaved": "No s’ha pogut desar aquest ordre; s’aplica fins que es reiniciï PlxNative.",
   "library_order.preview_caption": "{kind} · Capçalera de Biblioteca",
-  "library_order.preview_more": "Les biblioteques que no hi caben van darrere de ⋯."
+  "library_order.preview_more": "Les biblioteques que no hi caben van darrere de …."
 }

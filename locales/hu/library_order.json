@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "A kedvenc könyvtáraid visszaálltak abba a sorrendbe, ahogy a szerverek listázzák őket.",
   "library_order.state_unsaved": "A sorrendet nem sikerült elmenteni; a PlxNative újraindításáig érvényes.",
   "library_order.preview_caption": "{kind} · Könyvtár fejléce",
-  "library_order.preview_more": "A nem elférő könyvtárak a ⋯ mögött vannak."
+  "library_order.preview_more": "A nem elférő könyvtárak a … mögött vannak."
 }

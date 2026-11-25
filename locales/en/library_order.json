@@ -71,7 +71,7 @@
     }
   },
   "library_order.preview_more": {
-    "value": "Libraries that don't fit go behind ⋯.",
-    "description": "Caption under the header preview, shown only when the real Library header would not hold every library of the kind: the ones that do not fit are in the menu opened by the three-dots button. Keep the ⋯ character."
+    "value": "Libraries that don't fit go behind ….",
+    "description": "Caption under the header preview, shown only when the real Library header would not hold every library of the kind: the ones that do not fit are in the menu opened by the three-dots button. Keep the … character."
   }
 }
