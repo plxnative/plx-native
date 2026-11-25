@@ -625,6 +625,24 @@ fn a_second_quick_drop_does_not_snap_back_to_the_first_echo() {
 }
 
 #[test]
+fn a_dropped_order_the_store_never_echoes_is_given_up_on_by_the_tick_clock() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    assert_eq!(sent(&ok_lib(&mut page, &s, 2)).len(), 1);
+    let at = |ms: u32| ScreenEvent::<InnerHost>::Tick(plx_machine::machine::Tick { ms, dt_us: 16_000 });
+    // the store refused the command: it keeps publishing the old order
+    step_page(&mut page, &s, at(10_000));
+    assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "the page keeps its own rows while it waits");
+    step_page(&mut page, &s, at(12_999));
+    assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "still inside the patience, counted from the first tick after the drop");
+    step_page(&mut page, &s, at(13_000));
+    assert_eq!(order(&page), [0, 1, 2, 3, 4, 5], "past it the page shows what the store says");
+    assert_eq!(page.state.basis, Shown::Published);
+}
+
+#[test]
 fn while_an_order_waits_for_its_echo_the_record_and_write_state_still_follow_the_store() {
     let s = snap(six(), OrderState::Server, WriteState::Idle);
     let mut page = page_of(&s);
@@ -638,21 +656,6 @@ fn while_an_order_waits_for_its_echo_the_record_and_write_state_still_follow_the
     assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "rows hold");
     assert!(reset_stops(&page), "Reset is offered the moment the store says there is a record");
     assert!(page.state.seen.write_failed());
-}
-
-#[test]
-fn a_command_the_store_never_echoes_ends_its_wait_and_the_page_shows_what_the_store_says() {
-    let s = snap(six(), OrderState::Server, WriteState::Idle);
-    let mut page = page_of(&s);
-    pick_up(&mut page, &s, 2);
-    press(&mut page, &s, Key::Up);
-    ok_lib(&mut page, &s, 2);
-    let tick = |dt_us| ScreenEvent::Tick(plx_machine::machine::Tick { ms: 16, dt_us });
-    step_page(&mut page, &s, tick(1_000_000));
-    assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "still waiting after a second");
-    step_page(&mut page, &s, tick(2_500_000));
-    assert_eq!(order(&page), [0, 1, 2, 3, 4, 5], "the store never said it: the page tells the truth");
-    assert_eq!(page.state.basis, Shown::Published);
 }
 
 #[test]

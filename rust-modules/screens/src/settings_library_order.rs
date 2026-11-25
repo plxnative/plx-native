@@ -25,7 +25,7 @@
 //! name** ([`Shown`]). The page reads the publication through ONE adapter ([`Published`]); after a
 //! drop it is [`Shown::AwaitingEcho`] of the order it sent and keeps that order on screen, however
 //! many publications of OTHER orders pass first (an earlier drop's echo landing while the next
-//! library is held), until the store publishes the dropped order or [`ECHO_PATIENCE`] runs out
+//! library is held), until the store publishes the dropped order or [`ECHO_PATIENCE_MS`] runs out
 //! (a command the store refused never echoes). Reset is declared `inert` while the profile has no
 //! record (`OrderState::is_recorded`), so focus skips it; it stays offered while a failed write
 //! leaves a record standing, and the failed write says so in words ([`PageState::description`]).
@@ -254,9 +254,9 @@ fn kind_word(kind: SecKind) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 
 /// How long the page keeps a dropped order on screen waiting for the store to publish it, in
-/// seconds of ticks. The store republishes within its next step, so this only ends the wait for a
-/// command it refused (and so will never echo): the page then shows what the store says.
-const ECHO_PATIENCE: f32 = 3.0;
+/// milliseconds of the tick clock. The store republishes within its next step, so this only ends the
+/// wait for a command it refused (and so will never echo): the page then shows what the store says.
+const ECHO_PATIENCE_MS: u32 = 3_000;
 
 /// **Where the rows the page shows come from**: one named state, not an inference from a snapshot
 /// that goes stale while a library is held.
@@ -267,8 +267,9 @@ enum Shown {
     /// A drop sent this order (the libraries an order can name, as the shown rows had them) and the
     /// store has not published it yet: the page keeps its own rows, whatever else the store
     /// publishes meanwhile (an earlier drop's echo, say), until the store says exactly this order
-    /// or `waited` (seconds) reaches [`ECHO_PATIENCE`].
-    AwaitingEcho { order: Vec<LibraryRef>, waited: f32 },
+    /// or [`ECHO_PATIENCE_MS`] of the tick clock have passed since `since`, the first tick after the
+    /// drop (`None` until one lands): an absolute reading of the clock, never an accumulated delta.
+    AwaitingEcho { order: Vec<LibraryRef>, since: Option<u32> },
 }
 
 struct PageState {
@@ -373,10 +374,10 @@ impl LogicalState for PageState {
         write_rows(w, &self.shown);
         match &self.basis {
             Shown::Published => { w.u8(0); }
-            Shown::AwaitingEcho { order, waited } => {
+            Shown::AwaitingEcho { order, since } => {
                 w.u8(1).seq(order.len());
                 for lib in order { write_lib(w, lib); }
-                w.f32(*waited);
+                w.bool(since.is_some()).u32(since.unwrap_or(0));
             }
         }
         w.bool(self.seen.reset_offered()).bool(self.seen.write_failed());
@@ -398,7 +399,7 @@ impl LogicalState for PageState {
             },
             match &self.basis {
                 Shown::Published => "published".to_string(),
-                Shown::AwaitingEcho { order, waited } => format!("awaiting-echo({} libraries, {waited:.1}s)", order.len()),
+                Shown::AwaitingEcho { order, since } => format!("awaiting-echo({} libraries, since={since:?})", order.len()),
             },
             self.seen.reset_offered(), self.seen.write_failed(),
         ));
@@ -601,7 +602,7 @@ impl LibraryOrderPage {
     /// Take the store's word in: the rows follow the publication (never while a library is held, and
     /// not while a dropped order waits for its echo, [`Shown::AwaitingEcho`]), the record and write
     /// state always.
-    fn adopt(&mut self, directory: DirectoryView<'_>, dt: f32) -> bool {
+    fn adopt(&mut self, directory: DirectoryView<'_>, now_ms: u32) -> bool {
         if matches!(self.state.mode, Mode::Moving { .. }) {
             return false;
         }
@@ -612,9 +613,9 @@ impl LibraryOrderPage {
                 }
                 true
             }
-            Shown::AwaitingEcho { order, waited } => {
-                *waited += dt;
-                if named_order(rows_of(directory)) == *order || *waited >= ECHO_PATIENCE {
+            Shown::AwaitingEcho { order, since } => {
+                let since = *since.get_or_insert(now_ms);
+                if named_order(rows_of(directory)) == *order || now_ms.wrapping_sub(since) >= ECHO_PATIENCE_MS {
                     true
                 } else {
                     // the rows hold; what the record is and whether it saved still follow the store
@@ -673,7 +674,7 @@ impl LibraryOrderPage {
         match order_command(&self.state.shown).filter(|_| before != self.state.shown) {
             Some(command) => {
                 fx.push(Fx::App(AppFx::Store(StoreId::Browse, StoreCmd::Browse(command))));
-                self.state.basis = Shown::AwaitingEcho { order: named_order(&self.state.shown), waited: 0.0 };
+                self.state.basis = Shown::AwaitingEcho { order: named_order(&self.state.shown), since: None };
                 self.set_mode(Mode::Dropped(lifted));
             }
             None => self.set_mode(Mode::Idle),
@@ -771,7 +772,7 @@ impl Machine<InnerHost> for LibraryOrderPage {
                 Handled::Yes
             }
             ScreenEvent::Tick(t) => {
-                if self.adopt(cx.views.directory, t.dt()) {
+                if self.adopt(cx.views.directory, t.ms) {
                     fx.invalidate(Provenance::Input);
                 }
                 self.preview.sync(&self.state.shown, self.state.previewed(), cx.views.directory, cx.measure);
