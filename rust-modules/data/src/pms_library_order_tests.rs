@@ -412,3 +412,42 @@ fn a_card_derived_row_ranks_the_same_replayed_as_live() {
     mixed.items = Vec::new();
     assert_eq!(show(&live), before, "and it keeps its place when it gives its cards up");
 }
+
+/// F7, live versus replay for a held row paged past its first page: its first page was mixed, the
+/// window it holds now has cards of one library. Live, the refresh's window read keeps the first-page
+/// projection's `Mixed` ([`adopt_window`]); a recording holds only the window and decodes the row
+/// `Unknown`. One rule decides both ([`Shelf::decide_library`]): a moved window is read from its hub
+/// id alone, so the live run and the replayed run publish the same Home order.
+#[test]
+fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
+    let recent = |sec: i64, id: &str| shelf_in(0, sec, id, id, &[&format!("{id}-a")]);
+    // the first page the refresh projected: cards of two libraries, so `Mixed`
+    let mut first = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"]);
+    Arc::make_mut(&mut first.items[1]).sec = 1;
+    first.library = ShelfLibrary::projected(&first.hub_id, &first.items);
+    assert_eq!(first.library, ShelfLibrary::Mixed);
+    let old = first.clone();
+    // the window read of the row the user had paged to: past the head, every card in library 2
+    let mut window = shelf_in(0, 2, "", "mock.shelf.0", &["m40", "m41"]);
+    window.offset = 40;
+    window.library = ShelfLibrary::Unknown; // what the window read builds: it decided nothing
+    let mut live_row = first;
+    adopt_window(&mut live_row, window, &old);
+    assert!(live_row.paged());
+    let mut live = built(0, &[], vec![recent(1, "movie.recentlyadded.1"), live_row, recent(2, "tv.recentlyadded.2")]);
+    admit(None, &mut live); // the live landing is admitted like the replayed one
+    let mut replayed = live.clone();
+    for shelf in &mut replayed.shelves {
+        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
+        assert_eq!(shelf.library, ShelfLibrary::Unknown);
+    }
+    admit(None, &mut replayed);
+    let order = [(sid(0), 2), (sid(0), 1)];
+    let show = |build: SourceBuild| {
+        let srcs = [src(0, "", HubState::Ready, Some(build))];
+        ids(&merge_with_scope(&srcs, &scope(&order, &defaults(&order))).1)
+    };
+    assert_eq!(show(live), show(replayed.clone()));
+    assert_eq!(show(replayed), ["tv.recentlyadded.2", "movie.recentlyadded.1", "mock.shelf.0"],
+        "a paged row no hub id names ranks nowhere, so it follows the shelf before it");
+}
