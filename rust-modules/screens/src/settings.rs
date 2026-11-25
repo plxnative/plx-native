@@ -1329,7 +1329,7 @@ fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
     // (Privacy & data, Diagnostics, Legal notices, About PlxNative). A row is its label and a value,
     // a switch or a chevron: its sentence is [`sentence_for`]'s.
     //
-    // The Libraries section is Libraries and the row is Favorite libraries: the switch governs
+    // The Libraries section is Libraries and its first row is Favorite libraries: the switch governs
     // the whole app — Home's shelves, the top tab strip and the Library's Sources picker.
     let libraries = FormSection::new(plx_os::i18n::msg::settings_libraries_section())
         .visible(signed_in)

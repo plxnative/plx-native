@@ -365,8 +365,8 @@ fn the_preview_overflow_is_what_names_row_says_for_the_same_pills() {
         let mut page = page_of(&s);
         step_page(&mut page, &s, tick_ev());
         let pills: Vec<(String, usize)> = page.state.shown.iter().map(|r| (r.title.clone(), r.section)).collect();
-        let (right, widest) = crate::library::header_controls_at_rest(&MEASURE);
-        let expect = plx_ui::page_header::names_row(&pills, 0, right, &widest, crate::library::MAX_LIBRARY_PILLS, &MEASURE);
+        let (right, widest) = crate::registry::header_controls_at_rest(&MEASURE);
+        let expect = plx_ui::page_header::names_row(&pills, 0, right, &widest, crate::registry::MAX_LIBRARY_PILLS, &MEASURE);
         assert_eq!(page.preview.overflowed(), expect.overflowed(), "{count} libraries");
         assert_eq!(page.preview.slot().is_some(), true);
     }

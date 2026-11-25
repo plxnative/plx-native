@@ -1039,4 +1039,4 @@ nothing above draws a single pixel. For anything that moves pixels, capture the 
 cap-band re-centering are invisible until deployed.
 
 Note (library redesign): `cards::draw_label` is re-exported so screens can draw a poster caption
-through the shared label path; Settings > Libraries has two rows (Favorite libraries, Under posters).
+through the shared label path.

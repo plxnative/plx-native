@@ -125,8 +125,9 @@ pub fn table_row(t: &super::table::TableView, index: usize) -> Option<&super::ta
 }
 
 /// The LAYOUT indices of the rows of `t` an element stands for, in layout order: every row but a
-/// separator or a note (`Row::separator`, `Row::note`, both `sep`), which `TableView::n_rows` and so
-/// `GroupSpec::len` count but no key can land on and `TableView::row_frame` never places. With a
+/// hairline, a note or an `inert` row (`Row::selectable`), which `TableView::n_rows` counts but no
+/// key can land on and `TableView::row_frame` never places. `GroupSpec::len` counts every layout
+/// cell, except that a table with nothing selectable counts none. With a
 /// row-key map (`keys`, a form-backed table) a row is an element only when the form binds a key to
 /// it.
 pub fn table_elems<'a>(
@@ -345,7 +346,7 @@ where
         key(self.entry, best.1.max(0) as usize)
     }
     /// `row.<n>` for each row a key can land on, `n` its ordinal among them (see [`table_a11y`]): a
-    /// separator or note is a cell `GroupSpec::len` counts (`n_rows`) but no element, so the
+    /// separator, note or inert row is a cell `GroupSpec::len` counts (`n_rows`) but no element, so the
     /// listing is shorter than it by exactly those, and `place` (`TableView::row_frame`) places
     /// every row that is listed.
     fn a11y(&self, key: &H::Elem, _cx: &Cx<'_, H>) -> Option<A11y<'_>> {

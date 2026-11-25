@@ -248,6 +248,10 @@ pub use crate::item_menu::has_actions as item_has_menu;
 pub use crate::item_menu::Action as ItemMenuAction;
 /// Re-exported so a screen's test host names its init through the registry.
 pub use crate::family::NoInit;
+/// **The Library header's pieces a sibling page previews** (the `sibling` gate admits only `crate::registry`):
+/// Settings > Library order draws the header's names row from the same controls, pill budget and
+/// joined name the real Library header uses, so the preview folds exactly where the header does.
+pub(crate) use crate::library::{header_controls_at_rest, joined_name, MAX_LIBRARY_PILLS};
 /// The panels a sibling screen's host test reads through the shared vocabulary (the `sibling` gate
 /// admits only `crate::registry`): the Detail page's tests drive the real About panel and compare
 /// the audio summary against the tracks panel's full list.
@@ -3036,7 +3040,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
 // Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
-const SCREEN_SHAPES_PIN: u64 = 0x17bd_9205_2e59_cd6e;
+// Library order adds `SettingsPage::LibraryOrder` (ScreenId 122) to the Settings family's arg shape.
+// Previous pin: 0x17bd_9205_2e59_cd6e.
+const SCREEN_SHAPES_PIN: u64 = 0x0468_f845_c3c7_f5f6;
 
 #[cfg(test)]
 mod arg_tests {
@@ -3469,7 +3475,7 @@ mod a11y_coverage_tests {
         }
     }
 
-    /// How many leaf arms the table has: 22 flat `AppArg` arms, 5 `ContentArg`, 22 `SettingsPage` and
+    /// How many leaf arms the table has: 22 flat `AppArg` arms, 5 `ContentArg`, 23 `SettingsPage` and
     /// `FirstRunConsent`. A new arm fails [`coverage`] to compile, and then this to pass until the census
     /// below holds it too.
     const ARMS: usize = 51;

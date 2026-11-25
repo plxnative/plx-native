@@ -24,7 +24,7 @@
 //!
 //! The picture under the sentence is the header preview ([`Preview`]): the real Library header's
 //! names row for the kind of the library in view, laid out by `plx_ui::page_header::names_row` against
-//! the controls the real header passes ([`crate::library::header_controls_at_rest`]), so the ⋯ and
+//! the controls the real header passes ([`crate::registry::header_controls_at_rest`]), so the ⋯ and
 //! its note appear exactly when the real header would fold names behind it.
 
 use super::*;
@@ -301,13 +301,13 @@ impl Preview {
             return;
         };
         let pills: Vec<(String, usize)> = rows.iter().filter(|row| row.kind == of.kind)
-            .map(|row| (crate::library::joined_name(&row.title, &row.handle), row.section)).collect();
+            .map(|row| (crate::registry::joined_name(&row.title, &row.handle), row.section)).collect();
         let selected = pills.iter().position(|(_, section)| *section == of.section).unwrap_or(0);
         if self.built.as_ref().is_some_and(|(held, at)| *held == pills && *at == selected) {
             return;
         }
-        let (right, widest) = crate::library::header_controls_at_rest(measure);
-        self.row = Some(plx_ui::page_header::names_row(&pills, selected, right, &widest, crate::library::MAX_LIBRARY_PILLS, measure));
+        let (right, widest) = crate::registry::header_controls_at_rest(measure);
+        self.row = Some(plx_ui::page_header::names_row(&pills, selected, right, &widest, crate::registry::MAX_LIBRARY_PILLS, measure));
         self.built = Some((pills, selected));
         self.kind = of.kind;
     }
