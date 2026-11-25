@@ -1680,7 +1680,12 @@ are exactly 1920×1080. Captured on the panel: full-bleed, no letterbox, no crop
 the first sample and handing straight to the UI with no black frame at 2.8 s sampling.
 
 LG's "the splash screen should not be black" line is not enforced — **Apple TV's own splash is
-99.5 % pure black**; ours is 66 %.
+99.5 % pure black**. Ours is pure black too (97 % of its pixels are #000000, 2026-11-25): an OLED
+panel switches a #000000 pixel fully off, so the field behind the logo stays dark instead of
+glowing faintly grey while the app boots.
+
+`assets/splash-master.png` is already the shipped artwork, so cut it WITHOUT `--splash-lift`: that
+option exists for a non-black splash, and passing it would undo the OLED black field.
 
 The master arrives at 1672×941, so the script resamples (LANCZOS, 1.148×). Measured cost: none
 detectable — 1 px 10–90 % edge transition and full contrast on both sides, because the art is
