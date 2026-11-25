@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Абраныя бібліятэкі зноў ідуць у парадку, у якім іх пералічваюць вашы серверы.",
   "library_order.state_unsaved": "Не ўдалося захаваць парадак; ён дзейнічае да перазапуску PlxNative.",
   "library_order.preview_caption": "{kind} · Загаловак «Бібліятэка»",
-  "library_order.preview_more": "Чацвёртая і наступныя схаваны за ⋯."
+  "library_order.preview_more": "Бібліятэкі, якія не змяшчаюцца, схаваны за ⋯."
 }

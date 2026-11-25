@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "As suas bibliotecas favoritas voltaram à ordem em que os servidores as listam.",
   "library_order.state_unsaved": "Não foi possível guardar esta ordem; aplica-se até o PlxNative reiniciar.",
   "library_order.preview_caption": "{kind} · Cabeçalho da Biblioteca",
-  "library_order.preview_more": "A quarta e as seguintes ficam atrás de ⋯."
+  "library_order.preview_more": "As bibliotecas que não cabem ficam atrás de ⋯."
 }

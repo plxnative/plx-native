@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Omiljene biblioteke ponovno su u poretku kojim ih navode vaši poslužitelji.",
   "library_order.state_unsaved": "Poredak nije moguće spremiti; vrijedi do ponovnog pokretanja PlxNative.",
   "library_order.preview_caption": "{kind} · Zaglavlje biblioteke",
-  "library_order.preview_more": "Četvrta i sljedeće skrivene su iza ⋯."
+  "library_order.preview_more": "Biblioteke koje se ne uklapaju skrivene su iza ⋯."
 }

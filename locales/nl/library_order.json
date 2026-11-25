@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Je favoriete bibliotheken staan weer in de volgorde waarin je servers ze vermelden.",
   "library_order.state_unsaved": "Deze volgorde kon niet worden opgeslagen; ze geldt totdat PlxNative opnieuw start.",
   "library_order.preview_caption": "{kind} · Koptekst Bibliotheek",
-  "library_order.preview_more": "De vierde en volgende zitten achter ⋯."
+  "library_order.preview_more": "Bibliotheken die niet passen zitten achter ⋯."
 }

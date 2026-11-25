@@ -12,5 +12,5 @@
   "library_order.state_reset_done": "Deine Lieblingsmediatheken stehen wieder in der Reihenfolge, in der deine Server sie auflisten.",
   "library_order.state_unsaved": "Diese Reihenfolge konnte nicht gespeichert werden; sie gilt, bis PlxNative neu gestartet wird.",
   "library_order.preview_caption": "{kind} · Kopfzeile der Mediathek",
-  "library_order.preview_more": "Die vierte und alle weiteren verbergen sich hinter ⋯."
+  "library_order.preview_more": "Mediatheken, die nicht passen, verbergen sich hinter ⋯."
 }

@@ -132,6 +132,12 @@ arguments, and its time is the `dt` it is handed.
      (`push`/`place`), `next_x` for the lazy break. Never write `x += w + GAP` for a new row.
      The same stack top to bottom is `vstack::VStack`/`VFlow` (`Anchor::{Top,Bottom,Centre}`, `Item::before` for a
      gap that belongs to the item below it, `AlertHead` for the alert family's eyebrow/title/path ladder); never `y += h + GAP`.
+   - **Reordering rows**: `table::RowMove` (`Off | Pickable | Lifted | Waiting`, set per row with `Row::moving`) is the ONE
+     move-mode state; the table draws chevrons, lift, shadow and ink from it and glides rows to whatever order a
+     `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
+     A row that is present but not a stop (`FormSection::inert`, `Row::selectable`) is drawn at .45 and skipped by focus.
+   - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
+     plan_names, names_row}`; never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
      `K_SCROLL`, `K_SNAP`; `popover::K_APPEAR`), not a new constant or a hand-made easing.
 
