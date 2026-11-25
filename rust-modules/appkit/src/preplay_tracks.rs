@@ -21,10 +21,11 @@
 //! &subtitleStreamID=..` (Off = `subtitleStreamID=0`) and, for an episode, writes the show's track
 //! memory, so the start's plan reads the pick instead of the old selection.
 //!
-//! **NOT YET WIRED for a movie's first start.** A movie has no show memory, so only the PUT carries
-//! the pick; the plan reads the loaded Detail's `selected` flags (`metadata::cached_playing`), which
-//! a pick does not change. A store command patching `selected` on the loaded item when a pick
-//! commits is still to be written (see the handoff in the commit message).
+//! **A movie's first start plans the pick.** A movie has no show memory, so besides the PUT the
+//! host sends [`patch_command`] (`MetadataCmd::PatchTracks`) to the metadata store: the loaded
+//! page's `selected` flags, which `metadata::cached_playing` and so the plan read, then say what was
+//! picked. [`PickerState`] is the panel's whole state (pages, slide, carried choice) and a screen
+//! only hosts it.
 //!
 //! **Host contract.** [`select`] writes a memo only for the half that differs from `now`, so a host
 //! carries the last [`Selection::chosen`] forward as the next `now` rather than re-deriving it from
@@ -35,8 +36,12 @@ use plx_data::metadata::sub_layout::{self, SubHeader, SubRow};
 use plx_data::metadata::track_names::TrackNames;
 use plx_data::metadata::Stream;
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
-use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
+use plx_machine::machine::Measure;
+use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::page_stack::{self, PageStack, PopoverPanel};
+use plx_ui::panel_motion::PanelMotion;
 use plx_ui::table::{Row, Section};
+use plx_ui::{Painter, Rect};
 
 use crate::track_menu::{audio_track_row, flat_row, in_lang_row};
 
@@ -281,6 +286,219 @@ pub fn commit(item: &plx_media::route::PreplayItem<'_>, sel: &Selection) -> bool
     plx_media::route::commit_preplay_pick(item, sel.audio_sid, sel.subtitle_sid, sel.audio_memo.clone(), sel.subtitle_memo.clone())
 }
 
+// ---- the panel's state: pages, slide, carried choice -------------------------------------------
+
+/// What BACK did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Back {
+    /// A page was popped; the panel stays.
+    Popped,
+    /// At the root: the host dismisses.
+    Dismiss,
+}
+
+/// What OK on a row did.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Outcome {
+    /// A drill-in: the page was pushed and the two pages slide.
+    Pushed,
+    /// A track was picked. The host commits it ([`commit`]) and patches the loaded page
+    /// ([`patch_command`]); the panel has already carried [`Selection::chosen`] forward as its own
+    /// `now` and rebuilt the page.
+    Picked(Selection),
+    /// A row with nothing to do (an index off the list).
+    Nothing,
+}
+
+/// **The Audio & Subtitles panel's state, with no screen**: the item's tracks, the choice made so
+/// far, the pages pushed over the root and the slide between them. The page showing is the
+/// stack's top (the root when empty), never a field of its own.
+pub struct PickerState {
+    tracks: plx_data::metadata::PreplayTracks,
+    /// What the panel reads as chosen: the server's selection at open, then each pick's
+    /// [`Selection::chosen`] (the host contract in the module doc).
+    now: Chosen,
+    pages: PageStack<PickPage, PickRow>,
+    pub form: FormTable<PickRow, (), PickPage>,
+    pub motion: PanelMotion,
+    /// The drawn rect of what opened the panel: `[x, y, w, h]` as bits, like every panel argument.
+    anchor: [u32; 4],
+}
+
+impl PickerState {
+    pub fn new(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> Self {
+        let mut s = Self {
+            now: chosen(TrackSet { audio: &tracks.audio, subs: &tracks.subs }),
+            tracks,
+            pages: PageStack::new(),
+            form: FormTable::new(plx_ui::table_screen::BAND_BASE),
+            motion: PanelMotion::new(),
+            anchor,
+        };
+        s.form.table.compact = false;
+        let root = s.page_form(PickPage::Root);
+        s.form.set(root, None);
+        s
+    }
+
+    fn set(&self) -> TrackSet<'_> {
+        TrackSet { audio: &self.tracks.audio, subs: &self.tracks.subs }
+    }
+
+    pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
+        &self.tracks
+    }
+
+    pub fn now(&self) -> Chosen {
+        self.now
+    }
+
+    /// The page showing.
+    pub fn page(&self) -> PickPage {
+        self.pages.top().unwrap_or(PickPage::Root)
+    }
+
+    pub fn depth(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// "Your languages" for the Subtitles page: the language of the audio that will play.
+    fn yours(&self) -> Vec<String> {
+        self.tracks.audio.get(self.now.audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
+    }
+
+    fn page_form(&self, page: PickPage) -> PickForm {
+        match page {
+            PickPage::Root => root_form(self.set(), self.now),
+            PickPage::Audio => audio_form(self.set(), self.now),
+            PickPage::Subtitles => subtitle_form(self.set(), self.now, &self.yours()),
+        }
+    }
+
+    /// Where focus opens on a page: the checked row, so the viewer sees what is chosen.
+    fn page_initial(&self, page: PickPage) -> Option<PickRow> {
+        match page {
+            PickPage::Root => None,
+            PickPage::Audio => Some(PickRow::Audio(self.now.audio)),
+            PickPage::Subtitles => Some(self.now.sub.map_or(PickRow::SubOff, PickRow::Sub)),
+        }
+    }
+
+    fn title_of(page: PickPage) -> Option<String> {
+        match page {
+            PickPage::Root => None,
+            PickPage::Audio => Some(plx_os::i18n::msg::widgets_tracks_audio().to_string()),
+            PickPage::Subtitles => Some(plx_os::i18n::msg::widgets_tracks_subtitles().to_string()),
+        }
+    }
+
+    /// OK on the row `id`.
+    pub fn ok(&mut self, id: PickRow) -> Outcome {
+        match pick_of(id) {
+            Pick::Open(page) => {
+                self.push(page, id);
+                Outcome::Pushed
+            }
+            pick => match select(self.set(), self.now, pick) {
+                Some(sel) => {
+                    self.now = sel.chosen;
+                    let form = self.page_form(self.page());
+                    self.form.set_sliding(form, Some(&id));
+                    Outcome::Picked(sel)
+                }
+                None => Outcome::Nothing,
+            },
+        }
+    }
+
+    /// Open `page` above the current one: remember the opener and its scroll, build the page, snap
+    /// to its checked row and start the slide.
+    fn push(&mut self, page: PickPage, opener: PickRow) {
+        self.pages.push(page, opener, self.form.table.scroll_pos());
+        let leaving = page_stack::leave_page(&mut self.form);
+        let form = self.page_form(page);
+        self.form.open(form, self.page_initial(page).as_ref());
+        self.form.table.set_title(Self::title_of(page));
+        self.motion.begin_slide(leaving, 1.0);
+    }
+
+    /// BACK: pop a page when there is one, else the host dismisses.
+    pub fn back(&mut self) -> Back {
+        let Some(saved) = self.pages.pop() else { return Back::Dismiss };
+        let leaving = page_stack::leave_page(&mut self.form);
+        self.motion.begin_slide(leaving, -1.0);
+        let form = self.page_form(self.page());
+        self.form.restore(form, Some(&saved.return_id), saved.scroll);
+        self.form.table.set_title(Self::title_of(self.page()));
+        Back::Popped
+    }
+
+    /// The panel's natural rect: under the opener when there is room, above it when there is not;
+    /// cached against the table's layout revision (the slide springs toward it).
+    pub fn panel_rect(&self, measure: &dyn Measure) -> Rect {
+        self.motion.natural(self.form.table.layout_rev(), || {
+            let [x, y, w, h] = self.anchor.map(f32::from_bits);
+            let pw = self.form.table.menu_panel_width(measure);
+            plx_ui::popover::under_or_above(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
+        })
+    }
+
+    pub fn shown_rect(&self, measure: &dyn Measure) -> Rect {
+        self.motion.shown(self.panel_rect(measure))
+    }
+
+    pub fn update(&mut self, dt: f32, measure: &dyn Measure) {
+        let natural = self.panel_rect(measure);
+        self.form.table.update(dt, natural.h);
+        self.motion.step(dt, natural);
+    }
+
+    pub fn draw(&self, appear: f32, measure: &dyn Measure) {
+        let natural = self.panel_rect(measure);
+        let p = Painter::root().alpha(appear).translate(0.0, plx_ui::popover::Popover::RISE * (1.0 - appear));
+        self.motion.draw(p, natural, 20.0, &self.form.table, measure);
+    }
+
+    /// The row identity under a focus key.
+    pub fn row_at(&self, key: RowKey) -> Option<PickRow> {
+        self.form.index_of_key(key).and_then(|i| self.form.binding_at(i)).map(|b| b.id)
+    }
+}
+
+impl PopoverPanel for PickerState {
+    type Id = PickRow;
+    type Act = ();
+    type Dest = PickPage;
+    fn form(&self) -> &FormTable<PickRow, (), PickPage> {
+        &self.form
+    }
+    fn motion(&self) -> &PanelMotion {
+        &self.motion
+    }
+    fn panel_rect(&self, measure: &dyn Measure) -> Rect {
+        PickerState::panel_rect(self, measure)
+    }
+    fn shown_rect(&self, measure: &dyn Measure) -> Rect {
+        PickerState::shown_rect(self, measure)
+    }
+}
+
+/// The store command that makes the loaded page's copy of the item's tracks say what was picked, so
+/// a movie's first start plans it (the plan reads those `selected` flags).
+pub fn patch_command(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection) -> plx_data::stores::metadata::MetadataCmd {
+    plx_data::stores::metadata::MetadataCmd::PatchTracks {
+        sid: tracks.sid,
+        rk: tracks.rk.clone(),
+        audio_sid: sel.audio_sid,
+        subtitle_sid: sel.subtitle_sid,
+    }
+}
+
+/// [`commit`] for a picker's own item.
+pub fn commit_for(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection) -> bool {
+    commit(&plx_media::route::PreplayItem::of(tracks), sel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +564,51 @@ mod tests {
         assert!(sel.audio_memo.is_some() && sel.subtitle_memo.is_none());
         assert!(select(set, now, pick_of(PickRow::OpenAudio)).is_none());
         assert!(select(set, now, Pick::Audio(9)).is_none());
+    }
+
+    fn picker() -> PickerState {
+        let (audio, subs) = item();
+        let tracks = plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0),
+            rk: "m1".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/f.mkv".into(),
+            audio,
+            subs,
+        };
+        PickerState::new(tracks, [0, 0, 0, 0])
+    }
+
+    /// OK on a drill-in pushes (the stack is the page), BACK pops to the root and only then dismisses.
+    #[test]
+    fn back_pops_a_page_before_it_dismisses() {
+        let mut p = picker();
+        assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
+        assert_eq!(p.ok(PickRow::OpenSubtitles), Outcome::Pushed);
+        assert_eq!((p.page(), p.depth()), (PickPage::Subtitles, 1));
+        assert_eq!(p.form.focusable_len(), 3, "Off and the two tracks");
+        assert_eq!(p.back(), Back::Popped);
+        assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
+        assert_eq!(p.back(), Back::Dismiss, "at the root BACK leaves the panel");
+    }
+
+    /// A pick carries its choice forward: the page is rebuilt checking it, the next pick is diffed
+    /// against it (a pick back to the original writes no memory of the half it did not change), and
+    /// the root reads it after the pop.
+    #[test]
+    fn a_pick_is_carried_forward_and_the_root_reads_it_after_the_pop() {
+        let mut p = picker();
+        assert_eq!(p.now(), Chosen { audio: 1, sub: None });
+        p.ok(PickRow::OpenSubtitles);
+        let Outcome::Picked(on) = p.ok(PickRow::Sub(1)) else { panic!("a track row picks") };
+        assert_eq!((on.audio_sid, on.subtitle_sid), (102, 202));
+        assert_eq!(p.now(), Chosen { audio: 1, sub: Some(1) });
+        let Outcome::Picked(off) = p.ok(PickRow::SubOff) else { panic!("Off picks") };
+        assert_eq!(off.subtitle_sid, 0);
+        assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off), "diffed against the carried pick, not the server's");
+        assert_eq!(p.back(), Back::Popped);
+        assert_eq!(subtitle_label(p.set(), p.now().sub), plx_os::i18n::msg::widgets_tracks_off());
+        assert_eq!(p.ok(PickRow::Audio(9)), Outcome::Nothing, "an index off the list picks nothing");
     }
 }
