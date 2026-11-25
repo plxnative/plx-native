@@ -223,7 +223,8 @@ fn face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
 /// within ten minutes of the start it says how long ago it started, otherwise the clock times
 /// and how long is left. `begin`/`end`/`now` are Unix seconds and `offset_s` the viewer's UTC offset
 /// (all four from the frame's [`Wall`] and the guide); the function reads no clock. `None` for an
-/// airing the guide does not have. At and after `end` there is no time left, so the line is the
+/// airing the guide does not have. Both clock times use the one offset published for `now`, so an airing
+/// that spans a daylight-saving change draws its far end an hour off (stated in the plan, D1). At and after `end` there is no time left, so the line is the
 /// clock times alone.
 pub fn airing_line_in(cx: &LocaleContext, surface: Airing, begin: i64, end: i64, now: i64, offset_s: i64) -> Option<String> {
     if !has_airing(begin, end) {
