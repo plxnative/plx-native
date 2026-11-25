@@ -47,7 +47,11 @@ pub enum Source {
     Page,
     /// The playback failure screen: the item that was playing (`metadata.playing()`) and the part of
     /// the failed attempt, which is the part the selection PUT addresses.
-    Failed { part_id: i64 },
+    ///
+    /// `pick` seeds the rows: the session's held pick, else the attempt's standing selection
+    /// (`route::failed_pick`), so a reopen shows what Try again would play. A seed like the page's
+    /// store pick, not part of the surface's identity (the canon below does not write it).
+    Failed { part_id: i64, pick: Option<plx_data::metadata::PreplayPick> },
 }
 
 /// What the container is asked to present: the host instance, the item the page stands on, the drawn
@@ -72,7 +76,7 @@ impl LogicalState for PreplayArg {
             Source::Page => {
                 c.u32(0);
             }
-            Source::Failed { part_id } => {
+            Source::Failed { part_id, .. } => {
                 c.u32(1).u64(part_id as u64);
             }
         }
@@ -337,12 +341,17 @@ pub(crate) mod tests {
             part: "/library/parts/9001/1/file.mkv".into(),
             audio: vec![stream(101, "English", "eng"), stream(102, "French", "fra")],
             subs: vec![stream(201, "English", "eng")],
+            pick: None,
         }
     }
 
     fn panel() -> PreplayPanelScreen {
+        panel_from(Source::Page)
+    }
+
+    fn panel_from(source: Source) -> PreplayPanelScreen {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = PreplayArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, source: Source::Page };
+        let arg = PreplayArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, source };
         PreplayPanelScreen::new(EntryId(3), arg, tracks())
     }
 
@@ -393,8 +402,7 @@ pub(crate) mod tests {
                 Fx::App(AppFx::Store(
                     StoreId::Metadata,
                     StoreCmd::Metadata(plx_data::stores::metadata::MetadataCmd::PatchTracks {
-                        subtitle_sid: 0,
-                        sub_choice: plx_data::metadata::SubChoice::Off,
+                        pick: plx_data::metadata::PreplayPick { sub: plx_data::metadata::SubPick::Off, .. },
                         ..
                     })
                 ))

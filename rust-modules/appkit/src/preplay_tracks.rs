@@ -21,20 +21,22 @@
 //! &subtitleStreamID=..` (Off = `subtitleStreamID=0`) and, for an episode, writes the show's track
 //! memory, so the start's plan reads the pick instead of the old selection.
 //!
-//! **A movie's first start plans the pick.** A movie has no show memory, so besides the PUT the
-//! host sends [`patch_command`] (`MetadataCmd::PatchTracks`) to the metadata store: the loaded
-//! page's `selected` flags, which `metadata::cached_playing` and so the plan read, then say what was
-//! picked. [`PickerState`] is the panel's whole state (pages, slide, carried choice) and a screen
-//! only hosts it.
+//! **One pick value.** What is chosen is a [`plx_data::metadata::PreplayPick`] (part, audio stream,
+//! subtitle as `Server` / `Off` / `Track`): the metadata store owns it and `MetadataCmd::PatchTracks`
+//! ([`patch_command`]) is its only writer. [`PickerState`] is seeded from [`PreplayTracks::pick`]
+//! (the store's, or on the failure screen the session's held / standing selection) and carries each
+//! [`Selection::pick`] forward as the only record of the choice; what the rows show is [`chosen`] of
+//! it. The resolve applies the same value to the item it plans, so a pick reaches the start whichever
+//! way the item arrives (the page's copy, a default fetch, a named version's fetch). Other
+//! readers read it; none keeps a second copy.
 //!
-//! **Host contract.** [`select`] writes a memo only for the half that differs from `now`, so a host
-//! carries the last [`Selection::chosen`] forward as the next `now` rather than re-deriving it from
-//! the server's flags; otherwise a pick back to the original leaves the intermediate pick in the
-//! show's memory.
+//! **Host contract.** [`select`] writes a memo only for the half that differs from the standing pick,
+//! which the panel carries forward; a host that rebuilds a panel seeds it from the stored pick, never
+//! from the server's flags.
 
 use plx_data::metadata::sub_layout::{self, SubHeader, SubRow};
 use plx_data::metadata::track_names::TrackNames;
-use plx_data::metadata::{Stream, SubChoice};
+use plx_data::metadata::{PreplayPick, Stream, SubPick};
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
 use plx_machine::machine::Measure;
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
@@ -43,6 +45,7 @@ use plx_ui::panel_motion::PanelMotion;
 use plx_ui::table::{Row, Section};
 use plx_ui::{Painter, Rect};
 
+use plx_media::route::PreplayItem;
 use crate::track_menu::{audio_track_row, flat_row, in_lang_row};
 
 /// The panel's pages. The root is the two rows; the other two are pushed by OK on one.
@@ -99,19 +102,25 @@ fn offered(s: &Stream) -> bool {
     !s.external || s.sidecar_renderable()
 }
 
-/// What the server has selected right now (`Stream.selected`), falling back to the file's default
-/// audio and to Off, which is what the plan starts from.
-pub fn chosen(set: TrackSet<'_>) -> Chosen {
-    let audio = set
-        .audio
-        .iter()
-        .position(|s| s.selected)
+/// What is chosen: the pick when there is one for this file, over what the server has selected
+/// (`Stream.selected`), falling back to the file's default audio and to Off, which is what the plan
+/// starts from. The ONE reading of a [`PreplayPick`] into indices; the panel's seed, its carried choice
+/// and each pick's diff all come through it.
+pub fn chosen(set: TrackSet<'_>, pick: Option<&PreplayPick>) -> Chosen {
+    let pick = pick.filter(|p| p.is_for(set.audio));
+    let audio = pick
+        .and_then(|p| set.audio.iter().position(|s| s.id == p.audio_sid))
+        .or_else(|| set.audio.iter().position(|s| s.selected))
         .or_else(|| set.audio.iter().position(|s| s.default))
         .unwrap_or(0);
     // The server's selected subtitle, even a sidecar the app cannot draw: Off must not read as
     // checked while the server still has a track selected (the page then lists it, see
     // `subtitle_form`).
-    let sub = set.subs.iter().position(|s| s.selected);
+    let sub = match pick.map_or(SubPick::Server, |p| p.sub) {
+        SubPick::Server => set.subs.iter().position(|s| s.selected),
+        SubPick::Off => None,
+        SubPick::Track(id) => set.subs.iter().position(|s| s.id == id),
+    };
     Chosen { audio, sub }
 }
 
@@ -236,40 +245,30 @@ pub fn pick_of(row: PickRow) -> Pick {
     }
 }
 
-/// A pick, resolved to the stream ids the PUT carries and the descriptors the show's memory keeps.
+/// A pick, resolved to the stream ids the PUT carries, the descriptors the show's memory keeps and
+/// the [`PreplayPick`] that is the one value of what is chosen.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Selection {
     pub chosen: Chosen,
     pub audio_sid: i64,
     /// `0` is Off.
     pub subtitle_sid: i64,
-    /// Whether the viewer has chosen Off, which the plan ranks above the account's subtitle rule
-    /// ([`SubChoice`]). Not derivable from `subtitle_sid == 0`: an audio-only pick on an item whose
-    /// subtitle was never touched also sends `0`.
-    pub sub_choice: SubChoice,
+    /// The standing pick after this one: what the store keeps (`PatchTracks`) and the next pick is
+    /// diffed against. Off is a value of its own, not `subtitle_sid == 0`: an audio-only pick on an
+    /// item whose subtitle was never touched also sends `0`.
+    pub pick: PreplayPick,
     /// Only for the half the viewer changed.
     pub audio_memo: Option<AudioMemo>,
     pub subtitle_memo: Option<SubtitleMemo>,
 }
 
-impl Selection {
-    /// The subtitle half a retry should carry: `Some(0)` for the viewer's Off, `Some(id)` for a track,
-    /// `None` when the viewer left subtitles alone (an audio pick on an item whose subtitle was never
-    /// touched keeps what the attempt stood on).
-    pub fn held_subtitle(&self) -> Option<i64> {
-        match self.sub_choice {
-            SubChoice::Off => Some(0),
-            SubChoice::Server => (self.subtitle_sid != 0).then_some(self.subtitle_sid),
-        }
-    }
-}
-
-/// Apply `pick` over `now`: the new choice and everything [`commit`] writes. `None` for a drill-in
-/// or an index off the list. `choice` is the viewer's standing subtitle decision so far: a subtitle
-/// row (Off or a track) replaces it, an audio pick keeps it.
-pub fn select(set: TrackSet<'_>, now: Chosen, choice: SubChoice, pick: Pick) -> Option<Selection> {
+/// Apply `pick` over `standing` (the pick so far for this file, `part_id` its part): the new choice
+/// and everything [`commit`] writes. `None` for a drill-in or an index off the list. A subtitle row
+/// (Off or a track) replaces the standing subtitle, an audio pick keeps it.
+pub fn select(set: TrackSet<'_>, part_id: i64, standing: Option<&PreplayPick>, pick: Pick) -> Option<Selection> {
+    let now = chosen(set, standing);
     let mut next = now;
-    let mut sub_choice = choice;
+    let mut sub = standing.filter(|p| p.is_for(set.audio)).map_or(SubPick::Server, |p| p.sub);
     let (mut audio_memo, mut subtitle_memo) = (None, None);
     match pick {
         Pick::Open(_) => return None,
@@ -280,22 +279,23 @@ pub fn select(set: TrackSet<'_>, now: Chosen, choice: SubChoice, pick: Pick) -> 
                 audio_memo = plx_media::route::memo_of_audio(set.audio, i);
             }
         }
-        Pick::Subtitle(sub) => {
-            if let Some(i) = sub {
+        Pick::Subtitle(row) => {
+            if let Some(i) = row {
                 set.subs.get(i)?;
             }
-            next.sub = sub;
-            sub_choice = if sub.is_none() { SubChoice::Off } else { SubChoice::Server };
-            if sub != now.sub {
-                subtitle_memo = Some(sub.map_or(SubtitleMemo::Off, |i| plx_media::route::memo_of_subtitle(&set.subs[i])));
+            next.sub = row;
+            sub = row.map_or(SubPick::Off, |i| SubPick::Track(set.subs[i].id));
+            if row != now.sub {
+                subtitle_memo = Some(row.map_or(SubtitleMemo::Off, |i| plx_media::route::memo_of_subtitle(&set.subs[i])));
             }
         }
     }
+    let audio_sid = set.audio.get(next.audio).map_or(0, |s| s.id);
     Some(Selection {
         chosen: next,
-        audio_sid: set.audio.get(next.audio).map_or(0, |s| s.id),
+        audio_sid,
         subtitle_sid: next.sub.map_or(0, |i| set.subs[i].id),
-        sub_choice,
+        pick: PreplayPick { part_id, audio_sid, sub },
         audio_memo,
         subtitle_memo,
     })
@@ -335,12 +335,11 @@ pub enum Outcome {
 /// stack's top (the root when empty), never a field of its own.
 pub struct PickerState {
     tracks: plx_data::metadata::PreplayTracks,
-    /// What the panel reads as chosen: the server's selection at open, then each pick's
-    /// [`Selection::chosen`] (the host contract in the module doc).
-    now: Chosen,
-    /// The viewer's Off, once chosen ([`SubChoice`]); the panel's own record, since `now.sub: None`
-    /// reads "Off" for an item whose subtitle the viewer never touched too.
-    sub_choice: SubChoice,
+    /// **What is chosen, as the one value** ([`PreplayPick`]): seeded from [`PreplayTracks::pick`] (the
+    /// store's pick, or on the failure screen the held / standing selection), then each pick's
+    /// [`Selection::pick`]. `None` until there is one: the rows then read the server's selection.
+    /// What the panel shows ([`Self::now`]) is [`chosen`] of it, never a second field.
+    pick: Option<PreplayPick>,
     pages: PageStack<PickPage, PickRow>,
     pub form: FormTable<PickRow, (), PickPage>,
     pub motion: PanelMotion,
@@ -351,9 +350,8 @@ pub struct PickerState {
 impl PickerState {
     pub fn new(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> Self {
         let mut s = Self {
-            now: chosen(TrackSet { audio: &tracks.audio, subs: &tracks.subs }),
+            pick: tracks.pick,
             tracks,
-            sub_choice: SubChoice::Server,
             pages: PageStack::new(),
             form: FormTable::new(plx_ui::table_screen::BAND_BASE),
             motion: PanelMotion::new(),
@@ -374,7 +372,7 @@ impl PickerState {
     }
 
     pub fn now(&self) -> Chosen {
-        self.now
+        chosen(self.set(), self.pick.as_ref())
     }
 
     /// The page showing.
@@ -388,14 +386,14 @@ impl PickerState {
 
     /// "Your languages" for the Subtitles page: the language of the audio that will play.
     fn yours(&self) -> Vec<String> {
-        self.tracks.audio.get(self.now.audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
+        self.tracks.audio.get(self.now().audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
     }
 
     fn page_form(&self, page: PickPage) -> PickForm {
         match page {
-            PickPage::Root => root_form(self.set(), self.now),
-            PickPage::Audio => audio_form(self.set(), self.now),
-            PickPage::Subtitles => subtitle_form(self.set(), self.now, &self.yours()),
+            PickPage::Root => root_form(self.set(), self.now()),
+            PickPage::Audio => audio_form(self.set(), self.now()),
+            PickPage::Subtitles => subtitle_form(self.set(), self.now(), &self.yours()),
         }
     }
 
@@ -403,8 +401,8 @@ impl PickerState {
     fn page_initial(&self, page: PickPage) -> Option<PickRow> {
         match page {
             PickPage::Root => None,
-            PickPage::Audio => Some(PickRow::Audio(self.now.audio)),
-            PickPage::Subtitles => Some(self.now.sub.map_or(PickRow::SubOff, PickRow::Sub)),
+            PickPage::Audio => Some(PickRow::Audio(self.now().audio)),
+            PickPage::Subtitles => Some(self.now().sub.map_or(PickRow::SubOff, PickRow::Sub)),
         }
     }
 
@@ -423,10 +421,9 @@ impl PickerState {
                 self.push(page, id);
                 Outcome::Pushed
             }
-            pick => match select(self.set(), self.now, self.sub_choice, pick) {
+            pick => match select(self.set(), PreplayItem::of(&self.tracks).part_id, self.pick.as_ref(), pick) {
                 Some(sel) => {
-                    self.now = sel.chosen;
-                    self.sub_choice = sel.sub_choice;
+                    self.pick = Some(sel.pick);
                     let form = self.page_form(self.page());
                     self.form.set_sliding(form, Some(&id));
                     Outcome::Picked(sel)
@@ -514,9 +511,7 @@ pub fn patch_command(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection
     plx_data::stores::metadata::MetadataCmd::PatchTracks {
         sid: tracks.sid,
         rk: tracks.rk.clone(),
-        audio_sid: sel.audio_sid,
-        subtitle_sid: sel.subtitle_sid,
-        sub_choice: sel.sub_choice,
+        pick: sel.pick,
     }
 }
 
@@ -549,7 +544,7 @@ mod tests {
     fn the_first_page_has_two_rows_reading_the_current_tracks() {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
-        let now = chosen(set);
+        let now = chosen(set, None);
         assert_eq!(now, Chosen { audio: 1, sub: None });
         let form = root_form(set, now);
         assert_eq!(rows(&form), 2);
@@ -561,7 +556,7 @@ mod tests {
     fn the_pages_list_every_track_and_off() {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
-        let now = chosen(set);
+        let now = chosen(set, None);
         assert_eq!(rows(&audio_form(set, now)), 2);
         // Off + the two subtitles
         assert_eq!(rows(&subtitle_form(set, now, &[])), 3);
@@ -571,30 +566,29 @@ mod tests {
     fn a_subtitle_pick_carries_both_ids_and_off_is_zero() {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
-        let now = chosen(set);
-        let on = select(set, now, SubChoice::Server, Pick::Subtitle(Some(1))).unwrap();
+        let on = select(set, 9, None, Pick::Subtitle(Some(1))).unwrap();
         assert_eq!((on.audio_sid, on.subtitle_sid), (102, 202), "the audio half is kept, not erased");
         assert!(on.audio_memo.is_none() && on.subtitle_memo.is_some());
-        let off = select(set, on.chosen, on.sub_choice, Pick::Subtitle(None)).unwrap();
+        let off = select(set, 9, Some(&on.pick), Pick::Subtitle(None)).unwrap();
         assert_eq!((off.audio_sid, off.subtitle_sid), (102, 0));
         assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off));
-        assert_eq!((on.sub_choice, off.sub_choice), (SubChoice::Server, SubChoice::Off));
+        assert_eq!((on.pick.sub, off.pick.sub), (SubPick::Track(202), SubPick::Off));
+        assert_eq!(off.pick.part_id, 9);
         // Off sticks across an audio pick; a never-touched subtitle is not "Off chosen" by one.
-        let audio = select(set, off.chosen, off.sub_choice, Pick::Audio(0)).unwrap();
-        assert_eq!(audio.sub_choice, SubChoice::Off);
-        assert_eq!(select(set, now, SubChoice::Server, Pick::Audio(0)).unwrap().sub_choice, SubChoice::Server);
+        let audio = select(set, 9, Some(&off.pick), Pick::Audio(0)).unwrap();
+        assert_eq!(audio.pick.sub, SubPick::Off);
+        assert_eq!(select(set, 9, None, Pick::Audio(0)).unwrap().pick.sub, SubPick::Server);
     }
 
     #[test]
     fn an_audio_pick_changes_only_the_audio_and_a_drill_in_picks_nothing() {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
-        let now = chosen(set);
-        let sel = select(set, now, SubChoice::Server, Pick::Audio(0)).unwrap();
+        let sel = select(set, 9, None, Pick::Audio(0)).unwrap();
         assert_eq!((sel.audio_sid, sel.subtitle_sid), (101, 0));
         assert!(sel.audio_memo.is_some() && sel.subtitle_memo.is_none());
-        assert!(select(set, now, SubChoice::Server, pick_of(PickRow::OpenAudio)).is_none());
-        assert!(select(set, now, SubChoice::Server, Pick::Audio(9)).is_none());
+        assert!(select(set, 9, None, pick_of(PickRow::OpenAudio)).is_none());
+        assert!(select(set, 9, None, Pick::Audio(9)).is_none());
     }
 
     fn picker() -> PickerState {
@@ -607,6 +601,7 @@ mod tests {
             part: "/library/parts/9001/1/f.mkv".into(),
             audio,
             subs,
+            pick: None,
         };
         PickerState::new(tracks, [0, 0, 0, 0])
     }
@@ -641,5 +636,103 @@ mod tests {
         assert_eq!(p.back(), Back::Popped);
         assert_eq!(subtitle_label(p.set(), p.now().sub), plx_os::i18n::msg::widgets_tracks_off());
         assert_eq!(p.ok(PickRow::Audio(9)), Outcome::Nothing, "an index off the list picks nothing");
+    }
+
+    /// Off, close, reopen, audio pick: the pick is the store's one value, so the reopened panel
+    /// reads Off and an audio pick keeps it (the plan's account rule then has nothing to turn on).
+    #[test]
+    fn a_reopened_panel_seeds_from_the_pick_and_an_audio_pick_keeps_off() {
+        let mut p = picker();
+        p.ok(PickRow::OpenSubtitles);
+        let Outcome::Picked(off) = p.ok(PickRow::SubOff) else { panic!("Off picks") };
+        let mut tracks = p.tracks().clone();
+        tracks.pick = Some(off.pick);
+        let mut again = PickerState::new(tracks, [0, 0, 0, 0]);
+        assert_eq!(again.now().sub, None);
+        let Outcome::Picked(audio) = again.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
+        assert_eq!((audio.pick.sub, audio.subtitle_sid), (SubPick::Off, 0), "Off survives the audio pick");
+    }
+
+    /// The failure screen seeds from the held / standing pick, over the lists' own flags.
+    #[test]
+    fn a_pick_seeds_the_rows_over_the_servers_flags() {
+        let (audio, subs) = item();
+        let set = TrackSet { audio: &audio, subs: &subs };
+        let pick = PreplayPick { part_id: 9, audio_sid: 101, sub: SubPick::Track(202) };
+        assert_eq!(chosen(set, Some(&pick)), Chosen { audio: 0, sub: Some(1) });
+        let other_file = PreplayPick { part_id: 9, audio_sid: 999, sub: SubPick::Track(202) };
+        assert_eq!(chosen(set, Some(&other_file)), chosen(set, None), "a pick of another file seeds nothing");
+    }
+
+    /// Select Version 2, then pick French: the panel offers version 2's part and streams, the PUT
+    /// addresses part 2, and the stored pick lands on version 2's item only (stream ids name the file).
+    #[test]
+    fn after_select_version_the_pick_addresses_that_versions_part_and_lands_on_its_streams() {
+        use plx_data::metadata::{Detail, PlayingItem, VersionPart};
+        use plx_data::stores::metadata::MetadataStore;
+        use plx_plex::plex::MediaId;
+        let _g = plx_base::testlock::serial();
+        let sid = plx_plex::plex::ServerId::from_raw(0);
+        let v1 = VersionPart {
+            id: MediaId(1),
+            part: "/library/parts/9001/1/a.mkv".into(),
+            audio: vec![stream(11, "English", "eng"), stream(12, "French", "fra")],
+            subs: vec![stream(21, "English", "eng")],
+        };
+        let v2 = VersionPart {
+            id: MediaId(2),
+            part: "/library/parts/9002/1/b.mkv".into(),
+            audio: vec![stream(31, "English", "eng"), stream(32, "French", "fra")],
+            subs: vec![stream(41, "English", "eng")],
+        };
+        let mut store = MetadataStore::default();
+        let detail = Detail {
+            sid,
+            rk: "m1".into(),
+            kind: "movie".into(),
+            part: v1.part.clone(),
+            audio: v1.audio.clone(),
+            subs: v1.subs.clone(),
+            version_parts: vec![v1.clone(), v2.clone()],
+            ..Default::default()
+        };
+        plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+        let tracks = store.view().preplay_tracks(sid, "m1", Some(MediaId(2))).expect("the chosen version's tracks");
+        assert_eq!(plx_media::route::PreplayItem::of(&tracks).part_id, 9002, "the PUT addresses version 2's part");
+        assert_eq!(tracks.audio.iter().map(|s| s.id).collect::<Vec<_>>(), [31, 32]);
+        let mut p = PickerState::new(tracks, [0, 0, 0, 0]);
+        let Outcome::Picked(sel) = p.ok(PickRow::Audio(1)) else { panic!("an audio row picks") };
+        assert_eq!((sel.audio_sid, sel.pick.part_id), (32, 9002));
+        assert!(store.run(patch_command(p.tracks(), &sel)));
+        let picks = store.view().picks_of(sid, "m1");
+        let item = |part: &VersionPart| {
+            let mut it = PlayingItem::with_subs(part.subs.clone());
+            it.audio = part.audio.clone();
+            it.apply_picks(&picks);
+            it
+        };
+        let on_v2 = item(&v2);
+        assert_eq!(on_v2.audio.iter().position(|s| s.selected), Some(1), "Play plans French on version 2");
+        assert!(item(&v1).audio.iter().all(|s| !s.selected), "version 1's streams are not the pick's");
+        let reopened = store.view().preplay_tracks(sid, "m1", Some(MediaId(2))).unwrap();
+        assert_eq!(reopened.pick, Some(sel.pick));
+        assert_eq!(store.view().preplay_tracks(sid, "m1", None).unwrap().pick, None, "another file's panel is not seeded by it");
+    }
+
+    /// Failure screen: seeded with the held French pick, the panel reads French checked and picking
+    /// English writes the memo (the diff is against the held pick, not the lists' old flags).
+    #[test]
+    fn a_failure_panel_seeded_with_french_shows_it_checked_and_english_writes_the_memo() {
+        let mut p = picker();
+        let mut tracks = p.tracks().clone();
+        for a in &mut tracks.audio {
+            a.selected = a.id == 101;
+        }
+        tracks.pick = Some(PreplayPick { part_id: 9001, audio_sid: 102, sub: SubPick::Server });
+        p = PickerState::new(tracks, [0, 0, 0, 0]);
+        assert_eq!(p.now().audio, 1, "French, over the flags' English");
+        let Outcome::Picked(sel) = p.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
+        assert!(sel.audio_memo.is_some(), "English differs from the held French");
+        assert_eq!(sel.pick.audio_sid, 101);
     }
 }

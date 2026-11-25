@@ -778,10 +778,12 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
                 if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
                     plx_base::eventlog::log("preplay: pick not written (no part to address)");
                 }
-                // On the failure screen the pick is also what Try again plays: held on the session, the
-                // one owner of what a retry carries.
-                if let plx_screens::preplay_panel::Source::Failed { part_id } = source {
-                    plx_media::route::hold_pick_for_retry(&mut app.player.session, part_id, sel.audio_sid, sel.held_subtitle());
+                // On the failure screen the pick is what the retry plays, and the pick STARTS it, as a
+                // quality pick from Change quality does (`apply_quality`): the pair is held on the
+                // session, the one owner of what a retry carries, and the retry consumes it. A refusal
+                // DecisionRefused has no Try again, so a pick that only held would have nothing to play it.
+                if let plx_screens::preplay_panel::Source::Failed { .. } = source {
+                    plx_media::route::hold_pick_for_retry(&mut app.player.session, &sel.pick);
                 }
             }
             ContentReq::Panel(panel) => {

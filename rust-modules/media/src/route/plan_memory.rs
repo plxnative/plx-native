@@ -28,7 +28,7 @@ pub(super) fn consulted_memory<'a>(
 ) -> Option<&'a SubtitleMemo> {
     memo.filter(|_| {
         override_id.is_none()
-            && item.sub_choice == plx_data::metadata::SubChoice::Server
+            && item.sub_choice == plx_data::metadata::SubPick::Server
             && plx_data::metadata::server_selected_sidecar(item).is_none()
     })
 }

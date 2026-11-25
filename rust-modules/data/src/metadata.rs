@@ -99,8 +99,15 @@ impl<'a> MetadataView<'a> {
     }
     /// The tracks and part of the item the hero would start, read off the loaded page, for the
     /// before-playback picker ([`PreplayTracks`]).
-    pub fn preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
-        preplay_tracks(self.state, sid, rk)
+    pub fn preplay_tracks(
+        &self, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
+    ) -> Option<PreplayTracks> {
+        preplay_tracks(self.state, sid, rk, version)
+    }
+    /// **The pre-play picks held for `(sid, rk)`** ([`PreplayPick`]), one per file: what a resolve
+    /// snapshots (`ResolveEnv::picks`) to apply to the item it plans.
+    pub fn picks_of(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Vec<PreplayPick> {
+        picks_of(self.state, sid, rk).copied().collect()
     }
     /// **The playing item's tracks for the failure screen's picker**: the item that was playing when
     /// `(sid, rk)` failed, with the lists it was started with and the part the failed attempt addressed
@@ -108,7 +115,9 @@ impl<'a> MetadataView<'a> {
     /// has no stream to show. The ONE rule behind both the read-out's *Audio & Subtitles* entry
     /// ([`Self::has_failed_tracks`]) and the panel's rows, so the entry is offered exactly when the panel
     /// has something in it.
-    pub fn failed_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64) -> Option<PreplayTracks> {
+    pub fn failed_tracks(
+        &self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64, pick: Option<PreplayPick>,
+    ) -> Option<PreplayTracks> {
         let p = self.playing()
             .filter(|p| part_id > 0 && plx_plex::plex::same_item((p.sid, p.rk.as_str()), (sid, rk)))
             .filter(|p| !p.audio.is_empty() || !p.subs.is_empty())?;
@@ -120,16 +129,19 @@ impl<'a> MetadataView<'a> {
             part: format!("/library/parts/{part_id}/"),
             audio: p.audio.clone(),
             subs: p.subs.clone(),
+            pick,
         })
     }
     /// [`Self::failed_tracks`] is `Some`, asked once per presentation capture.
     pub fn has_failed_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64) -> bool {
-        self.failed_tracks(sid, rk, part_id).is_some()
+        self.failed_tracks(sid, rk, part_id, None).is_some()
     }
     /// Would [`Self::preplay_tracks`] return `Some`, without cloning the lists: the hero's Audio &
     /// Subtitles disc gate, asked every frame.
-    pub fn has_preplay_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str) -> bool {
-        has_preplay_tracks(self.state, sid, rk)
+    pub fn has_preplay_tracks(
+        &self, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
+    ) -> bool {
+        has_preplay_tracks(self.state, sid, rk, version)
     }
     /// Has the viewer already put this exact segment behind them? Keyed on the segment, not the
     /// marker value (the server can re-send the same marker with another end), and shared by the
@@ -198,6 +210,12 @@ pub struct MetadataState {
     /// both — a subtitle downloaded mid-playback is installed and selected on the part — so
     /// [`cached_playing`] refuses it for this item until a page read after the playback lands.
     played_since_load: Option<(plx_plex::plex::ServerId, String)>,
+    /// **The one pre-play pick** ([`PreplayPick`]): what the viewer chose in the Audio & Subtitles
+    /// panel for an item before it plays, one per file (`part_id`). `MetadataCmd::PatchTracks` is the
+    /// only writer; the resolve snapshots it (`MetadataView::picks_of`) and applies it to the item it
+    /// plans, and the panel is seeded from it ([`PreplayTracks::pick`]). Dropped with the page
+    /// ([`reset`], a fresh read of the item).
+    picks: Vec<(plx_plex::plex::ServerId, String, PreplayPick)>,
     alt: AltStore,
     /// The IO this owner has asked the application to start and the application has not yet taken
     /// (`MetadataStore::take_jobs`): one [`crate::stores::StoreJob::Detail`] per accepted detail
@@ -1766,10 +1784,6 @@ pub struct Detail {
     pub crew: Vec<Cast>,
     pub audio: Vec<Stream>,
     pub subs: Vec<Stream>,
-    /// The viewer's Off for this item's subtitle, chosen before playback ([`SubChoice`]). Session
-    /// state, never persisted; it describes `audio`/`subs` above, so [`parse_streams`] resets it.
-    #[serde(skip)]
-    pub sub_choice: SubChoice,
     pub seasons: Vec<Season>,   // shows only
     pub episodes: EpisodeList, // the currently-selected season
     /// SHOWS: the episode the SERVER says is next to watch (`OnDeck`, one request, no extra round
@@ -2220,6 +2234,7 @@ fn reset(state: &mut MetadataState, adapter: &MetadataAdapter) {
     state.now = None;
     state.playing = None;
     state.played_since_load = None;
+    state.picks.clear();
     state.skipped.clear();
     alt_clear(state);
 }
@@ -2471,7 +2486,6 @@ fn fetch_detail(client: &'static plx_plex::plex::Client, sid: plx_plex::plex::Se
         crew: crew_credits(&it),
         audio: Vec::new(),
         subs: Vec::new(),
-        sub_choice: SubChoice::Server,
         seasons: Vec::new(),
         episodes: EpisodeList::default(),
         on_deck: it
@@ -2780,7 +2794,6 @@ fn parse_streams(it: &plx_plex::plex::Metadata, d: &mut Detail) {
         let s = convert_streams(&p.stream);
         d.audio = s.audio;
         d.subs = s.subs;
-        d.sub_choice = SubChoice::Server;
         d.video = s.video;
         d.hdr = s.hdr;
         d.dovi = s.dovi;
@@ -2801,22 +2814,58 @@ fn parse_streams(it: &plx_plex::plex::Metadata, d: &mut Detail) {
 // from a SHOW page found a show container (which carries no Chapter[]) and the tab silently
 // vanished — while a `current()` holding some OTHER leaf would have seeked with its offsets.
 
-/// **Whether the viewer has decided the item's subtitle before playback** (#1532): the one typed
-/// answer to "is the Off on this item the server's / the account's rule, or the viewer's own?".
-///
-/// A track the viewer picks needs no variant: it is the `selected` flag [`MetadataCmd::PatchTracks`]
-/// sets, which the plan already ranks above every account and show rule. Off is the case no flag can
-/// say (nothing selected is also what an untouched item with no server selection looks like, and the
-/// account's "always show" rule then turns a track on), so it is a value of its own and the plan's
-/// ladder ranks it with the viewer's own pick (`route::pick_subtitle`). It lives on the page that
-/// holds the item's streams and is reset wherever those streams are parsed afresh.
+/// **What the viewer decided about the item's subtitle before playback** (#1532), one value of
+/// [`PreplayPick`]. `Server`: nothing chosen, the selection flags and then the rules decide.
+/// `Off`: the viewer chose no subtitle, which no flag can say (nothing selected is also what an
+/// untouched item with no server selection looks like, and the account's "always show" rule then
+/// turns a track on), so the plan's ladder ranks it with the viewer's own pick
+/// (`route::pick_subtitle`). `Track(id)`: the viewer chose that stream.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SubChoice {
-    /// The viewer has not chosen Off: the selection flags and then the rules decide.
+pub enum SubPick {
     #[default]
     Server,
-    /// The viewer chose no subtitle for this item.
     Off,
+    Track(i64),
+}
+
+/// **The one pre-play pick** (#1532): the tracks the viewer chose for an item's file in the Audio &
+/// Subtitles panel, as stream ids. The metadata store owns it (`MetadataState::picks`;
+/// `MetadataCmd::PatchTracks` is the only writer) and everything else reads it: the panel is seeded
+/// from [`PreplayTracks::pick`], and the resolve applies it to the item it plans
+/// ([`PreplayPick::apply`]) whichever way that item arrived (the loaded page's copy, a default fetch
+/// or a named version's fetch), so a pick can neither be lost nor addressed to another file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreplayPick {
+    /// The part the selection PUT addresses (the number in `/library/parts/{id}/..`), `0` when unknown.
+    pub part_id: i64,
+    pub audio_sid: i64,
+    pub sub: SubPick,
+}
+
+impl PreplayPick {
+    /// Does this pick describe the file whose streams are `audio`? Stream ids are server-unique, so
+    /// an audio id that is on the list names the file, with no version or part to compare.
+    pub fn is_for(&self, audio: &[Stream]) -> bool {
+        self.audio_sid != 0 && audio.iter().any(|s| s.id == self.audio_sid)
+    }
+
+    /// The pick over a file's own selection flags: the audio checked is the pick's, a subtitle track
+    /// is the one checked, Off leaves none, and `Server` keeps what the server selected. Returns
+    /// the subtitle half for [`PlayingItem::sub_choice`]. Nothing happens for a pick of another file.
+    pub fn apply(&self, audio: &mut [Stream], subs: &mut [Stream]) -> SubPick {
+        if !self.is_for(audio) {
+            return SubPick::Server;
+        }
+        for s in audio.iter_mut() {
+            s.selected = s.id == self.audio_sid;
+        }
+        match self.sub {
+            SubPick::Server => {}
+            SubPick::Off => subs.iter_mut().for_each(|s| s.selected = false),
+            SubPick::Track(id) => subs.iter_mut().for_each(|s| s.selected = s.id == id),
+        }
+        self.sub
+    }
 }
 
 #[derive(Clone)]
@@ -2864,9 +2913,19 @@ pub struct PlayingItem {
     /// (`convert_streams`' `hdr`). The SOURCE's fact, not the picture's: a server re-encode to SDR
     /// keeps it true, so the HDR overlay dim also asks the route (`route::overlay_gain`).
     pub hdr: bool,
-    /// The viewer's Off chosen before playback ([`SubChoice`]); `Server` for an item fetched at
-    /// play time.
-    pub sub_choice: SubChoice,
+    /// The subtitle half of the pre-play pick this item was planned under ([`PreplayPick::apply`],
+    /// the one writer); `Server` when none applies.
+    pub sub_choice: SubPick,
+}
+
+impl PlayingItem {
+    /// **Plan under the viewer's pre-play pick**: the one that is for this item's file, if any
+    /// ([`PreplayPick::apply`], the only writer of `sub_choice`).
+    pub fn apply_picks(&mut self, picks: &[PreplayPick]) {
+        if let Some(pick) = picks.iter().find(|p| p.is_for(&self.audio)) {
+            self.sub_choice = pick.apply(&mut self.audio, &mut self.subs);
+        }
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2891,7 +2950,7 @@ impl PlayingItem {
             markers: Vec::new(),
             chapters: Vec::new(),
             hdr: false,
-            sub_choice: SubChoice::Server,
+            sub_choice: SubPick::Server,
         }
     }
 }
@@ -2942,7 +3001,7 @@ fn cached_playing(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
             markers: d.markers.clone(),
             chapters: d.chapters.clone(),
             hdr: d.hdr,
-            sub_choice: d.sub_choice,
+            sub_choice: SubPick::Server,
         })
 }
 
@@ -2959,6 +3018,9 @@ pub struct PreplayTracks {
     pub part: String,
     pub audio: Vec<Stream>,
     pub subs: Vec<Stream>,
+    /// What was already picked for this file, the one value the panel is seeded from
+    /// ([`PreplayPick`]): the store's, or for the failure screen the session's held pick.
+    pub pick: Option<PreplayPick>,
 }
 
 /// The episode a show page's `audio`/`subs` describe, when that is `rk`: a show carries no streams of
@@ -2974,71 +3036,98 @@ fn hero_episode<'a>(d: &'a Detail, rk: &str) -> Option<&'a Episode> {
         .or_else(|| d.episodes.position(rk).and_then(|i| d.episodes.get(i)))
 }
 
-/// MAIN THREAD: [`PreplayTracks`] for `(sid, rk)`, or `None` when the loaded page cannot say.
+/// **Where the picker's tracks come from**, borrowed from the loaded page: the identity of the item
+/// they describe and its file's part and lists.
+struct PreplaySource<'a> {
+    kind: &'a str,
+    show_rk: &'a str,
+    part: &'a str,
+    audio: &'a [Stream],
+    subs: &'a [Stream],
+}
+
+/// MAIN THREAD: the picker's source for `(sid, rk)`, or `None` when the loaded page cannot say.
 /// Two shapes hold the item's streams: the page of a leaf that IS `(sid, rk)`, and a show page whose
 /// backfilled streams are `rk`'s (the episode Play starts, so on a show page the picker is shown the
 /// episode's tracks and part, never "the show's"). The same two refusals as [`cached_playing`]: the
 /// pair identity, and an item that has played since the page loaded, whose selection has moved
 /// under the page's copy.
-/// **Where the picker's tracks come from**, borrowed: the loaded page `d` and the identity of the item
-/// they describe — `(kind, show_rk, part)`. `None` is "nothing to show" (the item has played since
-/// the page loaded, no streams, no part), the ONE rule [`preplay_tracks`] (the rows) and
-/// [`has_preplay_tracks`] (the hero's disc gate, asked every frame) both follow.
-fn preplay_source<'a>(state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> Option<(&'a Detail, &'a str, &'a str, &'a str)> {
+///
+/// **Which file**: `version` is the one the viewer selected (`route::chosen_version`), so the rows and
+/// the part the PUT addresses are that file's, the file Play will start; a version the page does not
+/// list is the default file, as it is for the plan. `None` is "nothing to show" (no streams, no
+/// part), the ONE rule [`preplay_tracks`] (the rows) and [`has_preplay_tracks`] (the hero's disc
+/// gate, asked every frame) both follow.
+fn preplay_source<'a>(
+    state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
+) -> Option<PreplaySource<'a>> {
     if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (sid, rk))) {
         return None;
     }
     let d = current(state).filter(|d| d.sid == sid && !d.audio.is_empty())?;
-    let (kind, show_rk, part) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
+    let (kind, show_rk, default_part) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
         (d.kind.as_str(), d.show_rk.as_str(), d.part.as_str())
     } else {
         let ep = hero_episode(d, rk)?;
         ("episode", d.rk.as_str(), ep.part.as_str())
     };
-    (!part.is_empty()).then_some((d, kind, show_rk, part))
+    let chosen = version.and_then(|id| d.version_parts.iter().find(|p| p.id == id));
+    let (part, audio, subs) = match chosen {
+        Some(v) => (v.part.as_str(), v.audio.as_slice(), v.subs.as_slice()),
+        None => (default_part, d.audio.as_slice(), d.subs.as_slice()),
+    };
+    (!part.is_empty() && !audio.is_empty()).then_some(PreplaySource { kind, show_rk, part, audio, subs })
 }
 
-fn preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> Option<PreplayTracks> {
-    let (d, kind, show_rk, part) = preplay_source(state, sid, rk)?;
+fn preplay_tracks(
+    state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
+) -> Option<PreplayTracks> {
+    let src = preplay_source(state, sid, rk, version)?;
+    let pick = picks_of(state, sid, rk).find(|p| p.is_for(src.audio)).copied();
     Some(PreplayTracks {
         sid,
         rk: rk.to_string(),
-        kind: kind.to_string(),
-        show_rk: show_rk.to_string(),
-        part: part.to_string(),
-        audio: d.audio.clone(),
-        subs: d.subs.clone(),
+        kind: src.kind.to_string(),
+        show_rk: src.show_rk.to_string(),
+        part: src.part.to_string(),
+        audio: src.audio.to_vec(),
+        subs: src.subs.to_vec(),
+        pick,
     })
 }
 
-fn has_preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str) -> bool {
-    preplay_source(state, sid, rk).is_some()
+fn has_preplay_tracks(
+    state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
+) -> bool {
+    preplay_source(state, sid, rk, version).is_some()
 }
 
-/// MAIN THREAD: the server took `audio_sid` / `subtitle_sid` (`0` = Off) for `(sid, rk)` before it
-/// played, so the page's copy of its streams says so, and the plan that starts it
-/// ([`cached_playing`]) reads the pick through the same `selected` flags it reads for a server's own
-/// selection. Lands on the page that holds the item's streams ([`preplay_tracks`]'s two shapes) and
-/// nowhere else. Returns whether a flag moved.
-fn patch_tracks(
-    state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, audio_sid: i64, subtitle_sid: i64,
-    sub_choice: SubChoice,
-) -> bool {
+/// The picks held for `(sid, rk)`, one per file.
+fn picks_of<'a>(
+    state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &'a str,
+) -> impl Iterator<Item = &'a PreplayPick> {
+    state.picks.iter().filter(move |(s, r, _)| plx_plex::plex::same_item((*s, r.as_str()), (sid, rk))).map(|(_, _, p)| p)
+}
+
+/// MAIN THREAD, the ONE writer of the pre-play pick: the viewer chose `pick` for `(sid, rk)` before it
+/// played. It replaces what was held for the same file and is read by the panel's seed and by the
+/// resolve ([`PreplayPick::apply`]), never copied onto the page's streams. Lands only when the loaded
+/// page holds the item ([`preplay_source`]'s two shapes). Returns whether the held pick changed.
+fn patch_tracks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, pick: PreplayPick) -> bool {
     let holds = current(state).is_some_and(|d| {
         d.sid == sid
             && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || hero_episode(d, rk).is_some())
     });
-    let Some(d) = state.current.as_mut().filter(|_| holds) else { return false };
-    // Off and a selected subtitle cannot both hold: the choice wins.
-    let subtitle_sid = if sub_choice == SubChoice::Off { 0 } else { subtitle_sid };
-    let mut moved = std::mem::replace(&mut d.sub_choice, sub_choice) != sub_choice;
-    for (list, want) in [(&mut d.audio, audio_sid), (&mut d.subs, subtitle_sid)] {
-        for s in list.iter_mut() {
-            let on = s.id == want;
-            moved |= std::mem::replace(&mut s.selected, on) != on;
+    if !holds {
+        return false;
+    }
+    match state.picks.iter_mut().find(|(s, r, p)| plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)) && p.part_id == pick.part_id) {
+        Some((_, _, held)) => std::mem::replace(held, pick) != pick,
+        None => {
+            state.picks.push((sid, rk.to_string(), pick));
+            true
         }
     }
-    moved
 }
 
 /// `client` is the caller's own client for `sid`, the server `rk` is a key on. It runs on the
@@ -3179,7 +3268,7 @@ fn playing_item_of(
         markers,
         chapters,
         hdr,
-        sub_choice: SubChoice::Server,
+        sub_choice: SubPick::Server,
     }
 }
 
@@ -4518,8 +4607,8 @@ pub fn run_with_keys(state: &mut MetadataState, adapter: &std::sync::Arc<Metadat
             true
         }
         MetadataCmd::AppendPlayingSub { sid, rk, stream } => append_playing_sub(state, sid, &rk, stream),
-        MetadataCmd::PatchTracks { sid, rk, audio_sid, subtitle_sid, sub_choice } => {
-            patch_tracks(state, sid, &rk, audio_sid, subtitle_sid, sub_choice)
+        MetadataCmd::PatchTracks { sid, rk, pick } => {
+            patch_tracks(state, sid, &rk, pick)
         }
         MetadataCmd::MarkSkipped(m) => {
             mark_skipped(state, m);
@@ -4640,6 +4729,7 @@ fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<Met
     if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (d.sid, &d.rk))) {
         state.played_since_load = None;
     }
+    state.picks.retain(|(s, r, _)| !plx_plex::plex::same_item((*s, r.as_str()), (d.sid, &d.rk)));
     let mut d = d;
     if let Some(old) = state.current.as_ref() {
         carry_related_window(old, &mut d);

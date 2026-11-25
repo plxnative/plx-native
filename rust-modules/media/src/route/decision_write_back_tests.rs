@@ -1098,10 +1098,12 @@ fn a_pick_held_on_the_failure_screen_is_the_selection_the_retry_carries() {
     let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
     assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 11, 12)), "nothing held: the attempt's own pair");
 
-    memory::hold_pick_for_retry(&mut ps, PART, 21, Some(0));
+    let pick = |audio_sid, sub| plx_data::metadata::PreplayPick { part_id: PART, audio_sid, sub };
+    memory::hold_pick_for_retry(&mut ps, &pick(21, plx_data::metadata::SubPick::Off));
     assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 21, 0)), "Off is the viewer's, not the attempt's track");
 
-    memory::hold_pick_for_retry(&mut ps, PART, 22, None);
+    memory::hold_pick_for_retry(&mut ps, &pick(22, plx_data::metadata::SubPick::Server));
+    assert_eq!(memory::failed_pick(&ps).map(|p| (p.audio_sid, p.sub)), Some((22, plx_data::metadata::SubPick::Track(12))), "the picker reopens on the held pair");
     assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 22, 12)), "an audio-only pick leaves subtitles alone");
 
     let retry = current_retry_context(&ps, 0);

@@ -705,10 +705,27 @@ pub fn commit_preplay_pick(
 
 /// **A pick made on the playback failure screen, held for Try again** ([`PlaybackSession::held_pick`]).
 /// The failed attempt's own selection is what a retry would otherwise carry; this replaces it with the
-/// viewer's. `subtitle_sid` is `Some` only for a half the viewer set (`Some(0)` = Off); `None` keeps the
-/// subtitle the attempt stood on, so an audio-only pick does not turn subtitles off. The
-/// part is the failed attempt's, the one the selection PUT addresses.
-pub fn hold_pick_for_retry(ps: &mut PlaybackSession, part_id: i64, audio_sid: i64, subtitle_sid: Option<i64>) {
-    let sub_sid = subtitle_sid.unwrap_or_else(|| super::standing_selection(ps).map_or(0, |held| held.sub_sid));
-    ps.held_pick = Some(super::HeldSelection { part_id, audio_sid, sub_sid });
+/// viewer's. The session's copy of the ONE pick value ([`plx_data::metadata::PreplayPick`], written by
+/// the picker's `Selection`): derived here and nowhere else, written only by the loop's
+/// `CommitPreplayPick` on the failure screen, cleared by the request that consumes it. A
+/// [`plx_data::metadata::SubPick::Server`] subtitle half keeps the subtitle the attempt stood on, so an
+/// audio-only pick does not turn subtitles off.
+pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::PreplayPick) {
+    use plx_data::metadata::SubPick;
+    let sub_sid = match pick.sub {
+        SubPick::Off => 0,
+        SubPick::Track(id) => id,
+        SubPick::Server => super::standing_selection(ps).map_or(0, |held| held.sub_sid),
+    };
+    ps.held_pick = Some(super::HeldSelection { part_id: pick.part_id, audio_sid: pick.audio_sid, sub_sid });
+}
+
+/// **What the failure screen's picker starts from**: the held pick, else the attempt's standing
+/// selection ([`standing_selection`]), as the same [`plx_data::metadata::PreplayPick`] a pre-play pick
+/// is, so the panel reads one shape from either source. A `0` subtitle reads as Off.
+pub fn failed_pick(ps: &PlaybackSession) -> Option<plx_data::metadata::PreplayPick> {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let held = ps.held_pick.or_else(|| super::standing_selection(ps))?;
+    let sub = if held.sub_sid == 0 { SubPick::Off } else { SubPick::Track(held.sub_sid) };
+    Some(PreplayPick { part_id: held.part_id, audio_sid: held.audio_sid, sub })
 }

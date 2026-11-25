@@ -4426,7 +4426,7 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, d: &mut
         sid: plx_media::route::cur_sid(ps),
         rk: plx_media::route::cur_rk(ps),
         anchor: anchor_bits(None),
-        source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps) },
+        source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
     });
     let id = plx_ui::screen::ScreenArg::id(&arg);
     if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {

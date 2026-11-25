@@ -1413,6 +1413,10 @@ pub struct ResolveEnv {
     pub forced_lang: String,
     /// the loaded detail's streams when it IS this item — saves the worker a GET
     pub cached_item: Option<plx_data::metadata::PlayingItem>,
+    /// The viewer's pre-play picks for this item, one per file (`MetadataView::picks_of`), captured
+    /// at the press. Applied to the item whichever way it arrives (the page's copy, a default fetch
+    /// or a named version's fetch) in one place, [`plx_data::metadata::PreplayPick::apply`].
+    pub picks: Vec<plx_data::metadata::PreplayPick>,
     /// The version the viewer picked (Play Version); `None` plays the default. A picked version
     /// never uses `cached_item`, which describes the default.
     pub version: Option<plx_plex::plex::MediaId>,
@@ -1925,11 +1929,12 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             };
             let reselected = env.with_selection_for_part(plan.part_id);
             let env = reselected.as_ref().unwrap_or(env);
-            // The Off the viewer chose before playback (`PlayingItem::sub_choice`) leaves no subtitle
-            // selected for any later reader of the flags (the server-selected sidecar, the log, the
-            // write-back) to restore; `pick_subtitle` ranks the choice itself.
-            if let Some(item) = plan.playing.as_mut().filter(|item| item.sub_choice == plx_data::metadata::SubChoice::Off) {
-                for sub in &mut item.subs { sub.selected = false; }
+            // The viewer's pick before playback (`MetadataState::picks`), whichever way the item
+            // arrived: its flags say what was picked for every later reader (the server-selected
+            // sidecar, the log, the write-back), and `sub_choice` carries the Off no flag can say,
+            // which `pick_subtitle` ranks.
+            if let Some(item) = plan.playing.as_mut() {
+                item.apply_picks(&env.picks);
             }
             if let (Some(id), Some(item)) = (env.subtitle_override, plan.playing.as_mut()) {
                 // The retry's explicit selection owns both embedded and sidecar restoration; a stale
@@ -4379,7 +4384,7 @@ pub(super) fn pick_subtitle(
             .and_then(|i| (id > 0).then_some((id, plx_data::metadata::sub_render_ordinal(subs, i))));
         return SubDecision { pick, source: SubPickSource::Override, miss: None };
     }
-    if item.sub_choice == plx_data::metadata::SubChoice::Off {
+    if item.sub_choice == plx_data::metadata::SubPick::Off {
         return SubDecision { pick: None, source: SubPickSource::Override, miss: None };
     }
     let mut miss = None;

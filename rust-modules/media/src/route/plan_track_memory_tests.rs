@@ -481,15 +481,16 @@ fn a_preplay_subtitles_off_on_a_movie_plans_no_subtitle_at_the_first_start() {
     };
     plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
     let start = |store: &MetadataStore| {
-        let item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(&store.view().picks_of(sid, "m1"));
         pick_subtitle(&item, &NO_SHOW_RULES(), SubtitleLangPrefs::default(), "eng", None, None).pick
     };
     assert_eq!(start(&store), Some((22, 1)), "control: PMS's selection plays");
-    let tracks = store.view().preplay_tracks(sid, "m1").expect("a movie page names its tracks and part");
+    let tracks = store.view().preplay_tracks(sid, "m1", None).expect("a movie page names its tracks and part");
     assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 9001);
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), audio_sid: 11, subtitle_sid: 0, sub_choice: plx_data::metadata::SubChoice::Off }));
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 11, sub: plx_data::metadata::SubPick::Off } }));
     assert_eq!(start(&store), None, "Off: nothing selected, no subtitle");
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), audio_sid: 11, subtitle_sid: 21, sub_choice: plx_data::metadata::SubChoice::Server }));
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 11, sub: plx_data::metadata::SubPick::Track(21) } }));
     assert_eq!(start(&store), Some((21, 0)), "a picked track plays");
 }
 
@@ -519,14 +520,15 @@ fn a_show_page_offers_its_hero_episodes_tracks_and_part() {
     };
     plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
     let view = store.view();
-    let tracks = view.preplay_tracks(sid, "ep-7").expect("the on-deck episode's streams are the page's");
+    let tracks = view.preplay_tracks(sid, "ep-7", None).expect("the on-deck episode's streams are the page's");
     assert_eq!((tracks.kind.as_str(), tracks.show_rk.as_str(), tracks.subs.len()), ("episode", "show-1", 1));
     assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 777);
-    assert!(view.preplay_tracks(sid, "ep-8").is_none(), "another episode's streams are not loaded");
-    assert!(view.preplay_tracks(sid, "show-1").is_none(), "a show has no file of its own");
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), audio_sid: 11, subtitle_sid: 0, sub_choice: plx_data::metadata::SubChoice::Off }));
-    assert!(!store.run(MetadataCmd::PatchTracks { sid, rk: "ep-8".into(), audio_sid: 11, subtitle_sid: 22, sub_choice: plx_data::metadata::SubChoice::Server }), "not this page's item");
-    assert!(store.view().current().unwrap().subs.iter().all(|s| !s.selected));
+    assert!(view.preplay_tracks(sid, "ep-8", None).is_none(), "another episode's streams are not loaded");
+    assert!(view.preplay_tracks(sid, "show-1", None).is_none(), "a show has no file of its own");
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: plx_data::metadata::PreplayPick { part_id: 777, audio_sid: 11, sub: plx_data::metadata::SubPick::Off } }));
+    assert!(!store.run(MetadataCmd::PatchTracks { sid, rk: "ep-8".into(), pick: plx_data::metadata::PreplayPick { part_id: 778, audio_sid: 11, sub: plx_data::metadata::SubPick::Track(22) } }), "not this page's item");
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "the pick is the store's one value, not the page's flags");
+    assert!(store.view().picks_of(sid, "ep-8").is_empty());
 }
 
 /// The hole the flags alone leave: "nothing selected" is also what an item the viewer never touched
@@ -535,7 +537,7 @@ fn a_show_page_offers_its_hero_episodes_tracks_and_part() {
 /// audio-only pick (`subtitle_sid: 0`, choice still `Server`) must NOT read as Off.
 #[test]
 fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
-    use plx_data::metadata::SubChoice;
+    use plx_data::metadata::{PreplayPick, SubPick};
     use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
     let _g = plx_base::testlock::serial();
     let sid = plx_plex::plex::ServerId::from_raw(0);
@@ -552,21 +554,21 @@ fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
     plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
     let always_eng = SubtitleLangPrefs { language: Some("eng"), mode: 2, forced: 0 };
     let start = |store: &MetadataStore| {
-        let item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(&store.view().picks_of(sid, "m1"));
         pick_subtitle(&item, &NO_SHOW_RULES(), always_eng, "eng", None, None)
     };
     assert_eq!(start(&store).pick, Some((21, 0)), "control: the account rule turns the English track on");
-    let patch = |store: &mut MetadataStore, audio_sid, subtitle_sid, sub_choice| {
-        assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), audio_sid, subtitle_sid, sub_choice }));
+    let patch = |store: &mut MetadataStore, audio_sid, sub| {
+        assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: PreplayPick { part_id: 9001, audio_sid, sub } }));
     };
-    patch(&mut store, 12, 0, SubChoice::Server);
+    patch(&mut store, 12, SubPick::Server);
     assert_eq!(start(&store).pick, Some((21, 0)), "an audio-only pick leaves the subtitle to the rule");
-    patch(&mut store, 12, 0, SubChoice::Off);
+    patch(&mut store, 12, SubPick::Off);
     let off = start(&store);
     assert_eq!((off.pick, off.source), (None, SubPickSource::Override), "Off: no subtitle, whatever the account says");
-    assert!(store.view().current().unwrap().subs.iter().all(|s| !s.selected));
-    patch(&mut store, 11, 0, SubChoice::Off);
+    patch(&mut store, 11, SubPick::Off);
     assert_eq!(start(&store).pick, None, "an audio pick after Off keeps Off");
-    patch(&mut store, 11, 22, SubChoice::Server);
+    patch(&mut store, 11, SubPick::Track(22));
     assert_eq!(start(&store).pick, Some((22, 1)), "a track picked after Off plays");
 }

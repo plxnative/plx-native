@@ -31,7 +31,7 @@ use super::track_memory::{SubMode, TrackContext};
 // says what is remembered about it; every public name keeps its `route::` path.
 #[path = "decision_memory.rs"]
 mod memory;
-pub use memory::{commit_preplay_pick, hold_pick_for_retry, PreplayItem};
+pub use memory::{commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
 pub use memory::{
     commit_audio_pick,commit_forced_only_and_sidecar, commit_forced_only_pick, commit_subtitle_and_sidecar, commit_subtitle_pick,
     on_decoded_frame, persist_subtitle_offset, rematch_subtitle_with_names, repoint_parked_subtitle, send_parked_write_back,
@@ -10546,6 +10546,7 @@ impl ResolveEnv {
             sub_mode: SubMode::Track,
             forced_lang: forced_only_lang(ps).to_string(),
             cached_item: meta.cached_playing(sid, rk),
+            picks: meta.picks_of(sid, rk),
             version: None,
             quality: quality(),
             direct_play_mode: direct_play_mode(),

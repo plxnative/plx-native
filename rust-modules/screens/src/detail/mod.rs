@@ -4638,7 +4638,7 @@ impl DetailScreen {
         // handling stays correct even though the disc itself is never shown.)
         hero::HeroSet {
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
-            tracks: self.detail(meta).is_some_and(|d| play_subject(d).is_some_and(|rk| meta.has_preplay_tracks(d.sid, rk))),
+            tracks: self.detail(meta).is_some_and(|d| play_subject(d).is_some_and(|rk| meta.has_preplay_tracks(d.sid, rk, plx_media::route::chosen_version(plx_media::route::item_sid(d.sid), rk)))),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
             restart,
             trailer: false,

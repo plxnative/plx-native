@@ -875,16 +875,17 @@ fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::pr
         part: String::new(),
         audio: Vec::new(),
         subs: Vec::new(),
+        pick: None,
     };
     match arg.source {
         Source::Page => meta
             .current()
             .filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
             .and_then(crate::detail::play_subject)
-            .and_then(|rk| meta.preplay_tracks(arg.sid, rk))
+            .and_then(|rk| meta.preplay_tracks(arg.sid, rk, plx_media::route::chosen_version(plx_media::route::item_sid(arg.sid), rk)))
             .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
-        Source::Failed { part_id } => meta
-            .failed_tracks(arg.sid, &arg.rk, part_id)
+        Source::Failed { part_id, pick } => meta
+            .failed_tracks(arg.sid, &arg.rk, part_id, pick)
             .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
     }
 }
