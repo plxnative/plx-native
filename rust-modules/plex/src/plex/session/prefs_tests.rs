@@ -125,14 +125,15 @@ fn every_marker_names_its_own_field() {
     check_row::<LastHeroBlurPref>(Some([[0.5, 0.25, 0.125]; 4]));
     check_row::<UiResolutionPref>(UiResolution::Hd720);
     check_row::<HoldHintTaughtPref>(HoldHintTaught { card: true, pill: false });
-    // The table lists exactly these twenty-two `Setting` rows, the five list rows below, the three
+    // The table lists exactly these twenty-two `Setting` rows, the five list rows below, the four
     // memory-door rows (`TrackMemoryPref`, whose field check is
-    // `track_memory_tests::the_list_row_names_its_own_field`, `SubtitleOffsetsPref`, checked by
+    // `track_memory_tests::the_list_row_names_its_own_field`, `RecentChannelsPref`, checked by
+    // `recent_channels_tests::the_list_row_names_its_own_field_and_is_account_bound`, `SubtitleOffsetsPref`, checked by
     // `the_subtitle_offsets_row_names_its_own_field`, and `VersionChoicesPref`, checked by
     // `the_version_choices_row_names_its_own_field`) and the per-profile record list
     // (`ProfilePrefsPref`, `profile_prefs_tests::nothing_picked_serializes_to_no_key`): a row needs
     // its line in one of the four places.
-    assert_eq!(DESCRIPTORS.len(), 22 + 5 + 3 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
+    assert_eq!(DESCRIPTORS.len(), 22 + 5 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
 }
 
 /// The list rows do what `check_row` proves for the `Copy` ones: the marker names its own field
@@ -328,7 +329,7 @@ fn the_subtitle_offsets_row_names_its_own_field() {
     assert_eq!((row.scope, row.account_bound, row.live, row.settings, row.parse), (Scope::PerItem, true, false, None, Parse::SoftVec));
 }
 
-/// The `version_choices` row is the third memory-door tenant: a `Preferences` field under its own key,
+/// The `version_choices` row is a memory-door tenant: a `Preferences` field under its own key,
 /// written only while non-empty, per item, account-bound, no live cell, no Settings row.
 #[test]
 fn the_version_choices_row_names_its_own_field() {
@@ -390,6 +391,7 @@ fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
         ("last_library", not_a_list()),
         ("library_sorts", not_a_list()),
         ("track_memory", not_a_list()),
+        ("recent_channels", not_a_list()),
         ("subtitle_offsets", not_a_list()),
         ("version_choices", not_a_list()),
         ("profile_prefs", not_a_list()),
@@ -416,6 +418,7 @@ fn good_element(key: &str) -> Value {
         "version_choices" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","rating_key":"42","media_id":3086}]}),
         "track_memory" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","show_rk":"42",
             "audio":{"lang":"eng","tag":"","commentary":false,"ad":false,"codec":"eac3","channels":6,"title":""}}]}),
+        "recent_channels" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","dvr":"7","channel":"C1"}]}),
         "profile_prefs" => json!({"user":"u1","account":"a","prefs":{"subtitle_size":"large"}}),
         other => panic!("{other}: a SoftVec row needs a valid element in `good_element`"),
     }
