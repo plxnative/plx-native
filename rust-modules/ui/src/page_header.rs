@@ -1,5 +1,5 @@
 //! **PageHeader** — the one row of plain-text controls a library page wears under the top bar:
-//! the library names on the left (with a "+N" for the ones that do not fit) or a breadcrumb
+//! the library names on the left (the ones that do not fit fold behind a trailing ⋯, `more_item`) or a breadcrumb
 //! ("Films › Collections"), and the page's own controls on the right ("Collections · 12",
 //! "Recommended", "≡ Date added ⌄"; the Library's own cluster is the board's: "Collections
 //! · 24 ›  Recommended ›  |  ≡ Date added ⌄", places with a chevron ([`HeaderItem::place`]), a

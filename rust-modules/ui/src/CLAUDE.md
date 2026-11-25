@@ -135,7 +135,7 @@ arguments, and its time is the `dt` it is handed.
    - **Reordering rows**: `table::RowMove` (`Off | Pickable | Lifted | Waiting`, set per row with `Row::moving`) is the ONE
      move-mode state; the table draws chevrons, lift, shadow and ink from it and glides rows to whatever order a
      `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
-     A row that is present but not a stop (`FormSection::inert`, `Row::selectable`) is drawn at .45 and skipped by focus.
+     Two kinds of row are not a stop (`Row::selectable`; neither key nor pointer lands on them): an `inert` row (`FormSection::inert`) is drawn at .45, and a `RowMove::Waiting` row, one that waits while another is held, keeps its own weight in secondary ink; do not dim it by hand.
    - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
      plan_names, names_row}` (`names_row` is the ONE assembly: labels at room, visit slot, right cluster, ⋯ per `MoreOpener`; `joined_name` and `fit_name` are the shared name fit); never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
