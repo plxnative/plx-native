@@ -33,8 +33,9 @@
 //! remembered audio and subtitle picks per show ([`TrackMemoryEntry`], in the memory door below).
 //! It is a [`Row`] only, so it has no whole-list `items_mut`: its writes go through
 //! [`ProfileMemory::upsert_with`], which merges, prunes and budgets, never through a `Vec`
-//! assignment. `subtitle_offsets` is the other tenant of the door and is declared the same way
-//! ([`SubtitleOffsetsPref`]).
+//! assignment. `subtitle_offsets` and `recent_channels` (Live TV's per-profile Recent row,
+//! [`RecentChannelEntry`]) are the other tenants of the door and are declared the same way
+//! ([`SubtitleOffsetsPref`], [`RecentChannelsPref`]).
 use super::{
     MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
     PlaintextConsent, HoldHintTaught, PlaybackQuality, ServerKeyPin, Session, SkipInterval, SubtitleOffsetEntry, SubtitleOffsets, SubtitlePosition,

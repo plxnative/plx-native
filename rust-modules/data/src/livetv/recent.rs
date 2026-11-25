@@ -98,8 +98,10 @@ pub fn keys_of(stored: &[RecentChannelEntry], keys: &ClientKeys) -> Vec<RecentKe
 }
 
 /// **When the stored list is read again**: the first time, when the seated profile changes, and when
-/// the server roster moves (the seat arrives BEFORE the servers register, so the first read finds
-/// no server to resolve and the roster moving is what completes it).
+/// the server roster moves while somebody is seated (the seat arrives BEFORE the servers register,
+/// so the first read can resolve no server and the roster moving is what completes it). With nobody
+/// seated nothing is ever stored (the memory door refuses the write), so a roster move there must
+/// not replace the row the run has built in memory with an empty read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RecentSync {
     seen: Option<(u32, u32)>,
@@ -107,9 +109,12 @@ pub struct RecentSync {
 
 impl RecentSync {
     /// Whether a restore is due for profile scope `scope` under this roster; says yes once per change.
-    pub fn due(&mut self, scope: u32, keys: &ClientKeys) -> bool {
+    pub fn due(&mut self, scope: u32, keys: &ClientKeys, seated: bool) -> bool {
         let now = (scope, keys.roster_gen());
-        let due = self.seen != Some(now);
+        let due = match self.seen {
+            None => true,
+            Some((seen_scope, seen_roster)) => seen_scope != scope || (seated && seen_roster != now.1),
+        };
         self.seen = Some(now);
         due
     }

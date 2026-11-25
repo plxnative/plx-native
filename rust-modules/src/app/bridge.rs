@@ -2214,8 +2214,10 @@ impl Bridge<'_> {
     /// the memory door's mirror, which already holds every write queued, and an entry whose server
     /// is not registered stays in storage.
     fn restore_recent_channels(&mut self, now: i64) -> bool {
-        if !self.retained.recent_sync.due(Self::profile_scope(), &self.retained.client_keys) { return false; }
-        let stored = plx_media::route::recall_all::<RecentChannelEntry>(&plx_plex::plex::session::current_profile_key());
+        let user = plx_plex::plex::session::current_profile_key();
+        let seated = plx_plex::plex::session::is_seated_as(&user);
+        if !self.retained.recent_sync.due(Self::profile_scope(), &self.retained.client_keys, seated) { return false; }
+        let stored = plx_media::route::recall_all::<RecentChannelEntry>(&user);
         let restored = plx_data::livetv::keys_of(&stored, &self.retained.client_keys);
         self.stores.livetv_run(plx_data::livetv::LiveTvCmd::Restore(restored), &self.retained.client_keys, now)
     }

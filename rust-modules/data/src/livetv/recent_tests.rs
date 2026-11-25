@@ -160,17 +160,27 @@ fn a_row_restored_before_its_server_registered_shows_once_it_does() {
     let mut stores = with_lineup(&["1", "2"]);
 
     let before = roster(1, &[]);
-    assert!(sync.due(7, &before), "the first look restores");
+    assert!(sync.due(7, &before, true), "the first look restores");
     assert!(!stores.livetv_run(LiveTvCmd::Restore(keys_of(&stored, &before)), &ClientKeys::default(), 0),
         "an empty restore of an empty row");
     assert!(row(&stores).is_empty());
-    assert!(!sync.due(7, &before), "nothing moved: no second restore");
+    assert!(!sync.due(7, &before, true), "nothing moved: no second restore");
 
     let after = roster(2, &[(0, "machine-a")]);
-    assert!(sync.due(7, &after), "the roster moved");
+    assert!(sync.due(7, &after, true), "the roster moved");
     // The store's own pump would start reading the new roster's lineup; this test is about the row.
     stores.livetv_run(LiveTvCmd::Restore(keys_of(&stored, &after)), &ClientKeys::default(), 0);
     assert_eq!(row(&stores), ["1"]);
-    assert!(!sync.due(7, &after));
-    assert!(sync.due(8, &after), "a profile switch restores again");
+    assert!(!sync.due(7, &after, true));
+    assert!(sync.due(8, &after, true), "a profile switch restores again");
+}
+
+/// With nobody seated nothing is stored, so the roster moving must not replace the row the run
+/// built in memory with an empty read; a profile switch still does.
+#[test]
+fn an_unseated_roster_move_does_not_wipe_the_row() {
+    let mut sync = RecentSync::default();
+    assert!(sync.due(7, &roster(1, &[]), false), "the first look restores");
+    assert!(!sync.due(7, &roster(2, &[(0, "machine-a")]), false), "a roster move with nobody seated restores nothing");
+    assert!(sync.due(8, &roster(2, &[(0, "machine-a")]), false), "a profile switch does");
 }
