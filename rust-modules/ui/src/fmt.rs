@@ -199,12 +199,14 @@ pub fn frac(begin: i64, end: i64, now: i64) -> Option<f32> {
     has_airing(begin, end).then(|| (now.clamp(begin, end) - begin) as f32 / (end - begin) as f32)
 }
 
-/// **Time left of an airing**, in the one "left" form every screen says it in ([`time_left_minutes_in`]):
-/// "22m left", "1h 18m left", rounded up to the next whole minute. `None` once `now` has reached `end`:
+/// **Time left of an airing**, in the form that follows a middle dot ([`footer_left_minutes_in`], the
+/// `core.footer_left_*` strings: an airing's line says it after "21:00–22:00 ·", where the caption
+/// wording of [`time_left_minutes_in`] is sentence-initial in several languages, "Noch 22 min"):
+/// "22m left", "1h 18m left" (never "1h 18m" zero-padded), rounded up to the next whole minute. `None` once `now` has reached `end`:
 /// a programme that is over has no time left, and the guide re-read replaces it within seconds.
 pub fn left_in(cx: &LocaleContext, end: i64, now: i64) -> Option<String> {
     let remaining = end.checked_sub(now).filter(|r| *r > 0)?;
-    Some(time_left_minutes_in(cx, remaining.saturating_add(59) / 60))
+    Some(footer_left_minutes_in(cx, remaining.saturating_add(59) / 60))
 }
 
 /// [`left_in`] in the thread's locale.
@@ -814,6 +816,22 @@ mod airing_tests {
         assert_eq!(left_in(&cx, end, end - 1).as_deref(), Some("1m left"));
         assert_eq!(left_in(&cx, end, end), None, "nothing is left of a programme at its end");
         assert_eq!(left_in(&cx, end, end + 5), None);
+    }
+
+    /// The "left" part sits after a middle dot, so it is the language's footer wording
+    /// (`core.footer_left_*`), not the sentence-initial caption wording ("Noch 22 min", "Осталось 22 мин").
+    #[test]
+    fn the_left_part_after_the_dot_is_the_footer_wording_of_each_language() {
+        let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
+        for (pref, started, minutes, hours) in [
+            (Preference::De, "Vor 2 Min. gestartet \u{b7} noch 1 Std. 20 Min.", "21:00\u{2013}22:22 \u{b7} noch 22 Min.", "21:00\u{2013}22:22 \u{b7} noch 1 Std. 1 Min."),
+            (Preference::Ru, "Началось 2 мин назад \u{b7} осталось 1 ч 20 мин", "21:00\u{2013}22:22 \u{b7} осталось 22 мин", "21:00\u{2013}22:22 \u{b7} осталось 1 ч 1 мин"),
+        ] {
+            let cx = LocaleContext::resolve(pref, None, None, Some("24"), None);
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 2 * MIN, 0).as_deref(), Some(started), "{pref:?}");
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 60 * MIN, 0).as_deref(), Some(minutes), "{pref:?}");
+            assert_eq!(airing_line_in(&cx, Airing::Banner, begin, end, begin + 21 * MIN, 0).as_deref(), Some(hours), "{pref:?}");
+        }
     }
 
     #[test]
