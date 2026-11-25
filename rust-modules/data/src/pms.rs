@@ -2705,9 +2705,11 @@ struct Src {
     /// Plex Home profile is watching, and a share plex.tv never named. Read from the registry at
     /// [`sync_roster`] time, never inside a worker.
     ///
-    /// [`roster`] groups the uncredited ones first, so an empty string also orders Home. That is
-    /// the right answer for the first two cases and the wrong one for the third; it was wrong for
-    /// the third before this field held a credit too (see `docs/shared-servers.md` §13).
+    /// An empty handle is NOT what orders Home: [`roster_with_scope`] ranks sources by
+    /// [`browse::source_rank`], Browse's household verdict first; the handle only breaks ties inside
+    /// one verdict (a server with an owner to name after one without). So a share plex.tv never
+    /// named, which has an empty handle but is not the household's, sorts with the shares (the
+    /// mistake `docs/shared-servers.md` §13 describes cannot recur through Home's order).
     handle: String,
     state: HubState,
     /// Single flight, PER SOURCE. Cleared only where a landing is taken, where the launch was
@@ -3413,7 +3415,8 @@ fn sync_roster_with_scope(state: &mut PmsState, scope: &BrowseScope) {
     // the shelves and the hero pool were stamped with. Updating `Src::handle` alone left the built
     // rows saying the old thing until the next successful hub fetch, and an OFFLINE source never
     // has one: "keep the last good shelves" would then have preserved a wrong attribution for good.
-    // The order can move with it (`roster` groups uncredited first), which the same re-merge fixes.
+    // The order can move with it (`source_rank` reads whether a source has an owner to name, after
+    // Browse's household verdict), which the same re-merge fixes.
     let mut restamped = false;
     for (sid, handle) in want {
         // One slot, one source. The way a roster came to name a slot twice was `plex::register`
