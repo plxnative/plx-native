@@ -395,6 +395,7 @@ fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route:
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
     bridge.publish_wall(clock::wall());
+    bridge.publish_unix_s(clock::unix_ms().map(|ms| ms.div_euclid(1_000)));
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).

@@ -690,6 +690,10 @@ pub(crate) struct BridgeRetained {
     /// This frame's publication of the wall-clock time — see `AppViews::wall`. Refreshed by
     /// [`Bridge::publish_wall`] from the loop, once per iteration; `None` until the first one.
     wall: Option<plx_ui::fmt::Wall>,
+    /// This frame's Unix second alone ([`Bridge::publish_unix_s`]): the Live TV store's `now`. Not taken
+    /// from `wall`, which also needs the OS zone: a set whose zone cannot be read has a second and no
+    /// `wall`, and its lineup must still load (the guide's schedule is UTC).
+    unix_s: Option<i64>,
     /// **Is the hardware video plane bound?** `Player::video_plane_bound`, published here by the
     /// loop on its edges — the rig's own copy of the one bit, for the privileged call at draw
     /// entry (`clear_opaque_region`), which the `Rig` trait gives no argument.
@@ -831,7 +835,7 @@ impl BridgeRetained {
         let seat = &self.seat_watch.restored;
         plx_data::livetv::LiveTvInput {
             keys,
-            now: self.wall.map(|wall| wall.unix_s),
+            now: self.unix_s,
             recent: match seat {
                 plx_plex::plex::session::Seat::Unseated => plx_data::livetv::RecentSeat::Unseated,
                 seat => plx_data::livetv::RecentSeat::Seated { seat, stored: &self.recent_stored },
@@ -1073,6 +1077,7 @@ impl BridgeRetained {
             playback_live: false,
             today: None,
             wall: None,
+            unix_s: None,
             video_plane: false,
             measure: plx_ui::rec::Measurements::Live(measure),
             hubs: reads.hubs,
@@ -3018,11 +3023,17 @@ impl Bridge<'_> {
 
     /// **Publish this frame's wall-clock time** — see `AppViews::wall`. Called once per iteration by
     /// the loop, beside [`Self::publish_today`], with `clock::wall()` (the loop is that door's one
-    /// caller). The Live TV store's `now` is taken from this publication (`BridgeRetained::livetv_input`),
-    /// so the store and the page read the same second; a frame with none (a replay, a zone the
-    /// platform cannot read) asks the store to schedule nothing (`LiveTvInput::now`).
+    /// caller).
     pub(crate) fn publish_wall(&mut self, wall: Option<plx_ui::fmt::Wall>) {
         self.retained.wall = wall;
+    }
+
+    /// **Publish this frame's Unix second** (`clock::unix_ms() / 1000`, the same door `clock::wall` takes
+    /// its second from, so the store and the page read the same second), beside [`Self::publish_wall`].
+    /// It is the Live TV store's `now` (`BridgeRetained::livetv_input`); `None` (a replay) asks the store
+    /// to schedule nothing (`LiveTvInput::now`).
+    pub(crate) fn publish_unix_s(&mut self, unix_s: Option<i64>) {
+        self.retained.unix_s = unix_s;
     }
 
     /// The wall time last published ([`Self::publish_wall`]), for the app code that words a live

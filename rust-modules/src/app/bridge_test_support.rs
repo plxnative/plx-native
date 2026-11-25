@@ -925,7 +925,7 @@ impl Bridge<'_> {
     }
     /// The frame's wall time as the loop would have published it, so the Live TV step has a clock.
     pub(crate) fn clock_for_test(&mut self, unix_s: i64) {
-        self.publish_wall(Some(plx_ui::fmt::Wall { unix_s, utc_offset_s: 0 }));
+        self.publish_unix_s(Some(unix_s));
     }
 }
 
