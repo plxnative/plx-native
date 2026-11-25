@@ -230,3 +230,30 @@ fn a_replayed_row_ranks_the_same_before_and_after_it_gives_its_cards_up() {
     }
     assert_eq!(before, ids(&merge_with_scope(&srcs, &scope(&order, &defaults(&order))).1));
 }
+
+/// F7, the live-versus-replay case: a row whose hub id names no library is ranked by the library its
+/// cards share. A recording decodes it as `Unknown`, and admission decides it the way projection did,
+/// so the replayed run shows the same order as the live one, and keeps it when the row is released.
+#[test]
+fn a_card_derived_row_ranks_the_same_replayed_as_live() {
+    let recent = |sec: i64, id: &str| shelf_in(0, sec, id, id, &[&format!("{id}-a")]);
+    let mut live = [src(0, "", HubState::Ready, Some(built(0, &[], vec![
+        recent(1, "movie.recentlyadded.1"), shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0"]), recent(2, "tv.recentlyadded.2"),
+    ])))];
+    let order = [(sid(0), 2), (sid(0), 1)];
+    let show = |srcs: &[Src; 1]| ids(&merge_with_scope(srcs, &scope(&order, &defaults(&order))).1);
+    let before = show(&live);
+    assert_eq!(before, ["mock.shelf.0", "tv.recentlyadded.2", "movie.recentlyadded.1"], "the mixed row travels with library 2");
+    // what a replay hands the landing: every row decoded, deciding nothing
+    let build = live[0].last.as_mut().unwrap();
+    for shelf in &mut build.shelves {
+        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
+        assert_eq!(shelf.library, ShelfLibrary::Unknown);
+    }
+    admit(None, build);
+    assert_eq!(show(&live), before, "admission decided it from the cards, as projection had");
+    let mixed = &mut live[0].last.as_mut().unwrap().shelves[1];
+    mixed.shown = mixed.items.len();
+    mixed.items = Vec::new();
+    assert_eq!(show(&live), before, "and it keeps its place when it gives its cards up");
+}

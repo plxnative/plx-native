@@ -331,9 +331,11 @@ pub struct Preferences {
         skip_serializing_if = "Vec::is_empty")]
     pub library_views: Vec<LibraryViews>,
     /// **The order a profile put its favourite libraries in**, across every server (a friend's share
-    /// can sit between its own libraries) — Settings' Library order. It governs two surfaces and no
-    /// others: the order of Home's shelves and the order of the Library header's pills. The tab strip,
-    /// `section_of_kind`, Search and the Sources picker's grouping do not read it.
+    /// can sit between its own libraries) — Settings' Library order. It governs three things and no
+    /// others: the order of Home's shelves, the order of the Library header's pills, and which library
+    /// a tab press lands on when nothing was visited or remembered (the first-ordered favourite of the
+    /// type). Which libraries are favourites, the tab strip's membership, Search and the Sources
+    /// picker's grouping do not read it.
     ///
     /// Keyed like [`Preferences::last_library`] and for its reasons: by profile, and by (machine id,
     /// section key), never a section INDEX. **An absent record is the server order**, and a library the

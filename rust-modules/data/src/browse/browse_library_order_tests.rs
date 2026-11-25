@@ -303,3 +303,19 @@ fn an_empty_order_is_refused_and_reset_stays_the_explicit_command() {
     assert!(state.reset_library_order_from(&signed_in()), "Reset deletes");
     state.set_library_order_from(Vec::new(), &signed_in());
 }
+
+/// A share plex.tv never named has no handle but is not the household's either (#68): the default
+/// order, and so a tab with nothing remembered, puts the household's own server first.
+#[test]
+fn a_share_with_no_handle_that_is_not_the_households_sorts_behind_the_household() {
+    let mut state = BrowseState::default();
+    state.sources = vec![a_source("odd", "", true), a_source("home", "", true)];
+    state.sources[0].household = false;
+    state.sources[1].household = true;
+    let session = signed_in();
+    state.append_sections_with(0, vec![(2, "Films".into(), SecKind::Movie)], &session, "");
+    state.append_sections_with(1, vec![(4, "Movies".into(), SecKind::Movie)], &session, "");
+    for section in &mut state.sections { section.pinned = true; }
+    assert_eq!(titles(&state, &state.default_section_order()), vec!["Movies", "Films"]);
+    assert_eq!(state.section_of_kind(SecKind::Movie), Some(1), "the household's library, with nothing remembered");
+}

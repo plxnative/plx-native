@@ -92,8 +92,10 @@ pub enum WriteState {
     InFlight,
     /// The session holds it.
     Saved,
-    /// The write was refused or did not persist: the choice still shows (the overlay keeps it), but
-    /// only for this run.
+    /// The write never started (`WriteOutcome::NotStarted`: the queue refused it, or it was stale when
+    /// the worker saw it) or did not persist (`Finished(false)`): the choice still shows (the overlay
+    /// keeps it), but only for this run. Settings has one thing to say about both, so they are one
+    /// state; nothing retries either, and the next commit is a new write.
     Failed,
 }
 #[derive(Default)]

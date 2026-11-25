@@ -2317,8 +2317,10 @@ impl BrowseState {
     ///
     /// The current Library visit wins first, including a non-favorite selected through Library
     /// options. Once that visit ends, [`remembered_section`](Self::remembered_section) restores
-    /// the last-used favorite. The remaining tiebreak among the *pinned* libraries of the type
-    /// prefers the HOUSEHOLD's over an outsider's.
+    /// the last-used favorite. The remaining tiebreak among the *pinned* libraries of the type is the
+    /// profile's Library order ([`Self::favorite_order`]): its first-ordered favourite of the type, which
+    /// with no record is the default order, and that prefers the HOUSEHOLD's over an outsider's
+    /// ([`Self::default_section_order`]).
     ///
     /// The tiebreak is issue #68's mechanism, one household wider. 0.6.x's `tab_section` sorted on
     /// raw `!owned` with no `pinned` filter at all, so two equally-graded libraries tied and the
@@ -2446,9 +2448,12 @@ impl BrowseState {
             }).collect()).unwrap_or_default();
         self.view_memory = session.views_for(user).cloned().unwrap_or_default();
         // A record that arrives by reload (a profile switch, a session recovery, a pending write
-        // landing) is a moved presentation with no command behind it: republish. A tenure or profile
-        // change normally comes with `BrowseCmd::Reset` (which clears the record and bumps the
-        // generation itself), and one that does not is caught here.
+        // landing or being dropped) is a moved presentation with no command behind it: republish.
+        // Nothing guarantees `BrowseCmd::Reset` accompanies it. The revocation tenure moves in the
+        // session (`plex::session::tenure`, on sign-out or a replaced account) and the Reset sites
+        // (`activate_server_owned`, the controlled boot) run on a server change, not on that counter;
+        // a tenure move only retires the overlay's pending edits (`Preferences::overlay`), and the
+        // next reload then reads a different record, which is what this compares.
         let order = session.order_for(user).cloned();
         if order != self.order_record {
             self.order_record = order;

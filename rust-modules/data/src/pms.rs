@@ -1188,9 +1188,10 @@ struct Shelf {
 /// row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ShelfLibrary {
-    /// Not computed: a row built from a page read, or decoded from a recording. It is read from its
-    /// hub id alone ([`ShelfLibrary::resolve`]), never from the cards it happens to hold, so a replay
-    /// ranks a row identically before and after it gives its cards up.
+    /// Not computed: a row built from a page read (it replaces a window of a row that was projected, and
+    /// never stands alone), or decoded from a recording. A full build is decided as it is admitted
+    /// ([`admit`]); a row that is still `Unknown` is read from its hub id alone
+    /// ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
     #[default]
     Unknown,
     /// Computed: the row belongs to no single library (a whole-server `home.*` hub, or cards of
@@ -1650,6 +1651,18 @@ fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
     *shelf = refreshed;
 }
 
+/// **Where a full build is admitted as a source's `last`**: every landing path ends here, so a row
+/// leaves it with its library DECIDED. A row built by projection already is; one decoded from a
+/// recording (a replay) is [`ShelfLibrary::Unknown`] and is decided now from its hub id and the cards
+/// it holds, which is what projection did when the live run built it, so the two runs rank it alike.
+/// Then what the build replaces hands its rows' libraries and descriptors on ([`carry_descriptors`]).
+fn admit(old: Option<&SourceBuild>, new: &mut SourceBuild) {
+    for shelf in &mut new.shelves {
+        shelf.library = shelf.library.or(ShelfLibrary::projected(&shelf.hub_id, &shelf.items));
+    }
+    if let Some(old) = old { carry_descriptors(old, new); }
+}
+
 /// A refresh brings every row's first page. A row that had given its cards up keeps its descriptor
 /// (window offset, ledger, the count it showed) and takes only the fresh total, so it returns where
 /// it was.
@@ -2026,7 +2039,7 @@ fn publish_staged(state: &mut PmsState, scope: &BrowseScope, home_top_visible: b
     let mut olds: Vec<(usize, Option<SourceBuild>)> = Vec::new();
     for (i, s) in srcs.iter_mut().enumerate() {
         let Some(mut new) = s.staged.take() else { continue };
-        if let Some(old) = s.last.as_ref() { carry_descriptors(old, &mut new); }
+        admit(s.last.as_ref(), &mut new);
         olds.push((i, s.last.replace(new)));
         s.copies.clear(); // a fresh answer, as `landed_ok` takes one
         s.deck_read = DeckRead::Answered;
@@ -3469,7 +3482,7 @@ fn landed_ok(s: &mut Src, b: SourceBuild) {
         b.cw.len()
     ));
     let mut b = b;
-    if let Some(old) = s.last.as_ref() { carry_descriptors(old, &mut b); }
+    admit(s.last.as_ref(), &mut b);
     s.last = Some(b);
     s.copies.clear(); // a fresh answer: what was remembered deeper than its preview may be gone
     s.feed_copies();
@@ -4004,7 +4017,7 @@ fn step_landings_with_scope(state: &mut PmsState, adapter: &PmsAdapter, dt: Opti
             match l.build {
                 Some(mut b) => {
                     replay_since_request(s, &mut b);
-                    if let Some(old) = s.last.as_ref() { carry_descriptors(old, &mut b); }
+                    admit(s.last.as_ref(), &mut b);
                     s.staged = Some(b);
                     s.quiet_fails = 0;
                     state.staged_gen = state.staged_gen.wrapping_add(1);
