@@ -8,7 +8,7 @@
 //! **Emulator codes only; a retail remote is unmeasured.** The rows marked [`Basis::Measured`] are the
 //! emulator's, observed with a key injector and read off the diagnostics panel (`docs/platform-ports.md`,
 //! E7 and E11): Right (keycode 114), Left (113), Up (111), Down (116), Return (36) and the colour button
-//! `XF86Color` (385). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
+//! `XF86Color` (385), and `BackSpace` (22), which the system keyboard's delete key sends ([`crate::ime`]). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
 //! documented as, or inferred from the Samsung remote's layout, and no run has pressed it. The first
 //! retail key dump replaces this table, and a row that turns out wrong is a wrong row here and nowhere else.
 //!
@@ -35,6 +35,9 @@ pub const TABLE: &[(&str, Option<Action>, Basis)] = &[
     ("Down", Some(Action::Down), Basis::Measured),
     ("Return", Some(Action::Ok), Basis::Measured),
     ("XF86Color", None, Basis::Measured),
+    // The system keyboard's delete key (`ime`): the panel sends it to the window as this key, code 22, and the
+    // field reads it as `Action::Backspace` (measured on the TV 10.0 emulator, 2026-11-25).
+    ("BackSpace", Some(Action::Backspace), Basis::Measured),
     // Back and leave.
     ("XF86Back", Some(Action::Back), Basis::Unverified),
     ("Escape", Some(Action::Back), Basis::Unverified),
@@ -197,6 +200,7 @@ mod tests {
             ("Down", Some(Action::Down)),
             ("Return", Some(Action::Ok)),
             ("XF86Color", None),
+            ("BackSpace", Some(Action::Backspace)),
             ("XF86Back", Some(Action::Back)),
             ("Escape", Some(Action::Back)),
             ("XF86Exit", Some(Action::Exit)),
@@ -241,11 +245,11 @@ mod tests {
 
     /// The emulator's measured rows come first and are marked so, and every other row says it is not.
     #[test]
-    fn the_measured_rows_are_the_emulators_six_and_the_rest_say_unverified() {
+    fn the_measured_rows_are_the_emulators_seven_and_the_rest_say_unverified() {
         let measured: Vec<_> = TABLE.iter().filter(|r| r.2 == Basis::Measured).map(|r| r.0).collect();
-        assert_eq!(measured, ["Right", "Left", "Up", "Down", "Return", "XF86Color"]);
-        assert!(TABLE[..6].iter().all(|r| r.2 == Basis::Measured), "the measured rows are the first six");
-        assert!(TABLE[6..].iter().all(|r| r.2 == Basis::Unverified));
+        assert_eq!(measured, ["Right", "Left", "Up", "Down", "Return", "XF86Color", "BackSpace"]);
+        assert!(TABLE[..7].iter().all(|r| r.2 == Basis::Measured), "the measured rows are the first seven");
+        assert!(TABLE[7..].iter().all(|r| r.2 == Basis::Unverified));
     }
 
     #[test]
