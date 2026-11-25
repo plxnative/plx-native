@@ -325,8 +325,8 @@ pub enum Back {
 pub enum Outcome {
     /// A drill-in: the page was pushed and the two pages slide.
     Pushed,
-    /// A track was picked. The host commits it ([`commit`]) and patches the loaded page
-    /// ([`patch_command`]); the panel has already carried [`Selection::chosen`] forward as its own
+    /// A track was picked. The host commits it ([`commit`]) and stores the pick for the page's next
+    /// start ([`patch_command`]); the panel has already carried [`Selection::chosen`] forward as its own
     /// `now` and rebuilt the page.
     Picked(Selection),
     /// A row with nothing to do (an index off the list).
@@ -508,8 +508,9 @@ impl PopoverPanel for PickerState {
     }
 }
 
-/// The store command that makes the loaded page's copy of the item's tracks say what was picked, so
-/// a movie's first start plans it (the plan reads those `selected` flags).
+/// The store command that holds what was picked for the item's next start: the plan applies the stored
+/// pick over the file's own flags (`PreplayPick::apply`, its audio as the session audio) and the start
+/// retires it.
 pub fn patch_command(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection) -> plx_data::stores::metadata::MetadataCmd {
     plx_data::stores::metadata::MetadataCmd::PatchTracks {
         sid: tracks.sid,

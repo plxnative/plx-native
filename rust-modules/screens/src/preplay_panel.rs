@@ -3,11 +3,13 @@
 //! `…` menu's row, the failure screen's entry), `versions_panel`'s shape. The panel's whole state is
 //! `plx_appkit::preplay_tracks::PickerState`; this screen only hosts it (focus stops, input, draw).
 //!
-//! **A pick is two writes**, both emitted from here the moment OK lands on a track: the loaded
-//! page's copy of the item's tracks is patched (`AppFx::Store(Metadata, PatchTracks)`, so a movie's
-//! first start plans the pick, and an Off outranks the account's subtitle rule), and the server
-//! gets the selection PUT plus the show's track memory ([`ContentReq::CommitPreplayPick`], run by
-//! the loop). The panel stays up with the check moved; BACK pops a page before it dismisses.
+//! **A pick is two writes**, both emitted from here the moment OK lands on a track: on a Detail page
+//! the metadata store holds the pick (`AppFx::Store(Metadata, PatchTracks)`: the plan applies it at the
+//! item's next start, the pick's audio as the session audio and an Off outranking the account's subtitle
+//! rule, and the start spends it), and the server gets the selection PUT plus the show's track memory
+//! ([`ContentReq::CommitPreplayPick`], run by the loop). The panel stays up with the check moved; BACK
+//! pops a page before it dismisses. On the failure screen the store is not written: the loop holds the
+//! pair on the session for Try again and closes the panel only when that retry started.
 //!
 //! **Entry point.** Anything that wants the panel sends
 //! `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from a Detail page: the panel's

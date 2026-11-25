@@ -762,3 +762,30 @@ fn pdf_proposal_on_deck_watch_flip_is_immediate_outside_the_loaded_season() {
     assert!(set_watched_local(&mut state, &at, false));
     assert!(!state.current.as_ref().unwrap().on_deck.as_ref().unwrap().watched);
 }
+
+/// **A page read spends what it describes** (`install_landed_detail`): on a SHOW page the streams are the
+/// play episode's, so its landing spends that episode's playback marker and pick, one rule for every item
+/// the page's streams are about, and leaves another episode's pick alone. Without it the disc stayed
+/// hidden after a Play from the show page (the marker is keyed by the episode, the page by the show).
+#[test]
+fn a_show_pages_landing_spends_the_playback_and_pick_of_the_episode_it_describes() {
+    let _serial = plx_base::testlock::serial();
+    let pick = PreplayPick { part_id: 777, audio_sid: 11, sub: SubPick::Off };
+    let page = || Detail {
+        sid: SRV_A,
+        rk: "show".into(),
+        is_show: true,
+        kind: "show".into(),
+        on_deck: Some(Episode { rk: "ep-7".into(), resume_ms: 60_000, ..Default::default() }),
+        episode_streams: EpisodeStreams::Loaded("ep-7".into()),
+        ..Default::default()
+    };
+    let state = test_state();
+    state.played_since_load = Some((SRV_A, "ep-7".into()));
+    state.picks.push((SRV_A, "ep-7".into(), pick));
+    state.picks.push((SRV_A, "ep-9".into(), pick));
+    assert!(install_landed_detail(state, test_adapter(), Some(page()), &plx_plex::plex::ClientKeys::default(), false));
+    assert!(state.played_since_load.is_none(), "the page's streams were read after the playback");
+    assert_eq!(state.picks.iter().map(|(_, rk, _)| rk.as_str()).collect::<Vec<_>>(), ["ep-9"], "only the described episode's pick is spent");
+    clear(test_state(), test_adapter());
+}

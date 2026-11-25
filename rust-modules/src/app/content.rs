@@ -774,7 +774,7 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             }
             ContentReq::CommitPreplayPick { tracks, sel, source: tracks_from } => {
                 // The selection PUT (queued off the frame thread) and, for an episode, the show's
-                // track memory; the panel already patched the loaded page's copy.
+                // track memory; a page's pick is already held by the metadata store.
                 if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
                     plx_base::eventlog::log("preplay: pick not written (no part to address)");
                 }

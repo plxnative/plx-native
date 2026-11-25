@@ -217,7 +217,7 @@ pub struct MetadataState {
     /// word for the NEXT start of its item and is retired by [`retire_picks`]**: when that item's
     /// playback is installed ([`install_playing`], the same transition that sets `played_since_load`,
     /// so Resume after an in-player change reads the server's selection and not a stale pick), when
-    /// a fresh read of that same item lands, and on [`reset`].
+    /// a fresh read of a page that describes it lands (`install_landed_detail`), and on [`reset`].
     picks: Vec<(plx_plex::plex::ServerId, String, PreplayPick)>,
     alt: AltStore,
     /// The IO this owner has asked the application to start and the application has not yet taken
@@ -4735,11 +4735,16 @@ fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<Met
     // server and its portable guid, and this is the one place both are known on the main thread.
     // A page with no guid, or a one-server install, spawns nothing.
     request_alt_sources(state, adapter, d.sid, &d.rk, &d.guid, keys);
-    // a page read now is read after any playback that has landed: its streams are the server's
-    if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (d.sid, &d.rk))) {
-        state.played_since_load = None;
+    // A page read now is read after any playback that has landed: the streams it describes are the
+    // server's, so a playback or a pick held for an item it describes is spent. ONE rule over every item
+    // the page's streams are about: its own and, on a show page, the episode its backfill read
+    // ([`Detail::stream_episode_key`]), which is the one Play starts and the one a pick is keyed by.
+    for rk in std::iter::once(d.rk.as_str()).chain(d.stream_episode_key()) {
+        if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (d.sid, rk))) {
+            state.played_since_load = None;
+        }
+        retire_picks(state, d.sid, rk);
     }
-    retire_picks(state, d.sid, &d.rk);
     let mut d = d;
     if let Some(old) = state.current.as_ref() {
         carry_related_window(old, &mut d);
