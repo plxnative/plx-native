@@ -165,7 +165,8 @@ pub fn end_time_is_eligible(state: EndTimeEligibility) -> bool {
 /// Project an item's end timestamp from the current wall clock, content position and the
 /// playback pipeline's APPLIED rate (per mille). Invalid or unrepresentable inputs stay unknown.
 ///
-/// Keep the wall clock and remaining media time at subsecond precision until they have been added.
+/// Keep the wall clock and remaining media time at the precision given (milliseconds; the app passes
+/// the frame's published whole second, [`projected_end_clock`]) until they have been added.
 /// The caller words the result in the zone the frame's wall time published (the UTC offset at
 /// now), so a clock change between now and the end is not applied.
 pub fn projected_end_unix_seconds(
