@@ -138,6 +138,12 @@ fn a_tune_the_server_did_not_admit_joins_no_recent() {
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(1));
     settle(&mut app, &mut now);
     assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing was admitted");
+    // The channel is asked for and no live session was opened (`cur_live` unset): the note itself
+    // refuses it, whatever reaches it.
+    assert!(plx_media::route::live_request(&app.player.session).is_some());
+    assert!(plx_media::route::live_tuned(&app.player.session).is_none());
+    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "a requested tune is not an admitted one");
 }
 
 /// A live play and every zap are noted in Recent once admitted: the first tune joins, a channel tuned
