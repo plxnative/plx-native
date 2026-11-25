@@ -2866,7 +2866,12 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        assert_eq!(state_fp(), 0x7410_4747_8858_9e13, "current V13 producer census");
+        // **The hero row (#1553) moves the census to this value from 0x7410_4747_8858_9e13.** The screen
+        // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's
+        // hero overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). The predecessor is kept
+        // below like every older value.
+        assert_eq!(state_fp(), 0xc0b2_71bb_16d2_d02f, "current V13 producer census");
+        assert_ne!(state_fp(), 0x7410_4747_8858_9e13, "the census before the hero row's panel and overflow shapes");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");
