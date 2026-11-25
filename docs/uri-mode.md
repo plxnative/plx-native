@@ -478,9 +478,9 @@ that fails over from the URI engine to Standard writes the `already tried` line 
 | `the link is a Plex relay` | the server is reached through a Plex relay, which never carries an original | none: use a direct or LAN link |
 | `quality Auto on a link that is not local; set quality to Original` | Auto streams adaptively unless the link is known to be local, and the app reads this one as remote (or has not measured it) | Quality Original |
 | `an audio enhancement is on` | Boost Dialog or Normalize Loudness is on, so the server re-encodes the audio | turn it off |
-| `a subtitle is burned in` | a subtitle is burned into the picture; any file with a subtitle stream stays in Standard today | a file without subtitle streams |
-| `the selected subtitle is an external file` | the selected subtitle is a sidecar file the app draws; any file with a subtitle stream stays in Standard today | a file without subtitle streams |
-| `the file has subtitle streams and none is selected; subtitle streams keep a play in Standard today` | the TV's pipeline cannot switch the file's default subtitle off, and selecting one does not help (it ends as `subtitle streams keep a play in Standard today; try a file without subtitle streams`) | a file without subtitle streams |
+| `a subtitle is burned in` | the selected subtitle must be burned into the picture | a file without selected subtitles or embedded subtitle streams |
+| `the selected subtitle is an external file` | the app draws the selected sidecar in Standard | turn subtitles off for a file with only external subtitles |
+| `the file has embedded subtitle streams and none is selected` | the TV's pipeline cannot switch off the file's default subtitle | a file without embedded subtitle streams |
 | `the file has Dolby Vision and the Dolby Vision setting is Off` | Dolby Vision is Off in the profile | set Dolby Vision to Auto |
 | `the TV's own player would show only this file's Dolby Vision base layer; Standard plays it as Dolby Vision` | a Profile 7 that Feed converts, or a Dolby Vision MKV on a set whose Matroska demuxer reads no Dolby Vision (before webOS 10.3; "Dolby Vision on the load" above) | none: the file plays as Dolby Vision in Standard |
 | `a trailer preview` | previews are not carried | none |

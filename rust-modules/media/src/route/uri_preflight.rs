@@ -165,7 +165,7 @@ pub enum UriDecline {
     SubtitleBurn,
     /// The selected subtitle is an external file the app draws itself.
     ClientSubtitle,
-    /// The file has subtitle streams and none is selected: the TV's pipeline has no way to switch the
+    /// The file has embedded subtitle streams and none is selected: the TV's pipeline has no way to switch the
     /// default one off.
     SubtitleOff,
     /// The file carries Dolby Vision and Settings > Dolby Vision is Off.
@@ -223,7 +223,7 @@ impl UriDecline {
             Self::AudioEnhancement => "an audio enhancement is on",
             Self::SubtitleBurn => "a subtitle is burned in",
             Self::ClientSubtitle => "the selected subtitle is an external file",
-            Self::SubtitleOff => "the file has subtitle streams and none is selected; subtitle streams keep a play in Standard today",
+            Self::SubtitleOff => "the file has embedded subtitle streams and none is selected",
             Self::DolbyVisionOff => "the file has Dolby Vision and the Dolby Vision setting is Off",
             Self::DolbyVisionBaseLayer =>
                 "the TV's own player would show only this file's Dolby Vision base layer; Standard plays it as Dolby Vision",

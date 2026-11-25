@@ -26,6 +26,13 @@ const ORDINARY_TITLE: &[u8] = br#"{"MediaContainer":{"Metadata":[{"ratingKey":"r
      {"id":31341,"streamType":1,"codec":"h264","index":0},
      {"id":31342,"streamType":2,"codec":"aac","channels":2,"index":1,"languageCode":"eng","default":true,"selected":true}]}]}]}]}}"#;
 
+const TITLE_WITH_SIDECAR: &[u8] = br#"{"MediaContainer":{"Metadata":[{"ratingKey":"rk-v","type":"movie","duration":600000,"Media":[
+  {"id":3086,"duration":450000,"bitrate":2372,"width":1920,"height":1080,"videoCodec":"h264","audioCodec":"aac","container":"mkv",
+   "Part":[{"id":3134,"duration":450000,"key":"/library/parts/3134/1/file.mkv","container":"mkv","Stream":[
+     {"id":31341,"streamType":1,"codec":"h264","index":0},
+     {"id":31342,"streamType":2,"codec":"aac","channels":2,"index":1,"languageCode":"eng","default":true,"selected":true},
+     {"id":31343,"streamType":3,"codec":"srt","key":"/library/streams/31343","languageCode":"eng"}]}]}]}]}}"#;
+
 /// What a Tizen-like driver's composition would supply: no viewer opt-in is asked for, the driver
 /// is the platform's only path and says what it plays. An original Standard would direct-play is a
 /// URL carrier; a PMS conversion is certified only when `pms` is armed. It records the opt-in each
@@ -121,6 +128,34 @@ fn a_uri_only_composition_plays_an_ordinary_title_with_the_experimental_setting_
     scrobble_stop(&mut ps, None, None);
     drain_scrobble();
     plx_plex::plex::reset_servers_for_test();
+}
+
+#[test]
+fn a_uri_only_composition_ignores_an_unselected_external_subtitle() {
+    use crate::route::uri_preflight::UriDecline;
+
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    assert!(plx_net::net::global_init());
+    let _composed = compose_uri_only(&mut ps, None);
+    let (port, done, server) = versions_pms_with(TITLE_WITH_SIDECAR, MDE_DIRECTPLAY);
+    let sid = plx_plex::plex::register_for_test("sidecar", "127.0.0.1", port, "token", "sidecar-client");
+    let mut env = ResolveEnv::snapshot(&ps,
+        plx_data::stores::metadata::MetadataStore::default().view(), sid, "rk-v");
+    let off = plx_base::task::OffFrame::for_test();
+    let resolve = |env: &ResolveEnv| build_stream(&off, "rk-v",
+        "/library/parts/3134/1/file.mkv", "h264", "aac", env);
+    env.subtitle_override = Some(0);
+    let without_subtitle = resolve(&env);
+    env.subtitle_override = Some(31343);
+    let with_subtitle = resolve(&env);
+    done.send(()).unwrap();
+    server.join().unwrap();
+    plx_plex::plex::reset_servers_for_test();
+
+    assert!(without_subtitle.uri_original.is_some(), "{:?}", without_subtitle.uri_decline);
+    assert_eq!(with_subtitle.uri_decline, Some(UriDecline::ClientSubtitle));
+    assert_eq!(with_subtitle.verdict, Some(PlayVerdict::NoQualifiedBackend));
 }
 
 /// (b, the refusal) A source the URI driver's qualifier declines (DTS audio the set cannot play

@@ -23,7 +23,7 @@ pub fn pms_version(version: &str) -> String {
 /// What the boot's identity line says this build can do, in the words of `docs/tizen.md`.
 // In this crate, arm means the retail armv7 configuration.
 #[cfg(target_arch = "arm")]
-pub const BUILD: &str = "super alpha; not run on a retail set";
+pub const BUILD: &str = "super alpha";
 #[cfg(all(not(target_arch = "arm"), not(feature = "uri")))]
 pub const BUILD: &str = "emulator only; no playback";
 #[cfg(all(not(target_arch = "arm"), feature = "uri"))]

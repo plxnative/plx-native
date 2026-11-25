@@ -68,9 +68,9 @@ REPO_JSON_URL = f"{SITE_ORIGIN}/nightly/repo.json"
 GUIDE_URL = f"{SITE_ORIGIN}/nightly/"
 SAMSUNG_GUIDE_URL = f"{GUIDE_URL}samsung/"
 SAMSUNG_ALPHA = (
-    "It has never been run on a real Samsung TV - only on Samsung's TV emulator. "
-    "For Samsung TVs from 2021 or newer (Tizen 6.0 or newer) only. "
-    "It may not start at all."
+    "For Samsung TVs from 2021 or newer (Tizen 6.0 or newer). "
+    "Installation, sign-in and browsing worked on one retail model. "
+    "Playback is still under test, and startup may fail on other models."
 )
 PACKAGE_ID = "com.beb.plxnative.nightly"
 #: The manifest `build-package.yml` generates for the nightly package and `publish` attaches to the

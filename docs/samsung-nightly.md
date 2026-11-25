@@ -1,7 +1,8 @@
 # Samsung nightly builds
 
-**SUPER ALPHA.** It has never been run on a real Samsung TV - only on Samsung's TV emulator.
-For Samsung TVs from 2021 or newer (Tizen 6.0 or newer) only. It may not start at all.
+**SUPER ALPHA.** For Samsung TVs from 2021 or newer (Tizen 6.0 or newer). Installation, sign-in and browsing worked on one retail model. Playback is still under test, and startup may fail on other models.
+
+The first tester used a 2023 Samsung UA65CU7700. They reported failed playback attempts and a missing on-screen keyboard in Search. [Retail test report](https://github.com/plxnative/plx-native/discussions/1460#discussioncomment-19825784)
 [If you try it, please send us a log](#send-a-log).
 
 ## What you need
@@ -17,7 +18,7 @@ For Samsung TVs from 2021 or newer (Tizen 6.0 or newer) only. It may not start a
 3. Choose **Install** and follow the certificate prompts. Apps2Samsung signs the package for your TV. Keep using the same certificate when updating, since changing the author certificate can require uninstalling the older package.
 4. Open **PlxNative Nightly** from the TV's app list. Sign in to Plex each time you start the app. The Samsung build keeps the sign-in in memory for that run.
 
-The Apps2Samsung install and update steps still need a test with this package on a retail Samsung TV.
+The Apps2Samsung install and update steps still need a retail test that confirms the installer used.
 
 ## Send a log
 

@@ -2054,9 +2054,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             });
             let source_sub_sid = source_sub_stream.filter(|sub| !sub.external).map_or(0, |sub| sub.id);
             let requires_client_subtitle = source_sub_stream.is_some_and(|sub| sub.external);
-            // A selected source stream requires its exact native index. Off is an explicit
-            // viewer decision when the file contains subtitles; Unspecified is safe only when
-            // there is no source subtitle for the native decoder to auto-select.
+            // Keep Off in the PMS intent whenever subtitles exist. The server's output can
+            // contain a burned subtitle even when the original has only sidecars.
             let subtitle_choice = if source_sub_sid > 0 {
                 plx_playback_contract::TrackChoice::Selected(source_sub_sid as u64)
             } else if plan.playing.as_ref().is_some_and(|item| !item.subs.is_empty()) {
@@ -2111,6 +2110,15 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                             env.direct_play_mode, codec, 0, 0),
                     }
                 });
+                // An unselected sidecar never reaches the native decoder with the original.
+                // Only an embedded stream requires the native player to switch subtitles off.
+                let original_subtitle_choice = if subtitle_choice == plx_playback_contract::TrackChoice::Off
+                    && !plan.playing.as_ref().is_some_and(|item| item.subs.iter().any(|sub| !sub.external))
+                {
+                    plx_playback_contract::TrackChoice::Unspecified
+                } else {
+                    subtitle_choice
+                };
                 let request = super::uri_preflight::OriginalRequest {
                     selection: source_selection,
                     server_origin: client.origin().clone(),
@@ -2137,7 +2145,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     has_multiple_audio_tracks: tracks.len() > 1,
                     subtitle_source: source_sub_stream.map(|sub| super::uri_preflight::SourceSubtitle {
                         codec: sub.codec.to_lowercase(), embedded: !sub.external }),
-                    subtitle_choice,
+                    subtitle_choice: original_subtitle_choice,
                     source_kbps: u32::try_from(source_kbps).ok().filter(|kbps| *kbps > 0),
                     raster: u32::try_from(width).ok().zip(u32::try_from(height).ok())
                         .filter(|(w, h)| *w > 0 && *h > 0),
