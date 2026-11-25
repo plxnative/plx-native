@@ -14,6 +14,10 @@ pub(super) enum Edit {
     Library { kind: String, machine: String, key: i64 },
     View { machine: String, key: i64, snapshot: ViewSnapshot, field: ViewField },
     Pins { libraries: Vec<(String, i64, bool, bool)>, on: Vec<bool>, touched: Vec<bool>, asked: bool },
+    /// The profile's Library order, whole: `(machine id, section key)` first shown first.
+    Order { libs: Vec<(String, i64)> },
+    /// Back to the server order: the profile's record is deleted.
+    OrderReset,
 }
 impl Edit {
     fn merge(&self, current: &Session, user: &str) -> Option<Session> {
@@ -39,6 +43,14 @@ impl Edit {
                 let fresh = plx_plex::plex::pins::record(user, *asked, &libraries, &answers);
                 next.set_pins_for(user, plx_plex::plex::pins::carry_forward(fresh, previous, &libraries));
             }
+            Self::Order { libs } => {
+                next.set_order_for(user, libs);
+                if next.prefs.library_order == current.prefs.library_order { return None; }
+            }
+            Self::OrderReset => {
+                next.clear_order_for(user);
+                if next.prefs.library_order == current.prefs.library_order { return None; }
+            }
         }
         Some(next)
     }
@@ -46,6 +58,8 @@ impl Edit {
         // Partial view edits must retain their order, including an earlier listing's sort.
         match (self, other) {
             (Self::Library { kind: a, .. }, Self::Library { kind: b, .. }) => a == b,
+            // A later order, or a reset, supersedes an earlier one whole.
+            (Self::Order { .. } | Self::OrderReset, Self::Order { .. } | Self::OrderReset) => true,
             _ => false,
         }
     }
@@ -225,7 +239,7 @@ mod tests {
         for edit in [library(7), Edit::View { machine: "machine".into(), key: 7, snapshot, field: ViewField::Sort }] {
             let original_machine = match &edit {
                 Edit::Library { machine, .. } | Edit::View { machine, .. } => machine.as_ptr(),
-                Edit::Pins { .. } => unreachable!(),
+                Edit::Pins { .. } | Edit::Order { .. } | Edit::OrderReset => unreachable!(),
             };
             let expected = edit.clone();
             let _ = writes.emit("viewer", edit);
@@ -235,7 +249,7 @@ mod tests {
             assert_eq!(job.req.edit.as_ref(), &expected);
             let machine = match job.req.edit.as_ref() {
                 Edit::Library { machine, .. } | Edit::View { machine, .. } => machine,
-                Edit::Pins { .. } => unreachable!(),
+                Edit::Pins { .. } | Edit::Order { .. } | Edit::OrderReset => unreachable!(),
             };
             assert_eq!(machine.as_ptr(), original_machine);
             assert!(job.req.matches_account(&captured));

@@ -1046,6 +1046,9 @@ pub struct BrowseState {
     /// another's view.
     view_memory: plx_plex::plex::session::LibraryViews,
     recorded: Option<plx_plex::plex::session::HomePins>,
+    /// This profile's Library order record, as last read ([`Self::load_remembered`], through the
+    /// pending-write overlay). `None` is the server order.
+    order_record: Option<plx_plex::plex::session::LibraryOrder>,
     preference_writes: preferences_job::Preferences,
     pending_pins: Option<(String, std::sync::Arc<std::sync::Mutex<PinWrite>>)>,
     /// The outcome of the last editor commit ([`apply_pins_from`](Self::apply_pins_from)),
@@ -1161,6 +1164,7 @@ impl Default for BrowseState {
             visited_user: String::new(),
             view_memory: Default::default(),
             recorded: None,
+            order_record: None,
             pending_pins: None,
             pin_commit: PinCommit::default(),
             preference_writes: Default::default(),
@@ -2127,6 +2131,95 @@ impl BrowseState {
         }
         out
     }
+    // ---- Library order: a projection over the table, never a reorder of it ---------------------
+    //
+    // Table indices are identities (`cur`, `states`, saved views, listings), so the order is NOT
+    // applied by moving rows: `section_order` answers the table indices in the order to present, and
+    // the two surfaces that follow it (the Library header via `DirectoryData::order`, Home's shelves
+    // via `BrowseScope::order`) read that. `plex::library_order` has the rules.
+
+    /// Every table index in the DEFAULT order, which is deterministic whatever order the sources'
+    /// directories landed in: own servers first, then shares (Home's own predicate, an empty
+    /// handle), each group in roster order, each source's libraries in the order its directory
+    /// listed them (the table appends a source's rows contiguously).
+    fn default_section_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.sections.len()).collect();
+        order.sort_by_key(|&index| {
+            let src = self.sections[index].src;
+            (self.sources.get(src).is_some_and(|source| !source.handle.is_empty()), src)
+        });
+        order
+    }
+    /// Every table index in the order to PRESENT: the default order under this profile's record.
+    fn section_order(&self) -> Vec<usize> {
+        let default = self.default_section_order();
+        let libs: Vec<plx_plex::plex::library_order::Lib<'_>> = default.iter().map(|&index| {
+            let section = &self.sections[index];
+            plx_plex::plex::library_order::Lib {
+                machine_id: self.sources.get(section.src).map_or("", |source| source.machine_id.as_str()),
+                key: section.key,
+            }
+        }).collect();
+        plx_plex::plex::library_order::effective(&libs, self.order_record.as_ref())
+            .into_iter().map(|at| default[at]).collect()
+    }
+    /// The favourites (table indices) in presentation order, and whether that is the server order.
+    fn favorite_order(&self) -> (Vec<usize>, bool) {
+        let shown: Vec<usize> = self.section_order().into_iter().filter(|&index| self.sections[index].pinned).collect();
+        let default: Vec<usize> = self.default_section_order().into_iter().filter(|&index| self.sections[index].pinned).collect();
+        let server = shown == default;
+        (shown, server)
+    }
+    /// What the profile reads as a library's identity in the record: `(machine id, key)`.
+    fn order_identity(&self, index: usize) -> Option<(String, i64)> {
+        let section = self.sections.get(index)?;
+        let machine = &self.sources.get(section.src)?.machine_id;
+        Some((machine.clone(), section.key))
+    }
+    /// The Library order commands' one door: queue the write the way every other preference write is
+    /// queued, mirror it into the local record at once (the overlay already holds it until its
+    /// receipt lands), and republish the table.
+    fn commit_library_order(&mut self, edit: preferences_job::Edit, session: &plx_plex::plex::session::Session) -> bool {
+        if session.client_id.is_empty() {
+            plx_base::eventlog::log(
+                "browse: the session refused a Library order change (no identity) — nothing was recorded");
+            return false;
+        }
+        let user = self.profile_key.clone();
+        if self.preference_writes.emit(&user, edit).is_none() {
+            plx_base::eventlog::log("browse: the write queue refused a Library order change");
+            return false;
+        }
+        self.load_remembered(session, &user);
+        self.bump_sections_gen();
+        true
+    }
+    fn set_library_order_from(&mut self, libs: Vec<(String, i64)>, session: &plx_plex::plex::session::Session) -> bool {
+        let libs: Vec<(String, i64)> = libs.into_iter().filter(|(machine, _)| !machine.is_empty()).collect();
+        // An order that says nothing the server order does not is no record at all.
+        let default: Vec<(String, i64)> = self.default_section_order().into_iter()
+            .filter(|&index| self.sections[index].pinned).filter_map(|index| self.order_identity(index)).collect();
+        let edit = if libs == default {
+            preferences_job::Edit::OrderReset
+        } else {
+            preferences_job::Edit::Order { libs }
+        };
+        self.commit_library_order(edit, session)
+    }
+    fn reset_library_order_from(&mut self, session: &plx_plex::plex::session::Session) -> bool {
+        self.commit_library_order(preferences_job::Edit::OrderReset, session)
+    }
+    /// The favourites in presentation order, as Settings' Library order lists them.
+    fn library_order_rows(&self) -> Vec<LibraryOrderRow> {
+        self.favorite_order().0.into_iter().filter_map(|index| {
+            let section = self.sections.get(index)?;
+            let source = self.sources.get(section.src)?;
+            Some(LibraryOrderRow {
+                section: index, machine_id: source.machine_id.clone(), key: section.key,
+                title: section.title.clone(), kind: section.kind, handle: source.handle.clone(),
+            })
+        }).collect()
+    }
     fn favorite_sections(&self) -> Vec<(ServerId, i64, bool)> {
         self.library_pins().into_iter().filter_map(|(source, key, favorite)| {
             self.sources.get(source).map(|row| (row.sid, key, favorite))
@@ -2287,6 +2380,7 @@ impl BrowseState {
                     .map(|kind| (kind, target.machine_id.clone(), target.key))
             }).collect()).unwrap_or_default();
         self.view_memory = session.views_for(user).cloned().unwrap_or_default();
+        self.order_record = session.order_for(user).cloned();
     }
     /// The pin rules' view of the section table.
     ///
@@ -2699,6 +2793,7 @@ impl BrowseState {
         self.sections = Vec::new();
         self.states = Vec::new();
         self.recorded = None;
+        self.order_record = None;
         self.remembered = Vec::new();
         self.view_memory = Default::default();
         self.tab_shape = u32::MAX;
@@ -2931,6 +3026,8 @@ impl BrowseState {
                 self.apply_pins_from(&edits, session);
                 true
             }
+            BrowseCmd::SetLibraryOrder(libs) => self.set_library_order_from(libs, session),
+            BrowseCmd::ResetLibraryOrder => self.reset_library_order_from(session),
             BrowseCmd::RetryDiscovery => {
                 self.retry_discovery();
                 true
@@ -3931,6 +4028,21 @@ impl SrcGroup {
     }
 }
 
+/// One favourite library in Settings' Library order, in the order it is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryOrderRow {
+    /// the section table index it opens (an identity only inside one table epoch)
+    pub section: usize,
+    /// what an order command names it by, with [`Self::key`]; empty while the registry has not
+    /// learned the server's machine id, which is a row an order cannot record
+    pub machine_id: String,
+    pub key: i64,
+    pub title: String,
+    pub kind: SecKind,
+    /// the owner's handle ("anna" for a friend's share); empty on your own server
+    pub handle: String,
+}
+
 /// One library row in the Sources list.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SrcRow {
@@ -4614,3 +4726,7 @@ mod membership_tests;
 
 #[cfg(test)]
 mod roster_input_tests;
+
+#[cfg(test)]
+#[path = "browse_library_order_tests.rs"]
+mod library_order_tests;

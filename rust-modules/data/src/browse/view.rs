@@ -456,6 +456,17 @@ struct DirectoryData {
     sources: Vec<(ServerId, super::SrcGroup)>,
     sections: Vec<SectionView>,
     favorites: Vec<(ServerId, i64, bool)>,
+    /// Every `sections` index in the order to PRESENT (the profile's Library order over the
+    /// deterministic default). `sections` itself stays in table order: its indices are identities.
+    order: Vec<usize>,
+    /// The favourites in presentation order (Settings' Library order's rows).
+    order_rows: Vec<super::LibraryOrderRow>,
+    /// Is that the server order? (Settings' Reset row is inert then.)
+    order_is_server: bool,
+    /// What Home's merge ranks its shelves by: the favourites `(server, section key)` in
+    /// presentation order, EMPTY while the order is the server order, so Home is exactly what it
+    /// was before the setting existed.
+    home_order: Vec<(ServerId, i64)>,
 }
 
 /// Retained by the Bridge-owned `BrowseStore` and captured from its `BrowseState`, never a new
@@ -616,6 +627,15 @@ impl DirectorySnapshot {
                         key: section.key, kind: section.kind, row,
                     }).collect(),
                 favorites: state.favorite_sections(),
+                order: state.section_order(),
+                order_rows: state.library_order_rows(),
+                order_is_server: state.favorite_order().1,
+                home_order: if state.favorite_order().1 { Vec::new() } else {
+                    state.favorite_order().0.into_iter().filter_map(|index| {
+                        let section = state.sections().get(index)?;
+                        Some((state.sources().get(section.src)?.sid, section.key))
+                    }).collect()
+                },
             });
             self.stamp = Some(stamp);
         }
@@ -651,6 +671,10 @@ impl DirectorySnapshot {
                 sources: vec![(sid, source)],
                 sections: Vec::new(),
                 favorites: Vec::new(),
+                order: Vec::new(),
+                order_rows: Vec::new(),
+                order_is_server: true,
+                home_order: Vec::new(),
             }),
             sample: Vec::new(),
             kind_posters: [None, None],
@@ -731,6 +755,7 @@ impl DirectorySnapshot {
             section.sid.map(|sid| (sid, section.key, section.row.pinned))
         }).collect();
         let source_count = sources.len();
+        let order = (0..sections.len()).collect();
         Self {
             preferred,
             kind_fetch: [SecFetch::Ready; 2],
@@ -739,6 +764,10 @@ impl DirectorySnapshot {
                 sources,
                 sections,
                 favorites,
+                order,
+                order_rows: Vec::new(),
+                order_is_server: true,
+                home_order: Vec::new(),
             }),
             sample: Vec::new(),
             kind_posters: [None, None],
@@ -820,6 +849,20 @@ impl<'a> DirectoryView<'a> {
     pub fn favorite_sections(self) -> &'a [(ServerId, i64, bool)] {
         &self.0.data.favorites
     }
+    /// **The favourite libraries in the profile's Library order**, first shown first, for Settings'
+    /// Library order page (across servers; `handle` names a share's owner). Empty before any
+    /// library has landed.
+    pub fn library_order(self) -> &'a [super::LibraryOrderRow] {
+        &self.0.data.order_rows
+    }
+    /// Does [`Self::library_order`] equal the server order? Settings' Reset row is inert then.
+    pub fn library_order_is_server(self) -> bool {
+        self.0.data.order_is_server
+    }
+    /// What Home ranks its shelves by (see `DirectoryData::home_order`): empty for the server order.
+    pub(crate) fn home_order(self) -> &'a [(ServerId, i64)] {
+        &self.0.data.home_order
+    }
     #[allow(dead_code)]
     pub fn tab_kind(self, tab: usize) -> Option<super::SecKind> {
         [super::SecKind::Movie, super::SecKind::Show].into_iter()
@@ -900,8 +943,7 @@ impl<'a> DirectoryView<'a> {
     /// Sort & Filter still surfaces its pill in the Library header while viewing it.
     pub fn rows_for(self, section: usize) -> impl Iterator<Item = &'a super::SrcRow> {
         let kind = self.sections().get(section).map(|s| s.kind);
-        self.sections()
-            .iter()
+        self.0.data.order.iter().filter_map(move |&at| self.sections().get(at))
             .filter(move |s| Some(s.kind) == kind && (s.row.pinned || s.row.section == section))
             .map(|s| &s.row)
     }
