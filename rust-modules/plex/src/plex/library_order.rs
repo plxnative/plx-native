@@ -19,10 +19,12 @@
 //!   grain is the MACHINE, as in [`pins::carry_forward`](super::pins::carry_forward). A server that is
 //!   present has just been answered about in full; one that is not keeps its entries, each right
 //!   after the entry that preceded it, so it returns to its place with its server.
-//! * **ONE definition of "the record says nothing"**: [`state`] (what is shown and what Settings
-//!   offers) and [`merged`] (what the writer stores) both decide it from the record against the
-//!   libraries present, so a record is either deleted or [`OrderState::Saved`], whatever surface
-//!   asks. [`OrderState::Saved`]'s `in_effect` says whether it moves anything among them NOW.
+//! * **Two questions, each asked once.** *Does the record carry anything* is [`merged`]'s, over every
+//!   library present: the writer deletes a record that says nothing and stores one that does.
+//!   *Does it move anything the profile is shown* is [`OrderState`]'s `in_effect`, judged by the
+//!   caller over the favourites every surface presents (Browse compares the favourites' effective
+//!   and default order once: the header, Home and Settings all read that). A record can therefore be
+//!   stored and in effect over no favourite, say once the one library it moved is unfavourited.
 //!
 //! [`hub_library`] is the other half of Home's use of this: which library a `/hubs` shelf belongs to,
 //! from its `hubIdentifier` alone, so the answer does not depend on whether the shelf still holds
@@ -38,32 +40,35 @@ pub struct Lib<'a> {
     pub key: i64,
 }
 
-/// **What a profile's record is, against the libraries present now.** The one state every surface
-/// reads: the writer ([`merged`] deletes a record that would be `Server`), Home, the Library header
-/// and Settings' Reset row.
+/// **What a profile's Library order is now**, the one state every surface reads: the Library header,
+/// Home and Settings' Reset row.
+///
+/// "A record exists" and "it moves a favourite" are kept apart, and so is "it exists" from "it is
+/// saved": a record is *recorded* when the profile sees one (an edit pending or failed to save counts)
+/// OR the session still holds one (a Reset that is pending or failed counts), so Reset stays offered
+/// until the disk really has none. Whether a write reached the disk is the write's own state
+/// (`browse::WriteState`), published beside this.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OrderState {
-    /// No record: the server order. Reset has nothing to delete.
+    /// No record anywhere: the server order. Reset has nothing to delete.
     #[default]
     Server,
-    /// A record exists. `in_effect` is whether it moves any library present now: with a friend's
-    /// server offline a record that only ranks that friend's libraries is saved yet shows nothing,
-    /// and Reset still has something to delete.
-    Saved { in_effect: bool },
+    /// A record exists, shown or stored. `in_effect` is whether the profile is shown any favourite
+    /// moved: false for a record that names only an offline server's libraries, one in the server
+    /// order, or one the profile has just Reset (the disk's copy not yet deleted).
+    Recorded { in_effect: bool },
 }
 
 impl OrderState {
+    /// The state of `recorded` (a record is shown or stored) whose effect is `in_effect`; an effect
+    /// with no record is no effect.
+    pub fn of(recorded: bool, in_effect: bool) -> Self {
+        if recorded { Self::Recorded { in_effect } } else { Self::Server }
+    }
     /// Is a record there to delete (Settings' Reset)?
-    pub fn is_saved(self) -> bool { matches!(self, Self::Saved { .. }) }
-    /// Does the record move anything present now (what Home and the header project)?
-    pub fn in_effect(self) -> bool { matches!(self, Self::Saved { in_effect: true }) }
-}
-
-/// The record's state against `default` (the libraries present, in the server's own order).
-pub fn state(default: &[Lib<'_>], record: Option<&LibraryOrder>) -> OrderState {
-    let Some(record) = record.filter(|record| !record.libs.is_empty()) else { return OrderState::Server };
-    let order = effective(default, Some(record));
-    OrderState::Saved { in_effect: order.iter().enumerate().any(|(at, index)| at != *index) }
+    pub fn is_recorded(self) -> bool { matches!(self, Self::Recorded { .. }) }
+    /// Does the record move any favourite the profile is shown (what Home and the header project)?
+    pub fn in_effect(self) -> bool { matches!(self, Self::Recorded { in_effect: true }) }
 }
 
 /// The effective order of `default` (libraries in the server's own order) under `record`: a
@@ -174,9 +179,7 @@ mod tests {
     fn no_record_is_the_server_order() {
         let order = effective(&libs(), None);
         assert_eq!(order, vec![0, 1, 2, 3, 4]);
-        assert_eq!(state(&libs(), None), OrderState::Server);
-        assert_eq!(state(&libs(), Some(&record(&[]))), OrderState::Server, "an empty record says nothing");
-        assert_eq!(effective(&libs(), Some(&record(&[]))), order);
+                assert_eq!(effective(&libs(), Some(&record(&[]))), order);
     }
 
     #[test]
@@ -184,7 +187,6 @@ mod tests {
         // a friend's share sits between the owner's own libraries
         let order = effective(&libs(), Some(&record(&[("A", 1), ("B", 2), ("A", 4), ("A", 5), ("B", 9)])));
         assert_eq!(order, vec![1, 3, 0, 2, 4]);
-        assert_eq!(state(&libs(), Some(&record(&[("A", 1), ("B", 2), ("A", 4), ("A", 5), ("B", 9)]))), OrderState::Saved { in_effect: true });
     }
 
     #[test]
@@ -225,20 +227,14 @@ mod tests {
         assert_eq!(sorted, vec![0, 1, 2, 3, 4], "a permutation");
     }
 
-    /// One predicate: a record that names every library in the server order exists (Reset has
-    /// something to delete) but moves nothing; with the friend offline, so does one that only ranks
-    /// the friend's libraries.
+    /// A record is *recorded* whether or not it moves anything shown: Reset has something to delete.
     #[test]
-    fn a_saved_record_that_moves_nothing_present_is_saved_not_in_effect() {
-        let in_server_order = record(&[("A", 4), ("A", 1), ("A", 5), ("B", 2), ("B", 9)]);
-        assert_eq!(state(&libs(), Some(&in_server_order)), OrderState::Saved { in_effect: false });
-        let friend_only = record(&[("B", 9), ("B", 2)]);
-        assert_eq!(state(&libs()[..3], Some(&friend_only)), OrderState::Saved { in_effect: false }, "B is offline");
-        assert!(state(&libs()[..3], Some(&friend_only)).is_saved());
-        assert!(!state(&libs()[..3], Some(&friend_only)).in_effect());
-        let anonymous = [Lib { machine_id: "", key: 1 }];
-        assert_eq!(state(&anonymous, Some(&record(&[("", 1)]))), OrderState::Saved { in_effect: false },
-            "an entry no library can match moves nothing, on every surface");
+    fn a_recorded_order_that_moves_nothing_shown_is_recorded_not_in_effect() {
+        assert_eq!(OrderState::of(false, false), OrderState::Server);
+        assert_eq!(OrderState::of(false, true), OrderState::Server, "an effect with no record is none");
+        assert_eq!(OrderState::of(true, false), OrderState::Recorded { in_effect: false });
+        assert!(OrderState::of(true, false).is_recorded() && !OrderState::of(true, false).in_effect());
+        assert!(OrderState::of(true, true).in_effect());
     }
 
     fn pairs(list: &[(&str, i64)]) -> Vec<(String, i64)> {

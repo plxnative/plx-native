@@ -454,6 +454,9 @@ pub struct SectionView {
 #[derive(Clone, Default)]
 struct DirectoryData {
     sources: Vec<(ServerId, super::SrcGroup)>,
+    /// Each source's household verdict ([`super::BrowseSource::household`]): what Home's roster
+    /// orders by, so the two surfaces rank the sources with one rule ([`super::source_rank`]).
+    households: Vec<(ServerId, bool)>,
     sections: Vec<SectionView>,
     favorites: Vec<(ServerId, i64, bool)>,
     /// Every `sections` index in the order to PRESENT (the profile's Library order over the
@@ -624,6 +627,7 @@ impl DirectorySnapshot {
             self.data = Arc::new(DirectoryData {
                 sources: state.sources().iter().map(|s| s.sid)
                     .zip(state.source_groups()).collect(),
+                households: state.sources().iter().map(|s| (s.sid, s.household)).collect(),
                 sections: state.sections().iter().zip(state.all_source_rows())
                     .map(|(section, row)| SectionView {
                         sid: state.sources().get(section.src).map(|source| source.sid),
@@ -647,7 +651,7 @@ impl DirectorySnapshot {
         self.pin_commit = state.pin_commit();
         self.order_write = state.order_write();
         for (i, kind) in [super::SecKind::Movie, super::SecKind::Show].into_iter().enumerate() {
-            self.preferred[i] = state.tab_of_kind(kind).and_then(|tab| state.tab_section(tab));
+            self.preferred[i] = state.tab_of_kind(kind).and_then(|_| state.section_of_kind_in(kind, &self.data.order));
             self.kind_fetch[i] = state.kind_state(kind);
             self.kind_shelves[i] = self.preferred[i]
                 .and_then(|section| state.states().get(section))
@@ -668,6 +672,7 @@ impl DirectorySnapshot {
             stamp: Some((epoch, 0, 0, 1, sid)),
             data: Arc::new(DirectoryData {
                 sources: vec![(sid, source)],
+                households: Vec::new(),
                 sections: Vec::new(),
                 favorites: Vec::new(),
                 order: Vec::new(),
@@ -762,6 +767,7 @@ impl DirectorySnapshot {
             stamp: Some((epoch, 0, current, source_count, ServerId::UNSET)),
             data: Arc::new(DirectoryData {
                 sources,
+                households: Vec::new(),
                 sections,
                 favorites,
                 order,
@@ -866,9 +872,11 @@ impl<'a> DirectoryView<'a> {
     pub fn library_order(self) -> &'a [super::LibraryOrderRow] {
         &self.0.data.order_rows
     }
-    /// **What the profile's record is** ([`super::OrderState`]): `Server` when it has none (Reset has
-    /// nothing to delete), `Saved { in_effect }` when it has one — `in_effect` false while it moves
-    /// no library present now (a friend's server offline), where Reset still has a record to delete.
+    /// **What the profile's record is** ([`super::OrderState`]): `Server` when there is none (Reset has
+    /// nothing to delete), `Recorded { in_effect }` when one is shown or still stored. `in_effect`
+    /// is false while it moves no favourite shown (a friend's server offline, the one library it
+    /// moved unfavourited, a Reset not yet saved), where Reset still has a record to delete. Whether
+    /// the last write reached the disk is [`Self::library_order_write`].
     pub fn library_order_state(self) -> super::OrderState {
         self.0.data.order_state
     }
@@ -881,6 +889,10 @@ impl<'a> DirectoryView<'a> {
     /// nothing else the header reads, so the header's fingerprint hashes it.
     pub fn presentation_order(self) -> &'a [usize] {
         &self.0.data.order
+    }
+    /// Browse's household verdict per source, which Home's roster is ordered by (`browse::source_rank`).
+    pub(crate) fn source_households(self) -> &'a [(ServerId, bool)] {
+        &self.0.data.households
     }
     /// What Home ranks its shelves by (see `DirectoryData::home_order`).
     pub(crate) fn home_order(self) -> crate::pms::HomeOrder<&'a [(ServerId, i64)]> {

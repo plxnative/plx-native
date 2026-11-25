@@ -23,6 +23,9 @@ pub(super) enum Edit {
     OrderReset,
 }
 impl Edit {
+    /// A Library order write ([`Edit::Order`] or [`Edit::OrderReset`]): the overlay keeps the newest
+    /// one past its save, because [`Preferences::order_write`] is where Settings reads its outcome.
+    fn is_order(&self) -> bool { matches!(self, Self::Order { .. } | Self::OrderReset) }
     fn merge(&self, current: &Session, user: &str) -> Option<Session> {
         let mut next = current.clone();
         match self {
@@ -81,21 +84,25 @@ impl BrowsePreferencesReq {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteOutcome { NotStarted, Finished(bool) }
-/// **Where a tracked preference write stands** (pins and Library order share it): what Settings reads
-/// to tell a saved choice from one that only stands for this run.
+/// **Where the profile's last Library order write stands**: what Settings reads to tell a saved choice
+/// from one that only stands for this run. It is read from the overlay's own entry for the write
+/// ([`Preferences::order_write`]), so it cannot disagree with what the overlay presents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WriteState {
-    /// No write of this kind has been made this run.
+    /// No Library order write by this profile is held (none this run, or the account or the
+    /// revocation tenure it was made under has ended).
     #[default]
     Idle,
     /// Queued or running; the choice shows, the disk does not have it yet.
     InFlight,
     /// The session holds it.
     Saved,
-    /// The write never started (`WriteOutcome::NotStarted`: the queue refused it, or it was stale when
-    /// the worker saw it) or did not persist (`Finished(false)`): the choice still shows (the overlay
-    /// keeps it), but only for this run. Settings has one thing to say about both, so they are one
-    /// state; nothing retries either, and the next commit is a new write.
+    /// The write did not persist (`Finished(false)`: the file could not be written, or the worker
+    /// panicked), or its job was refused (`NotStarted`: the runner refuses a job whose account or
+    /// tenure moved, the same two tests the overlay already applies, so this seldom reads before the
+    /// next `prepare` retires the entry). The choice still shows (the overlay keeps it), only for this
+    /// run, and a Reset that failed still shows the order gone while the disk keeps its record.
+    /// Nothing retries; the next commit is a new write.
     Failed,
 }
 #[derive(Default)]
@@ -155,7 +162,9 @@ impl Preferences {
         let edit = Arc::new(edit);
         let req = BrowsePreferencesReq { account: self.account.clone(), user: user.to_owned(), edit: Arc::clone(&edit), tenure: self.tenure };
         self.jobs.push((Job { addr, req }, BrowsePreferencesPort { addr, receipt: receipt.clone() }));
-        self.pending.retain(|p| !p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved()
+        // A saved write is done with, except the newest Library order write of each profile: its
+        // outcome is what `order_write` answers, and the next order write replaces it.
+        self.pending.retain(|p| (!p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved() || p.edit.is_order())
             && p.tenure == self.tenure
             && (p.account != self.account || p.user != user || !edit.replaces(&p.edit)));
         if !matches!(edit.as_ref(), Edit::Pins { .. }) {
@@ -170,9 +179,18 @@ impl Preferences {
     pub(super) fn observe(&self) {
         for pending in &self.pending { pending.receipt.lock().unwrap_or_else(|e| e.into_inner()).observe(); }
     }
+    /// One predicate for "this write is the profile's, under the account and tenure now": the overlay
+    /// presents an entry only if it holds, and [`Self::order_write`] reads only entries it holds for.
+    fn holds(&self, pending: &Pending, user: &str) -> bool { pending.user == user && pending.tenure == self.tenure }
+    /// Where `user`'s newest Library order write stands, through the overlay's own filter.
+    pub(super) fn order_write(&self, user: &str) -> WriteState {
+        self.pending.iter().rev()
+            .find(|p| p.edit.is_order() && self.holds(p, user) && p.account == self.account)
+            .map_or(WriteState::Idle, |p| p.receipt.lock().unwrap_or_else(|e| e.into_inner()).state())
+    }
     pub(super) fn overlay<'a>(&self, session: &'a Session, user: &str) -> std::borrow::Cow<'a, Session> {
         let mut next = std::borrow::Cow::Borrowed(session);
-        for pending in self.pending.iter().filter(|p| p.user == user && p.tenure == self.tenure && p.account.matches(session)
+        for pending in self.pending.iter().filter(|p| self.holds(p, user) && p.account.matches(session)
             && !p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved()) {
             if let Some(merged) = pending.edit.merge(next.as_ref(), user) { next = std::borrow::Cow::Owned(merged); }
         }
@@ -323,7 +341,7 @@ mod tests {
         assert_eq!(jobs.len(), 3, "library, query and pin persistence all leave as jobs");
         assert!(other_jobs.is_empty());
         assert!(state.states[0].unwatched, "the UI applies its edit before persistence");
-        assert!(state.writes.state(crate::browse::WriteKind::Pins) != WriteState::Idle);
+        assert!(state.pending_pins.is_some());
         for job in jobs {
             let crate::stores::StoreJob::BrowsePreferences(job, port) = job else { panic!("preference job") };
             assert_eq!(job.req.user, "captured-profile");

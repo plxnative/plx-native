@@ -4,6 +4,7 @@
 
 use super::*;
 use super::test_support::*;
+use crate::captured_store_fixture::{key, roster};
 
 /// Own server: a library-less whole-server hub, then library 1's and library 2's Recently Added, then
 /// an unrecognised hub whose cards all sit in library 2. The friend's: library 7's Recently Added.
@@ -179,6 +180,53 @@ fn a_source_with_no_ranked_library_holds_its_natural_position() {
     let order = [(sid(0), 1), (sid(0), 2)]; // anna's libraries have not landed
     let (_, hubs, _) = merge_with_scope(&srcs, &scope(&order, &defaults(&order)));
     assert_eq!(ids(&hubs)[2..], ["home.ondeck", "movie.recentlyadded.7", "movie.recentlyadded.8"]);
+}
+
+/// An unranked source sits behind EVERYTHING the source before it shows, not behind that source's last
+/// shelf: when the record puts the owner's library 2 first, library 1's shelf is the owner's last on
+/// the page and a share whose directory has not landed must not slip in between the two.
+#[test]
+fn an_unranked_source_sits_behind_the_whole_of_a_reordered_source() {
+    let mut srcs = two_sources();
+    // the owner's /hubs lists library 1 first, so the record's move of library 2 puts the LAST shelf
+    // /hubs listed at the front, and the key the source ends on is not its largest
+    srcs[0].last.as_mut().unwrap().shelves.swap(0, 1);
+    // the owner's libraries swapped (2 before 1); anna's directory has not landed
+    let order = [(sid(0), 2), (sid(0), 1)];
+    let default = [(sid(0), 1), (sid(0), 2)];
+    let (_, hubs, _) = merge_with_scope(&srcs, &scope(&order, &default));
+    assert_eq!(ids(&hubs), ["tv.recentlyadded.2", "movie.recentlyadded.1", "home.ondeck", "movie.recentlyadded.7", "movie.recentlyadded.8"],
+        "anna's shelves stay behind both of the owner's, whichever order the owner put them in");
+    // and when her directory lands and ranks her last, nothing of hers jumps
+    let landed = [(sid(0), 2), (sid(0), 1), (sid(1), 7), (sid(1), 8)];
+    let landed_default = [(sid(0), 1), (sid(0), 2), (sid(1), 7), (sid(1), 8)];
+    let (_, after, _) = merge_with_scope(&srcs, &scope(&landed, &landed_default));
+    assert_eq!(ids(&after), ids(&hubs), "ranking her last moves nothing she already showed");
+}
+
+/// The default source order is Browse's (`browse::source_rank`): a managed profile's family server is
+/// the household's though plex.tv sends it a handle, so it leads a friend's share even from the higher
+/// slot. This CHANGES Home for a managed profile with no record: it used to list the friend first.
+#[test]
+fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
+    let keys = roster(&[(61, Some(key(1)), "anna"), (62, Some(key(2)), "mum"), (63, Some(key(3)), "")], 1, 1);
+    let households = [(sid(61), false), (sid(62), true), (sid(63), true)];
+    let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
+    assert_eq!(rank, [63, 62, 61], "no owner, then the family's, then the friend's share");
+    // a source Browse has not classified is read as the household's own exactly when it names no owner
+    let unknown = BrowseScope { households: &[], clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let rank: Vec<u16> = roster_with_scope(&unknown).iter().map(|(sid, _)| sid.raw()).collect();
+    assert_eq!(rank, [63, 61, 62], "own servers first, then the shares in slot order");
+    // a household verdict that moves is a moved roster
+    let moved = [(sid(61), true), (sid(62), true), (sid(63), true)];
+    let pins = [(sid(61), 1, true)];
+    let key_of = |households: &[(ServerId, bool)]| BrowseScope { households, pins: &pins, ..BrowseScope::standalone() }.cache_key();
+    assert_ne!(key_of(&households), key_of(&moved));
+    // and with no pin table yet: a reclassification landing before any directory still re-sorts Home
+    let no_pins = |households: &[(ServerId, bool)]| BrowseScope { households, ..BrowseScope::standalone() }.cache_key();
+    assert_ne!(no_pins(&households), no_pins(&moved));
+    assert_eq!(no_pins(&[]), 0, "nothing known, nothing to republish");
 }
 
 /// F7: a refresh re-projects every row, and a released row's library is the one it was given when
