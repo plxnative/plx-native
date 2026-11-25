@@ -5850,12 +5850,12 @@ fn the_picker_follows_the_file_play_starts_when_no_version_was_chosen() {
     let _guard = install(d);
     let screen = bare(&_guard, ServerId::UNSET, "leaf");
     assert!(screen.hero_set(test_store().view()).tracks);
-    let arg = crate::preplay_panel::PreplayArg {
+    let arg = crate::registry::PreplayArg {
         host: plx_machine::machine::InstanceId(1),
         sid: ServerId::UNSET,
         rk: "leaf".into(),
         anchor: [0; 4],
-        source: crate::preplay_panel::Source::Page,
+        source: crate::registry::PreplaySource::Page,
     };
     let tracks = crate::registry::preplay_tracks_of(test_store().view(), &arg);
     assert_eq!(tracks.part, "/library/parts/2/1/hd.mkv", "the PUT addresses the file Play starts");
