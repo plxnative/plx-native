@@ -1,4 +1,4 @@
-# CodeRabbit is an opt-in fallback reviewer: it posts nothing unless a maintainer comments
+# CodeRabbit is an opt-in fallback reviewer: it posts nothing unless someone comments
 # `@coderabbitai review` (or `full review`) on a pull request. Automatic reviews, the commit
 # status, unprompted chat replies and issue enrichment stay off.
 reviews:
