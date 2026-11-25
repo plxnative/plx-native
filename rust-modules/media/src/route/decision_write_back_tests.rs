@@ -1017,6 +1017,33 @@ fn a_queued_put_is_dropped_when_the_slot_is_re_pointed_at_a_new_client() {
     assert!(w.log().contains("select streams: dropped (credential changed since queued)"), "{}", w.log());
 }
 
+// ---- a pick made before playback (#1532) ----------------------------------------------------
+
+/// The before-playback picker is the in-player pick's door with no session: its PUT carries both ids
+/// (Off = `subtitleStreamID=0`), and a movie, having no show, writes no track memory.
+#[test]
+fn a_preplay_pick_puts_both_ids_and_subtitles_off_is_zero() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "movie", show_rk: "", part_id: PART };
+    assert!(commit_preplay_pick(&item, 36015, 0, None, Some(SubtitleMemo::Off)));
+    wait_idle();
+    let puts = w.pms.puts();
+    assert_eq!(puts.len(), 1, "{puts:?}");
+    assert_eq!(param(&puts[0], "audioStreamID"), Some("36015"));
+    assert_eq!(param(&puts[0], "subtitleStreamID"), Some("0"), "Off is subtitleStreamID=0: {puts:?}");
+    assert_eq!(w.pms.selection(PART), (36015, 0));
+}
+
+/// A part the picker could not name has nothing to PUT on.
+#[test]
+fn a_preplay_pick_without_a_part_sends_nothing() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "movie", show_rk: "", part_id: 0 };
+    assert!(!commit_preplay_pick(&item, 36015, 0, None, None));
+    wait_idle();
+    assert!(w.pms.puts().is_empty());
+}
+
 // ---- the remembered pick is not shown -----------------------------------------------------------
 
 #[test]

@@ -359,10 +359,16 @@ enum TrackPick {
 /// and against the file's entry when the queued write runs): an audio pick must not erase the
 /// subtitle the viewer chose a minute ago, nor the other way round.
 fn remember_track_pick(ps: &PlaybackSession, pick: TrackPick) -> bool {
-    let Some(show) = memory_show(cur_kind(ps), cur_show_rk(ps)) else {
+    remember_show_pick(cur_sid(ps), cur_kind(ps), cur_show_rk(ps), pick)
+}
+
+/// [`remember_track_pick`]'s write, session-free: the item is named by its server, Plex type and
+/// show, which is all the memory's key reads. The before-playback picker has no session yet.
+fn remember_show_pick(sid: ServerId, kind: &str, show_rk: &str, pick: TrackPick) -> bool {
+    let Some(show) = memory_show(kind, show_rk) else {
         return false;
     };
-    let Some((user, machine_id)) = memory_scope(cur_sid(ps)) else {
+    let Some((user, machine_id)) = memory_scope(sid) else {
         return false;
     };
     let show = show.to_string();
@@ -645,4 +651,46 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     rematch_subtitle_with_names(ps);
     confirm_resume_presented(ps);
     send_parked_write_back(ps);
+}
+
+/// What the before-playback picker ([`commit_preplay_pick`]) is told about the item whose tracks it
+/// chose, none of it read from a session (there is none yet).
+pub struct PreplayItem<'a> {
+    pub sid: ServerId,
+    /// The Plex type (`movie`, `episode`) and, for an episode, its show: the track memory's key.
+    pub kind: &'a str,
+    pub show_rk: &'a str,
+    /// The part the selection PUT addresses.
+    pub part_id: i64,
+}
+
+/// **A viewer's track pick made BEFORE playback starts: the in-player menu's user-pick door, with
+/// no session.** It writes what the in-player pick writes, and for the same reasons:
+/// * the selection PUT (`PUT /library/parts/{id}?audioStreamID=..&subtitleStreamID=..`, queued off
+///   the frame thread; Off is `subtitleStreamID=0`), carrying BOTH ids so a half-pick never
+///   erases the other half;
+/// * the show's track memory for an episode (descriptors the plan's subtitle ladder ranks above
+///   the server's selection, so the memory must carry the pick or the first start would plan the
+///   old track). A movie has no show and writes no memory.
+///
+/// `audio_sid` / `subtitle_sid` are the stream ids the start should land on (`0` = subtitles Off);
+/// a memo is `Some` only for the half the viewer changed. Returns whether the PUT was queued.
+pub fn commit_preplay_pick(
+    item: &PreplayItem<'_>,
+    audio_sid: i64,
+    subtitle_sid: i64,
+    audio: Option<AudioMemo>,
+    subtitle: Option<SubtitleMemo>,
+) -> bool {
+    if item.part_id <= 0 {
+        return false;
+    }
+    queue_put_selection(item.sid, item.part_id, audio_sid, subtitle_sid);
+    if let Some(memo) = audio {
+        remember_show_pick(item.sid, item.kind, item.show_rk, TrackPick::Audio(memo));
+    }
+    if let Some(memo) = subtitle {
+        remember_show_pick(item.sid, item.kind, item.show_rk, TrackPick::Subtitle(memo));
+    }
+    true
 }
