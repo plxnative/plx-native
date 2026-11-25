@@ -369,7 +369,10 @@ Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
 - **Keys the panel sends to the window.** Three of the panel's keys arrive as ordinary key events, now in `keys.rs` as
   measured rows:
   - Its delete key is `BackSpace` (code 22) and deletes one character.
-  - Done is `Select` (code 0). It is bound to OK, so the field commits the query and closes the panel.
+  - Done is `Select` (code 0). It is bound to OK, so the field commits the query and closes the panel. Done also
+    hides the panel, and its HIDE and its key can arrive in either order; `ime::Panel::done` makes them one decision. A
+    `Select` while the panel is up is the OK and the HIDE behind it is the library's own; a `Select` after the HIDE
+    already dismissed the field is dropped, so it cannot raise the panel again.
   - Back is `Cancel` (code 231). It has no action, because the panel closes itself.
 - **Closed on the panel.** After Back, the panel's STATE callback reports HIDE and the library pushes
   `Input::KeyboardDismissed` (`ime: panel state Hide (closed on the panel)`). The loop turns it into the same
