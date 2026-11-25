@@ -1174,7 +1174,7 @@ struct Shelf {
     #[serde(skip)]
     epoch: u32,
     /// Which library this row belongs to ([`ShelfLibrary`]): decided at projection from the cards the row
-    /// holds, again by each refresh that brings a full preview, re-decided from the hub id alone by [`admit`] once its window has moved ([`Shelf::paged`]), and carried across every replacement
+    /// holds, again by each refresh that brings a full preview, re-decided by [`admit`] from what its hub names alone, no cards, once its window has moved ([`Shelf::paged`]), and carried across every replacement
     /// of a row that has given its cards up (a refresh, a window read, a landing), so Library order
     /// ranks the row the same whether it holds its cards or gave them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
     #[serde(skip)]
@@ -1201,12 +1201,13 @@ enum ShelfLibrary {
 }
 
 impl ShelfLibrary {
-    /// Decide at projection: the hub id when it names a library (`plex::library_order::hub_library`),
-    /// none for a hub that spans the server (`plex::library_order::is_whole_server_hub`), else the one
-    /// `librarySectionID` every card shares: which is how a `home.<type>.recent` hub, one per library
-    /// when a household owns two of a type, finds its library.
-    fn projected(hub_id: &str, items: &[Arc<PmsMovie>]) -> Self {
-        if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id) { return Self::One(library); }
+    /// Decide at projection, in this order: what the hub NAMES (`plex::library_order::hub_library`:
+    /// its id, else the `sectionID` of its key, which is how a `home.<type>.recent` hub, one per library
+    /// when a household owns two of a type, finds its library), none for a hub that spans the server
+    /// (`plex::library_order::is_whole_server_hub`), else the one `librarySectionID` every card
+    /// shares. A moved window passes no cards ([`Shelf::decide_library`]), so the last step is `Mixed`.
+    fn projected(hub_id: &str, key: &str, items: &[Arc<PmsMovie>]) -> Self {
+        if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id, key) { return Self::One(library); }
         if plx_plex::plex::library_order::is_whole_server_hub(hub_id) { return Self::Mixed; }
         let mut sections = items.iter().map(|m| m.sec).filter(|sec| *sec != 0);
         match sections.next() {
@@ -1215,11 +1216,11 @@ impl ShelfLibrary {
         }
     }
     /// The library the row ranks by, `None` for a row that belongs to none or to several.
-    fn resolve(self, hub_id: &str) -> Option<i64> {
+    fn resolve(self, hub_id: &str, key: &str) -> Option<i64> {
         match self {
             Self::One(library) => Some(library),
             Self::Mixed => None,
-            Self::Unknown => plx_plex::plex::library_order::hub_library(hub_id),
+            Self::Unknown => plx_plex::plex::library_order::hub_library(hub_id, key),
         }
     }
     /// What a row that replaces another knows: its own decision, else the one it replaces.
@@ -1234,15 +1235,17 @@ impl Shelf {
     /// row has left the state its preview began in (a ledger, a sample, a probed listing). Such a
     /// window's cards say nothing of the row's library, and the first-page preview that did is not
     /// in a recording. (A Recently Added row that grew from the head and never slid keeps `Head`
-    /// mode and offset 0, so it counts as its first page; its hub is one library's by construction.)
+    /// mode and offset 0, so it counts as its first page; its hub names its library, so its cards
+    /// are never asked.)
     fn paged(&self) -> bool { self.offset > 0 || self.row != paging::preview_state(&self.hub_id, &self.key) }
     /// **The one rule for a row's library**, run by [`admit`] on every full build, live or replayed:
-    /// a moved window ([`Shelf::paged`]) is decided from its hub id alone (a hub that names no
-    /// library is `Mixed`, ranked behind none); a row on its first page keeps what projection decided
-    /// and, when it decided nothing (decoded from a recording), decides from its hub id then its cards.
+    /// what the hub names (its id, else its key's `sectionID`: `hub_library`), then, ONLY for a row
+    /// still on its first page, the cards it holds (a decision projection already made is kept, one a
+    /// recording decoded as `Unknown` is made now), else `Mixed`. A moved window ([`Shelf::paged`])
+    /// never reads its cards.
     fn decide_library(&mut self) {
-        self.library = if self.paged() { ShelfLibrary::projected(&self.hub_id, &[]) }
-            else { self.library.or(ShelfLibrary::projected(&self.hub_id, &self.items)) };
+        self.library = if self.paged() { ShelfLibrary::projected(&self.hub_id, &self.key, &[]) }
+            else { self.library.or(ShelfLibrary::projected(&self.hub_id, &self.key, &self.items)) };
     }
 }
 
@@ -1655,7 +1658,7 @@ fn land_reload(source: &mut Src, page: &PageQuery, build: SourceBuild) -> bool {
 /// A window read replaces the first-page shelf `/hubs` just projected. The row keeps the title and the
 /// library the projection gave it: a page read has no title of its own and its cards are no evidence
 /// of the row's library (a window of a mixed row may hold cards of one). That library is only
-/// provisional: [`admit`] decides a row whose window has moved from its hub id alone ([`Shelf::paged`]),
+/// provisional: [`admit`] decides a row whose window has moved without reading its cards ([`Shelf::paged`]),
 /// the one answer a replay can also reach, since the first-page projection is not in the recording.
 fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
     refreshed.title = shelf.title.clone();
@@ -1671,12 +1674,14 @@ fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
 /// **Where a full build is admitted as a source's `last`**: every landing path ends here, live and
 /// replayed, so a row leaves it with its library DECIDED by ONE rule ([`Shelf::decide_library`]) that
 /// reads nothing but what the recording holds:
-/// - a row still on its first page (offset 0, the state its preview began in) keeps the decision
-///   projection made from its cards, and a row decoded from a recording ([`ShelfLibrary::Unknown`])
-///   is decided now from its hub id, then from the cards it holds, which is what projection did;
-/// - a row whose window has moved ([`Shelf::paged`]) is decided from its hub id alone, whatever it
-///   was decided before: its first page is not in the recording, and the cards of a window are no
-///   evidence of the row's library.
+/// - what the hub names decides first: its id, else its key's `sectionID` (`hub_library`), which a
+///   recording keeps for a row whatever its window;
+/// - a row still on its first page (offset 0, the state its preview began in) then keeps the
+///   decision projection made from its cards, and a row decoded from a recording
+///   ([`ShelfLibrary::Unknown`]) is decided now from the cards it holds, which is what projection did;
+/// - a row whose window has moved ([`Shelf::paged`]) reads no cards, whatever it was decided before:
+///   its first page is not in the recording, and the cards of a window are no evidence of the row's
+///   library. It is `Mixed` when the hub names none.
 ///
 /// So the live run and its replay rank every row alike. Then what the build replaces hands its rows'
 /// libraries and descriptors on ([`carry_descriptors`]).
@@ -1787,7 +1792,7 @@ fn rank_keys(srcs: &[Src], effective: &[(ServerId, i64)], default: &[(ServerId, 
         let own = |list: &[(ServerId, i64)]| list.iter().filter(|(sid, _)| *sid == source.sid).map(|(_, key)| *key).collect::<Vec<_>>();
         let reordered = own(effective) != own(default);
         let places: Vec<Option<usize>> = build.shelves.iter().map(|shelf| {
-            shelf.library.resolve(&shelf.hub_id).and_then(|library| effective.iter().position(|ranked| *ranked == (source.sid, library)))
+            shelf.library.resolve(&shelf.hub_id, &shelf.key).and_then(|library| effective.iter().position(|ranked| *ranked == (source.sid, library)))
         }).collect();
         let mut slots: Vec<usize> = places.iter().flatten().copied().collect();
         slots.sort_unstable();
@@ -2359,7 +2364,7 @@ impl<'a> Projection<'a> {
                 title: String::new(),
                 hub_id: hub.hub_identifier.clone(),
                 key: hub.key.clone(),
-                library: ShelfLibrary::projected(&hub.hub_identifier, &items),
+                library: ShelfLibrary::projected(&hub.hub_identifier, &hub.key, &items),
                 items, positions,
                 total: hub.total(),
                 offset: 0,

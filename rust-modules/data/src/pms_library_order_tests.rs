@@ -92,7 +92,7 @@ fn the_hero_pool_does_not_move_with_the_order() {
 #[test]
 fn a_released_row_keeps_its_place() {
     let mut srcs = sources();
-    for shelf in &mut srcs[0].last.as_mut().unwrap().shelves { shelf.library = ShelfLibrary::projected(&shelf.hub_id, &shelf.items); }
+    for shelf in &mut srcs[0].last.as_mut().unwrap().shelves { shelf.library = ShelfLibrary::projected(&shelf.hub_id, &shelf.key, &shelf.items); }
     let order = [(sid(1), 7), (sid(0), 2), (sid(0), 1)];
     let before = ids(&merge_with_scope(&srcs, &scope(&order, &defaults(&order))).1);
     let mixed = &mut srcs[0].last.as_mut().unwrap().shelves[3];
@@ -294,9 +294,9 @@ fn a_reorder_of_two_same_type_libraries_swaps_their_shared_identifier_rows() {
 #[test]
 fn a_lone_type_hub_is_its_librarys_shelf_and_a_whole_server_hub_is_nobodys() {
     let cards = shelf_in(0, 3, "x", "x", &["a", "b"]).items;
-    assert_eq!(ShelfLibrary::projected("home.movies.recent", &cards), ShelfLibrary::One(3));
+    assert_eq!(ShelfLibrary::projected("home.movies.recent", "", &cards), ShelfLibrary::One(3));
     for id in ["home.playlists", "home.ondeck", "home.continue"] {
-        assert_eq!(ShelfLibrary::projected(id, &cards), ShelfLibrary::Mixed, "{id}");
+        assert_eq!(ShelfLibrary::projected(id, "", &cards), ShelfLibrary::Mixed, "{id}");
     }
 }
 
@@ -326,7 +326,7 @@ fn a_refresh_keeps_the_library_a_released_row_was_projected_with() {
     was.items = Vec::new();
     let old = built(0, &[], vec![was]);
     let mut fresh = shelf_in(0, 5, "Mixed", "mock.shelf.0", &["m2", "m3"]);
-    fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.items);
+    fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.key, &fresh.items);
     let mut new = built(0, &[], vec![fresh]);
     carry_descriptors(&old, &mut new);
     assert_eq!(new.shelves[0].library, ShelfLibrary::One(2));
@@ -343,7 +343,7 @@ fn a_refresh_re_decides_a_row_that_holds_a_full_preview() {
     assert!(!old.shelves[0].released());
     let mut fresh = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m2", "m3"]);
     Arc::make_mut(&mut fresh.items[1]).sec = 5;
-    fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.items);
+    fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.key, &fresh.items);
     let mut new = built(0, &[], vec![fresh]);
     carry_descriptors(&old, &mut new);
     assert_eq!(new.shelves[0].library, ShelfLibrary::Mixed, "two libraries' preview");
@@ -424,7 +424,7 @@ fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
     // the first page the refresh projected: cards of two libraries, so `Mixed`
     let mut first = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"]);
     Arc::make_mut(&mut first.items[1]).sec = 1;
-    first.library = ShelfLibrary::projected(&first.hub_id, &first.items);
+    first.library = ShelfLibrary::projected(&first.hub_id, &first.key, &first.items);
     assert_eq!(first.library, ShelfLibrary::Mixed);
     let old = first.clone();
     // the window read of the row the user had paged to: past the head, every card in library 2
@@ -450,4 +450,40 @@ fn a_held_row_paged_past_its_first_page_ranks_the_same_replayed_as_live() {
     assert_eq!(show(live), show(replayed.clone()));
     assert_eq!(show(replayed), ["tv.recentlyadded.2", "movie.recentlyadded.1", "mock.shelf.0"],
         "a paged row no hub id names ranks nowhere, so it follows the shelf before it");
+}
+
+/// Two libraries of one type: PMS answers a `home.television.recent` hub per library, each told
+/// apart only by the `sectionID` of its key (`twin_tv_libraries_home`). Paged past their first pages
+/// (windows at offset 40 whose cards are all one library's anyway), neither row can be decided by its
+/// cards, and the hub id names no library: the key does, so both still swap under a reorder, live and
+/// replayed. The key is recorded, which is what makes that the same answer in both.
+#[test]
+fn twin_recent_rows_paged_past_their_first_page_still_swap_live_and_replayed() {
+    let twin = |sec: i64, rk: &str| {
+        let mut shelf = shelf_in(0, sec, &format!("TV {sec}"), "home.television.recent", &[rk]);
+        shelf.key = format!("/hubs/home/recentlyAdded?type=2&sectionID={sec}");
+        shelf.offset = 40;
+        shelf.library = ShelfLibrary::projected(&shelf.hub_id, &shelf.key, &shelf.items);
+        shelf
+    };
+    let keys = |hubs: &[HubRow]| hubs.iter().map(|hub| hub.key.clone()).collect::<Vec<_>>();
+    let mut live = built(0, &[], vec![twin(1, "t1"), twin(2, "t2")]);
+    assert!(live.shelves.iter().all(Shelf::paged));
+    admit(None, &mut live);
+    let mut replayed = live.clone();
+    for shelf in &mut replayed.shelves {
+        *shelf = serde_json::from_str(&serde_json::to_string(shelf).unwrap()).unwrap();
+        assert_eq!(shelf.library, ShelfLibrary::Unknown);
+    }
+    admit(None, &mut replayed);
+    let show = |build: &SourceBuild, order: &[(ServerId, i64)]| {
+        let srcs = [src(0, "", HubState::Ready, Some(build.clone()))];
+        keys(&merge_with_scope(&srcs, &scope(order, &defaults(order))).1)
+    };
+    let natural = [(sid(0), 1), (sid(0), 2)];
+    let swapped = [(sid(0), 2), (sid(0), 1)];
+    for build in [&live, &replayed] {
+        assert_eq!(show(build, &natural), ["/hubs/home/recentlyAdded?type=2&sectionID=1", "/hubs/home/recentlyAdded?type=2&sectionID=2"]);
+        assert_eq!(show(build, &swapped), ["/hubs/home/recentlyAdded?type=2&sectionID=2", "/hubs/home/recentlyAdded?type=2&sectionID=1"]);
+    }
 }
