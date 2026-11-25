@@ -2037,7 +2037,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
   clears to (0, 0, 0, 0), the UI around it intact (the player route clears that way whether or not a plane is bound, `app/run.rs`
   `fr.player`, and `PlayerScreen` has no ground: measured at `3d56d35b2` with no plane ever bound, the "Playback failed" read-out sits on
-  exact (0, 0, 0) black on the emulator, whose compositor had nothing under the window; a retail set's answer is H6's); (b) the video plane mixes STRAIGHT alpha (pixel-exact: a straight
+  exact (0, 0, 0) black on the emulator, whose compositor had nothing under the window; a retail set's answer is H6's); (b) the video plane mixes STRAIGHT alpha (measured with the window translucent, not re-taken for the opaque `has_video` window; pixel-exact: a straight
   (255, 255, 255, 128) strip is a 50 % veil over it) while window-over-window composition is premultiplied, which is webOS's split, so
   the existing straighten pass and `frame_clear_through` / `opaque_route` chain are the answer, not a new one (D6); (c) the player
   raises nothing at OnPause: `player_pause` there and `player_start` at OnResume resume in about 130 ms at the same position, the picture

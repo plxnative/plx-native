@@ -662,6 +662,12 @@ mod tests {
         let call = "ecore_wl2_window_alpha_set"; // built apart, so this test's own text is not what it finds
         assert_eq!(src.matches(&format!("{call}(self.window, mode.alpha());")).count(), 1);
         assert_eq!(src.matches(&format!("{call}(self.window,")).count(), 1, "one alpha call, from the mode");
+        // The hole itself: one `has_video`, and only inside the opaque arm (an opaque window without it shows no video).
+        let video = format!("{}(self.window, 1);", "ecore_wl2_window_video_has");
+        assert_eq!(src.matches(&video).count(), 1);
+        let arm = src.find("if mode == WindowMode::OpaqueWithVideo {").expect("the opaque arm");
+        let at = src.find(&video).expect("the call");
+        assert!(at > arm && !src[arm..at].contains('}'), "the call sits directly inside the opaque arm");
     }
 
     /// **No Ecore, no window, no crash**: on a host without `libecore_wl2` (every host this runs on) the window

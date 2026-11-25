@@ -160,7 +160,8 @@ Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator o
   hole, the same shared chain webOS uses. **The player route's clear is keyed on the route, not on the plane**: the loop clears to `(0, 0, 0, 0)`
   whenever the player route is up (`fr.player`), bound or not, and `PlayerScreen` has no ground, so its spinner and its "Playback failed" read-out sit
   on a transparent clear even with no plane bound. The straighten pass and the capture skip are the ones keyed on `Player::video_plane_bound`.
-- The **video plane mixes STRAIGHT alpha** (pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
+- The **video plane mixes STRAIGHT alpha** (measured with the window TRANSLUCENT; not re-taken since the window became opaque with
+  `has_video`, whose compositor path is a different one, so it is unverified there; pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
   composition is premultiplied: the split webOS has, which `plx_gfx` already handles. Over the bound plane the loop's last draw is the straighten pass
   (`gfx/straighten.rs`), which divides the frame's premultiplied colour by its alpha; off the plane the frame goes out premultiplied, which is what the
   window compositor wants.
@@ -194,7 +195,7 @@ Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator o
 
 At the time of this run the player was not yet bound, so `PauseForHome` and `ResumeAfterHome` had not been exercised with a player open: the first run of part B1's driver (at `126d1f04c`, below) did, and found that Home with a player open never resumed (fixed since in code, re-run pending). Still UNVERIFIED: a picture through the
 real URI driver (part B1, which calls `Hosted::player_open`; the later emulator runs drove it against the mock, and no reading of the picture was taken), and anything on a retail
-set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is built by no CI job
+set (H6 stays OPEN: the library's thread, the overlay beneath an opaque `has_video` window, or an alpha window where the symbol is missing, privileges, firmware differences). The C# is built by no CI job
 (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`); it is compiled by a
 `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK (the run above did that for this tree).
 
