@@ -2468,4 +2468,21 @@ mod tests {
         assert!(!ScreenInputs::default().same_facts(&ScreenInputs { backends: BackendSet::NONE, ..Default::default() }),
             "the set is a screen-visible fact, so a change of it presents");
     }
+
+    /// **Whatever the page can move under …, the menu can draw**: every control any set of the hero's
+    /// actions moves into the overflow has a round-button face, so `build_hero_overflow` never meets one
+    /// without (it asserts that in debug builds and skips it in release).
+    #[test]
+    fn overflow_faces_are_total() {
+        for bits in 0u32..(1 << 5) {
+            let on = |n: u32| bits & (1 << n) != 0;
+            for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
+                let set = HeroSet { watchlist: on(0), go_show: on(1), version: on(2), tracks: on(3), restart: on(4), mark, ..HeroSet::default() };
+                let (ctls, n) = overflow_ctls(set);
+                for ctl in &ctls[..n] {
+                    assert!(face(*ctl).is_some(), "{ctl:?} can move under … and must have a face: {set:?}");
+                }
+            }
+        }
+    }
 }

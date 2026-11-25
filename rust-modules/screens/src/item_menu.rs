@@ -122,9 +122,10 @@ pub enum Action {
     /// Select Version…: turn the panel into the list of this leaf's versions. The menu performs
     /// it itself (`ItemMenuScreen::activate`); it never reaches the app.
     ChooseVersion(String),
-    /// Audio & Subtitles…: close the menu and ask the Detail page that opened it for its picker
-    /// (`AppMsg::OpenPreplayTracks`). The menu performs it itself; it never reaches the app.
-    ChooseTracks(String),
+    /// A hero action under the Detail page's … menu: the row IS the round button it replaces, so the
+    /// action is that [`HeroCtl`]. The menu closes and hands it back to the page that opened it
+    /// (`AppMsg::HeroCtl`), whose `activate_hero` performs it; it never reaches the app.
+    Hero(HeroCtl),
     /// Select this leaf's version `media` as the file Play and Resume start. It plays nothing; the
     /// app remembers it for the profile (`plx_media::route::choose_version`). The id, never a
     /// position: it is resolved against the item when it is played
@@ -153,7 +154,7 @@ impl Action {
     /// Does the action name what it acts on? A ratingKey-keyed action needs a non-empty key; a
     /// catalog-keyed [`Action::WatchlistAdd`] carries its 12-byte id instead and has no key.
     pub fn has_subject(&self) -> bool {
-        matches!(self, Action::WatchlistAdd { .. }) || !self.rk().is_empty()
+        matches!(self, Action::WatchlistAdd { .. } | Action::Hero(_)) || !self.rk().is_empty()
     }
 
     /// The ratingKey this action acts on.
@@ -168,12 +169,11 @@ impl Action {
             | Action::RemoveFromDeck(rk)
             | Action::GoToCatalog(rk)
             | Action::WatchlistRemove(rk)
-            | Action::ChooseVersion(rk)
-            | Action::ChooseTracks(rk) => rk,
+            | Action::ChooseVersion(rk) => rk,
             Action::SelectVersion { rk, .. } => rk,
             Action::PlayTrailer { rk, .. } => rk,
-            // No ratingKey: the subject is a catalog id.
-            Action::WatchlistAdd { .. } => "",
+            // No ratingKey: the subject is a catalog id, or (a hero control) the page that opened the menu.
+            Action::WatchlistAdd { .. } | Action::Hero(_) => "",
         }
     }
 
@@ -194,7 +194,7 @@ impl Action {
             Action::ChooseVersion(_) => 12,
             // Tag 13 was `PlayVersion` when it was recorded; the wire is unchanged by what a press MEANS.
             Action::SelectVersion { .. } => 13,
-            Action::ChooseTracks(_) => 14,
+            Action::Hero(_) => 14,
         };
         c.u32(tag).str(self.rk());
         if let Action::WatchlistAdd { hex } = self {
@@ -205,6 +205,9 @@ impl Action {
         }
         if let Action::SelectVersion { media, .. } = self {
             c.u64(media.0 as u64);
+        }
+        if let Action::Hero(ctl) = self {
+            c.u32(ctl.elem());
         }
         if let Action::PlayTrailer {
             part,
@@ -234,7 +237,7 @@ const EDGE_X: f32 = plx_ui::consts::MARGIN_X;
 /// `media:u64(PlayVersion only)` is the pinned spelling of tag 13's payload, which `Action::SelectVersion` keeps:
 /// renaming what a press MEANS changes neither the canonical bytes nor the shape (`SCREEN_SHAPES_PIN`).
 pub const SHAPE: &str =
-    "ItemMenu{arg:ItemMenuArg,acts:[Option<Action{tag:u32,rk:str,season:u32,part:str,vcodec:str,acodec:str,title:str,hex:str(WatchlistAdd only),media:u64(PlayVersion only)}>],sel:i32,\
+    "ItemMenu{arg:ItemMenuArg,acts:[Option<Action{tag:u32,rk:str,season:u32,part:str,vcodec:str,acodec:str,title:str,hex:str(WatchlistAdd only),media:u64(PlayVersion only),ctl:u32(Hero only)}>],sel:i32,\
      table:TableViewMotion}";
 
 /// Is `m` an item the menu has anything to offer? A leaf or a show/season — i.e. everything the
@@ -266,8 +269,8 @@ pub enum ItemRow {
     WatchlistAdd,
     /// Play Version… (a leaf with two or more versions).
     PlayVersion,
-    /// Audio & Subtitles… (the hero's … menu).
-    ChooseTracks,
+    /// A hero action under the Detail page's … menu, by the control it replaces.
+    Hero(HeroCtl),
     /// One version on the Play Version page, by its position in the list captured at open.
     Version(u16),
 }
@@ -297,7 +300,8 @@ impl ItemRow {
             ItemRow::WatchlistRemove => "watchlist_remove",
             ItemRow::WatchlistAdd => "watchlist_add",
             ItemRow::PlayVersion => "play_version",
-            ItemRow::ChooseTracks => "choose_tracks",
+            // Named by its control in `a11y` (`itemmenu.hero.<ctl>`), which reads the control itself.
+            ItemRow::Hero(_) => "hero",
             ItemRow::Version(_) => "version",
         }
     }
@@ -318,7 +322,7 @@ impl FormId for ItemRow {
             ItemRow::WatchlistRemove => 10,
             ItemRow::WatchlistAdd => 11,
             ItemRow::PlayVersion => 12,
-            ItemRow::ChooseTracks => 13,
+            ItemRow::Hero(ctl) => HERO_KEY_BASE + ctl.elem(),
             ItemRow::Version(n) => VERSION_KEY_BASE + u32::from(*n),
         })
     }
@@ -326,6 +330,8 @@ impl FormId for ItemRow {
 
 /// The Play Version page's row keys start here, clear of the fixed rows above.
 const VERSION_KEY_BASE: u32 = 100;
+/// The hero overflow rows' keys start here: the control's own fixed identity ([`HeroCtl::elem`]) past it.
+const HERO_KEY_BASE: u32 = 1000;
 
 /// **Does OK on this Continue Watching card, while OK does not play, open the SHOW's page?** Only
 /// an episode that names its show. `app::input::activate_deck_card` decides the press with it and
@@ -594,16 +600,6 @@ fn build_episode(rk: &str, mark: PosterMark, versions: &[MediaVersion], face: Op
     Form::new().section(watchlist::push_face(sec, face))
 }
 
-/// A hero action's row in the … menu: its identity and the action that stands for it. The ONE pairing,
-/// read both ways (a row to build, a pressed row back to its [`HeroCtl`]); the mark and the verb are
-/// not here but in `detail::hero::face`, shared with the round button.
-const HERO_ROWS: [(HeroCtl, ItemRow); 4] = [
-    (HeroCtl::GoToShow, ItemRow::GoToShow),
-    (HeroCtl::Restart, ItemRow::PlayFromStart),
-    (HeroCtl::Version, ItemRow::PlayVersion),
-    (HeroCtl::AudioSubtitles, ItemRow::ChooseTracks),
-];
-
 /// **The Detail hero's … menu**: one row per action the round buttons had no room for, in the row's
 /// order. A row wears the SAME icon and verb as its round button (`registry::hero_face`) and a press
 /// hands its [`HeroCtl`] back to the page that opened the menu, which performs it through the one path
@@ -611,12 +607,15 @@ const HERO_ROWS: [(HeroCtl, ItemRow); 4] = [
 /// page's panel, anchored where the menu was, not a second page inside this one.
 fn build_hero_overflow(rows: &[HeroCtl]) -> ItemForm {
     let mut sec = FormSection::new("");
-    for ctl in rows {
-        let Some((id, _)) = HERO_ROWS.iter().find(|(c, _)| c == ctl).map(|(_, id)| (*id, ())) else { continue };
-        let Some((icon, label)) = hero_face(*ctl) else { continue };
+    for &ctl in rows {
+        // A control moves under … only if it has a round-button face (`hero::actions` puts Watchlist and
+        // the watch toggle first, and they never move); `overflow_faces_are_total` pins it.
+        let Some((icon, label)) = hero_face(ctl) else {
+            debug_assert!(false, "{ctl:?} has no face, so it cannot be an overflow row");
+            continue;
+        };
         let label = label.to_str().unwrap_or_default();
-        // The action is the row's identity for the form; the menu's `activate` reads the row, not it.
-        sec = sec.item(id, RowKind::Button, Action::ChooseTracks(String::new()), Row::new(label).licon(icon));
+        sec = sec.item(ItemRow::Hero(ctl), RowKind::Button, Action::Hero(ctl), Row::new(label).licon(icon));
     }
     Form::new().section(sec)
 }
@@ -842,8 +841,7 @@ impl ItemMenuScreen {
         // picker are its panels, never a second copy inside this menu).
         if let ItemMenuKind::HeroOverflow { opener, .. } = &self.arg.kind {
             fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
-            let pressed = self.form.index_of_key(RowKey(elem)).and_then(|i| self.form.binding_at(i)).map(|b| b.id);
-            if let Some(ctl) = pressed.and_then(|id| HERO_ROWS.iter().find(|(_, row)| *row == id).map(|(ctl, _)| *ctl)) {
+            if let Some(Action::Hero(ctl)) = act {
                 fx.push(Fx::Deliver(
                     MachineId::Instance(*opener),
                     Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: self.arg.anchor })),
@@ -1050,6 +1048,7 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
         let index = self.form.index_of_key(RowKey(*key))?;
         let path = match *self.form.id_at(index)? {
             ItemRow::Version(n) => A11yPath::new().name("version").index(usize::from(n)),
+            ItemRow::Hero(ctl) => A11yPath::new().name("hero").name(ctl.a11y_name()),
             row => A11yPath::new().name(row.a11y_name()),
         };
         let a = A11y::new(path, Role::Row);
@@ -1422,7 +1421,10 @@ pub(crate) mod tests {
     fn the_hero_overflow_menu_mirrors_the_round_buttons_it_replaces() {
         let rows = [HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
         let menu = built(super::build_hero_overflow(&rows));
-        assert_eq!(menu.ids(), [ItemRow::GoToShow, ItemRow::PlayFromStart, ItemRow::PlayVersion, ItemRow::ChooseTracks]);
+        assert_eq!(menu.ids(), rows.map(ItemRow::Hero), "a row's identity is its control");
+        for ctl in rows {
+            assert_eq!(menu.action(ItemRow::Hero(ctl)), Action::Hero(ctl), "a row's action is its control");
+        }
         // The mark and the verb are the round button's, from the one table, not literals of this menu.
         for (i, ctl) in rows.iter().enumerate() {
             let (icon, label) = hero_face(*ctl).expect("an overflowable control has a face");
