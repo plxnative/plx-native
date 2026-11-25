@@ -502,7 +502,9 @@ fn live_channel<'a>(ps: &plx_media::route::PlaybackSession, channels: &'a [plx_d
     channels.iter().enumerate().find(|(_, ch)| ch.sid == sid && ch.dvr == live.dvr && ch.channel == live.channel)
 }
 
-/// Refresh the existing HUD caption from the current guide, including a programme rollover.
+/// Refresh the existing HUD caption from the current guide, including a programme rollover. The
+/// airing's time line is not kept here: the HUD words it at draw from the channel's raw begin and
+/// end and the frame's wall time (`plx_ui::fmt::airing_line`).
 pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel]) {
     let Some((_, ch)) = live_channel(ps, channels) else {
         plx_media::route::set_live_info(ps, None);
@@ -510,10 +512,7 @@ pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, ch
         return;
     };
     if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch) { return; }
-    let local_airing = (ch.begins_at > 0 && ch.ends_at > ch.begins_at).then(|| {
-        Some((super::clock::local_end_time(ch.begins_at)?, super::clock::local_end_time(ch.ends_at)?))
-    }).flatten();
-    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone(), local_airing }));
+    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone() }));
     let context = match (ch.vcn.is_empty(), ch.now.is_empty()) {
         (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, &ch.now),
         (false, true) => ch.vcn.clone(),
