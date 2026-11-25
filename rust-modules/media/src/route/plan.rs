@@ -1533,16 +1533,13 @@ impl ResolveEnv {
         if self.preview || self.selection_before_retry.is_some() { &[] } else { &self.picks }
     }
 
-    /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file
-    /// and this is the viewer's own launch (`fresh_play`): a retry carries the attempt's held pair, which
-    /// outranks a pick made before the first start, and a fresh launch's `audio_sid` is only what the
-    /// session last had on screen (another item's track), never a choice for this one. The single place
-    /// the pick's `audio_sid` becomes `audio_sid`.
+    /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file and
+    /// [`Self::picks_in_force`] feeds this resolve: a retry that carries the attempt's held pair has that
+    /// pair instead, and a fresh launch's `audio_sid` is only what the session last had on screen (another
+    /// item's track), never a choice for this one. The single place the pick's `audio_sid` becomes
+    /// `audio_sid`; the same gate as the subtitle half, so the two cannot disagree.
     pub(super) fn under_pick(&self, item: &plx_data::metadata::PlayingItem) -> Option<ResolveEnv> {
-        if !self.fresh_play {
-            return None;
-        }
-        let pick = plx_data::metadata::PreplayPick::for_file(&self.picks, &item.audio)?;
+        let pick = plx_data::metadata::PreplayPick::for_file(self.picks_in_force(), &item.audio)?;
         Some(ResolveEnv { audio_sid: pick.audio_sid, ..self.clone() })
     }
 

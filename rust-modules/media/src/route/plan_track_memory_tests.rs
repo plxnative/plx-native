@@ -646,7 +646,7 @@ fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
         env.fresh_play = true; // the viewer's own launch (`request_env`)
         env.audio_sid = 4242; // what the session last had on screen: another item's track
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        item.apply_picks(&env.picks);
+        item.apply_picks(env.picks_in_force());
         let session = env.under_pick(&item).map_or(env.audio_sid, |e| e.audio_sid);
         audio_intents(&item.audio, prefs, session)[0]
     };
@@ -654,4 +654,49 @@ fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
     let jpn = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Server };
     assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: jpn }));
     assert_eq!(first_intent(&store), AudioIntent::Selection(0), "the viewer's Japanese beats the language rule though it is the file's default");
+}
+
+/// **Both halves of a pick follow ONE gate** (`ResolveEnv::picks_in_force`): the viewer's launch is fed the
+/// pick, and so is a retry that carries no held selection (its first resolve failed before the item was
+/// fetched, so Try again is the first start that plays: `fresh_play` is false there and the audio half used
+/// to be dropped while the subtitle half still applied). A hero preview and a retry that carries the
+/// attempt's held pair are not.
+#[test]
+fn both_halves_of_a_pick_follow_one_gate() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![audio(11, "jpn", "eac3", true, true), audio(12, "eng", "eac3", false, false)],
+        subs: vec![server_selected(text_sub(21, "eng", ""))],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let jpn_off = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Off };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: jpn_off }));
+    let ps = crate::route::PlaybackSession::IDLE;
+    let env_of = |fresh: bool, preview: bool, retry_selection: bool| {
+        let mut env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        env.fresh_play = fresh;
+        env.set_preview(preview);
+        env.selection_before_retry = retry_selection.then(|| SelectionBeforeRetry {
+            retry_part_id: 9001, audio_sid: 0, sub_sid: 0, subtitle_override: None, sub_mode: SubMode::Track, memory: Vec::new(),
+        });
+        env
+    };
+    let halves = |env: &ResolveEnv| {
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(env.picks_in_force());
+        (item.sub_choice == SubPick::Off, env.under_pick(&item).map(|e| e.audio_sid) == Some(11))
+    };
+    assert_eq!(halves(&env_of(true, false, false)), (true, true), "the viewer's launch");
+    assert_eq!(halves(&env_of(false, false, false)), (true, true), "Try again after a resolve that failed before the item was fetched");
+    assert_eq!(halves(&env_of(false, true, false)), (false, false), "a hero preview is not the viewer's playback");
+    assert_eq!(halves(&env_of(false, false, true)), (false, false), "a retry carrying the attempt's held pair plans from it");
 }
