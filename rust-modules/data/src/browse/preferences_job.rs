@@ -7,7 +7,9 @@ use super::saved_view::{self, ViewField, ViewSnapshot};
 struct Account { client_id: String, token: String }
 impl Account {
     fn of(s: &Session) -> Self { Self { client_id: s.client_id.clone(), token: s.account_token.clone() } }
-    fn matches(&self, s: &Session) -> bool { !self.client_id.is_empty() && self.client_id == s.client_id && self.token == s.account_token }
+    /// The one account test: a named account (never the empty one) and the same credentials.
+    fn is(&self, client_id: &str, token: &str) -> bool { !self.client_id.is_empty() && self.client_id == client_id && self.token == token }
+    fn matches(&self, s: &Session) -> bool { self.is(&s.client_id, &s.account_token) }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Edit {
@@ -23,9 +25,13 @@ pub(super) enum Edit {
     OrderReset,
 }
 impl Edit {
-    /// A Library order write ([`Edit::Order`] or [`Edit::OrderReset`]): the overlay keeps the newest
-    /// one past its save, because [`Preferences::order_write`] is where Settings reads its outcome.
+    /// A Library order write ([`Edit::Order`] or [`Edit::OrderReset`]): what [`Preferences::order_write`]
+    /// answers about.
     fn is_order(&self) -> bool { matches!(self, Self::Order { .. } | Self::OrderReset) }
+    /// A later edit of this class takes the earlier one's place ([`Self::replaces`]), so the overlay
+    /// keeps the newest of the class past its save and lets the next one retire it. A class that never
+    /// replaces itself (a view edit, the pins) is done with once it is saved.
+    fn replaces_itself(&self) -> bool { self.replaces(self) }
     fn merge(&self, current: &Session, user: &str) -> Option<Session> {
         let mut next = current.clone();
         match self {
@@ -162,9 +168,9 @@ impl Preferences {
         let edit = Arc::new(edit);
         let req = BrowsePreferencesReq { account: self.account.clone(), user: user.to_owned(), edit: Arc::clone(&edit), tenure: self.tenure };
         self.jobs.push((Job { addr, req }, BrowsePreferencesPort { addr, receipt: receipt.clone() }));
-        // A saved write is done with, except the newest Library order write of each profile: its
-        // outcome is what `order_write` answers, and the next order write replaces it.
-        self.pending.retain(|p| (!p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved() || p.edit.is_order())
+        // A saved write is done with, except the newest of a class that replaces itself (for each
+        // profile): the next one retires it, and until then its receipt is what `order_write` reads.
+        self.pending.retain(|p| (!p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved() || p.edit.replaces_itself())
             && p.tenure == self.tenure
             && (p.account != self.account || p.user != user || !edit.replaces(&p.edit)));
         if !matches!(edit.as_ref(), Edit::Pins { .. }) {
@@ -179,18 +185,21 @@ impl Preferences {
     pub(super) fn observe(&self) {
         for pending in &self.pending { pending.receipt.lock().unwrap_or_else(|e| e.into_inner()).observe(); }
     }
-    /// One predicate for "this write is the profile's, under the account and tenure now": the overlay
-    /// presents an entry only if it holds, and [`Self::order_write`] reads only entries it holds for.
-    fn holds(&self, pending: &Pending, user: &str) -> bool { pending.user == user && pending.tenure == self.tenure }
+    /// One predicate for "this write is the profile's, under `account` (a client id and its token) and
+    /// the tenure now": the overlay presents an entry only if it holds, and [`Self::order_write`] reads
+    /// only entries it holds for.
+    fn holds(&self, pending: &Pending, (client_id, token): (&str, &str), user: &str) -> bool {
+        pending.user == user && pending.tenure == self.tenure && pending.account.is(client_id, token)
+    }
     /// Where `user`'s newest Library order write stands, through the overlay's own filter.
     pub(super) fn order_write(&self, user: &str) -> WriteState {
         self.pending.iter().rev()
-            .find(|p| p.edit.is_order() && self.holds(p, user) && p.account == self.account)
+            .find(|p| p.edit.is_order() && self.holds(p, (&self.account.client_id, &self.account.token), user))
             .map_or(WriteState::Idle, |p| p.receipt.lock().unwrap_or_else(|e| e.into_inner()).state())
     }
     pub(super) fn overlay<'a>(&self, session: &'a Session, user: &str) -> std::borrow::Cow<'a, Session> {
         let mut next = std::borrow::Cow::Borrowed(session);
-        for pending in self.pending.iter().filter(|p| self.holds(p, user) && p.account.matches(session)
+        for pending in self.pending.iter().filter(|p| self.holds(p, (&session.client_id, &session.account_token), user)
             && !p.receipt.lock().unwrap_or_else(|e| e.into_inner()).saved()) {
             if let Some(merged) = pending.edit.merge(next.as_ref(), user) { next = std::borrow::Cow::Owned(merged); }
         }
@@ -238,6 +247,29 @@ mod tests {
         writes.observe();
         assert!(!receipt.lock().unwrap().saved());
         assert_eq!(key(&writes.overlay(&account(), "viewer"), "viewer"), 7);
+    }
+
+    #[test]
+    fn the_overlay_keeps_the_newest_saved_write_of_a_class_that_replaces_itself() {
+        let pins = Edit::Pins { libraries: Vec::new(), on: Vec::new(), touched: Vec::new(), asked: true };
+        assert!(!pins.replaces_itself());
+        for edit in [library(1), Edit::Order { libs: Vec::new(), present: Vec::new() }, Edit::OrderReset] { assert!(edit.replaces_itself()); }
+        let mut writes = Preferences::default();
+        writes.prepare(&account(), 0);
+        let settle = |writes: &mut Preferences, receipt: &Arc<Mutex<Receipt>>| {
+            let mut jobs = writes.take_jobs();
+            let crate::stores::StoreJob::BrowsePreferences(job, port) = jobs.remove(0) else { panic!("preference job") };
+            port.done(job.addr, WriteOutcome::Finished(true));
+            writes.observe();
+            assert!(receipt.lock().unwrap().saved());
+        };
+        let first = writes.emit("viewer", library(1)).unwrap();
+        settle(&mut writes, &first);
+        let second = writes.emit("viewer", library(2)).unwrap();
+        assert_eq!(writes.pending.len(), 1, "the next write of the class retires the saved one");
+        settle(&mut writes, &second);
+        let _ = writes.emit("viewer", Edit::OrderReset).unwrap();
+        assert_eq!(writes.pending.len(), 2, "the newest saved library write stays until another replaces it");
     }
 
     #[test]
