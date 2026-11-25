@@ -4,7 +4,7 @@
 //! The page lists the favourites in the profile's order (the Browse publication's
 //! `DirectoryView::library_order`) and a Reset row. OK on a library PICKS IT UP ([`Mode::Moving`]):
 //! Up and Down carry it through the list (the table glides the rows, `FormTable`), OK puts it down
-//! (one `BrowseCmd::SetLibraryOrder` with the whole shown order), Back puts it back and writes
+//! (one `BrowseCmd::SetLibraryOrder` naming the libraries an order can name, in the shown order, and only when that order changed), Back puts it back and writes
 //! nothing. OK on Reset asks once more ([`Mode::ConfirmReset`]); a second OK resets
 //! (`BrowseCmd::ResetLibraryOrder`), any other key keeps the order. Left and Right are swallowed
 //! while a library is held (`TableScreen::uncommitted`), so a stray press cannot leave the page with
@@ -19,7 +19,9 @@
 //! saved order names it by, which survives a rebuild of the section table (whose indices
 //! ([`LibraryOrderRow::section`]) do not). The mode, the focus, the sentence and the rows' keys all
 //! follow a library by it. A library whose server's machine id is not learned yet has no identity an
-//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why.
+//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why; it stays where it stands
+//! while the named libraries move around it, and a drop's command leaves it out (the store places it by
+//! its default rule).
 //!
 //! **What the store says and what the page shows are two things, and the state between them has a
 //! name** ([`Shown`]). The page reads the publication through ONE adapter ([`Published`]); after a
@@ -200,7 +202,7 @@ enum Mode {
     /// Nothing held: the rows read as pickable, the sentence is the focused row's.
     Idle,
     /// `lifted` is held; `before` is the shown order it was picked up from, which Back restores and
-    /// a drop that moved nothing is compared with.
+    /// a drop that changed no named order is compared with.
     Moving { lifted: LibraryRef, before: Vec<LibraryOrderRow> },
     /// OK was pressed on Reset: a second OK resets, any other key (or a move of focus off it) keeps the order.
     ConfirmReset,
@@ -211,8 +213,11 @@ enum Mode {
 }
 
 /// A library row's part in the reorder, from the mode ([`RowMove`] is the table's one language for it).
-fn move_of(mode: &Mode, index: usize, count: usize, row: &LibraryOrderRow) -> RowMove {
-    let (can_up, can_down) = (index > 0, index + 1 < count);
+///
+/// A library moves among the libraries an order can name (`rank` of `named`): a row no order can
+/// name stays where it stands, so every move changes the order a drop sends.
+fn move_of(mode: &Mode, rank: Option<usize>, named: usize, row: &LibraryOrderRow) -> RowMove {
+    let (can_up, can_down) = rank.map_or((false, false), |rank| (rank > 0, rank + 1 < named));
     match (mode, LibraryRef::of(row)) {
         (Mode::Moving { lifted, .. }, Some(lib)) if lib == *lifted => RowMove::Lifted { can_up, can_down },
         (Mode::Moving { .. }, _) => RowMove::Waiting,
@@ -228,8 +233,11 @@ fn move_of(mode: &Mode, index: usize, count: usize, row: &LibraryOrderRow) -> Ro
 fn order_form(shown: &[LibraryOrderRow], mode: &Mode, reset_offered: bool, keys: &Keys) -> Form<LibId, (), SettingsPage> {
     use plx_os::i18n::msg;
     let mut libraries = FormSection::new(msg::settings_libraries_title()).visible(!shown.is_empty());
-    for (index, row) in shown.iter().enumerate() {
-        let label = Row::new(&row.title).moving(move_of(mode, index, shown.len(), row));
+    let named = shown.iter().filter(|row| LibraryRef::of(row).is_some()).count();
+    let mut rank = 0;
+    for row in shown {
+        let at = LibraryRef::of(row).map(|_| { rank += 1; rank - 1 });
+        let label = Row::new(&row.title).moving(move_of(mode, at, named, row));
         let label = if row.handle.is_empty() { label } else { label.value(&row.handle) };
         let id = LibId::of(row);
         let key = keys.key_of(&id);
@@ -336,7 +344,11 @@ impl PageState {
                 None => msg::library_order_state_reset().to_string(),
             },
         };
-        if self.seen.write_failed() { format!("{said} {}", msg::library_order_state_unsaved()) } else { said }
+        match (self.seen.write_failed(), said.is_empty()) {
+            (true, false) => format!("{said} {}", msg::library_order_state_unsaved()),
+            (true, true) => msg::library_order_state_unsaved().to_string(),
+            (false, _) => said,
+        }
     }
 }
 
@@ -582,8 +594,11 @@ impl LibraryOrderPage {
         };
         self.state.keys.note(&self.state.shown);
         let form = order_form(&self.state.shown, &self.state.mode, self.state.seen.reset_offered(), &self.state.keys);
+        // whether the list or the band holds focus is the engine's to say (a pointer over the band
+        // moved it off the list): a rebuild keeps it as it was
+        let list_focused = self.form.table.list_focused;
         self.form.set_sliding(form, keep.as_ref());
-        self.form.table.list_focused = true;
+        self.form.table.list_focused = list_focused;
         if let Some(id) = self.form.selected_id() {
             self.state.sel = id.clone();
         }
@@ -606,6 +621,7 @@ impl LibraryOrderPage {
         if matches!(self.state.mode, Mode::Moving { .. }) {
             return false;
         }
+        let mut gave_up = false;
         let take_rows = match &mut self.state.basis {
             Shown::Published => {
                 if self.state.seen.is_current(directory) {
@@ -615,7 +631,9 @@ impl LibraryOrderPage {
             }
             Shown::AwaitingEcho { order, since } => {
                 let since = *since.get_or_insert(now_ms);
-                if named_order(rows_of(directory)) == *order || now_ms.wrapping_sub(since) >= ECHO_PATIENCE_MS {
+                let echoed = named_order(rows_of(directory)) == *order;
+                gave_up = !echoed && now_ms.wrapping_sub(since) >= ECHO_PATIENCE_MS;
+                if echoed || gave_up {
                     true
                 } else {
                     // the rows hold; what the record is and whether it saved still follow the store
@@ -637,6 +655,17 @@ impl LibraryOrderPage {
         // Reset can turn inert under a confirmation; a question about an action that is gone is not asked
         if matches!(self.state.mode, Mode::ConfirmReset) && !self.state.seen.reset_offered() {
             self.state.mode = Mode::Idle;
+        }
+        // "put down here" is true of an order the store took in; a refused one (given up on) or a
+        // library that left the publication has no place to name
+        let placed = match &self.state.mode {
+            Mode::Dropped(lib) => self.state.row_of(lib).is_some(),
+            _ => true,
+        };
+        if gave_up || !placed {
+            if matches!(self.state.mode, Mode::Dropped(_)) {
+                self.state.mode = Mode::Idle;
+            }
         }
         self.rebuild();
         true
@@ -667,11 +696,11 @@ impl LibraryOrderPage {
         }
     }
 
-    /// Put the held library down: one write of the shown order, and only when something moved. A
+    /// Put the held library down: one write of the named order, and only when it changed. A
     /// drop that sends nothing says nothing of a place (the page is idle again).
     fn drop_held(&mut self, fx: &mut Effects<'_, InnerHost>) {
         let Mode::Moving { lifted, before } = std::mem::replace(&mut self.state.mode, Mode::Idle) else { return };
-        match order_command(&self.state.shown).filter(|_| before != self.state.shown) {
+        match order_command(&self.state.shown).filter(|_| named_order(&before) != named_order(&self.state.shown)) {
             Some(command) => {
                 fx.push(Fx::App(AppFx::Store(StoreId::Browse, StoreCmd::Browse(command))));
                 self.state.basis = Shown::AwaitingEcho { order: named_order(&self.state.shown), since: None };
@@ -699,7 +728,11 @@ impl LibraryOrderPage {
     fn carry(&mut self, delta: isize) {
         let Mode::Moving { lifted, .. } = &self.state.mode else { return };
         let Some(at) = self.state.position(lifted) else { return };
-        let Some(to) = at.checked_add_signed(delta).filter(|to| *to < self.state.shown.len()) else { return };
+        // a row no order can name stays where it stands: the held library trades places with the
+        // next one an order can name, so a move always changes the order a drop sends
+        let named: Vec<usize> = (0..self.state.shown.len()).filter(|i| LibraryRef::of(&self.state.shown[*i]).is_some()).collect();
+        let Some(rank) = named.iter().position(|i| *i == at) else { return };
+        let Some(to) = rank.checked_add_signed(delta).and_then(|rank| named.get(rank)).copied() else { return };
         self.state.shown.swap(at, to);
         self.rebuild();
     }

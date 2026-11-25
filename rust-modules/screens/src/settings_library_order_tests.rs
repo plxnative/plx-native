@@ -136,6 +136,11 @@ fn a_drop_that_moved_nothing_writes_nothing() {
     assert!(page.state.description().starts_with("Press OK to move 4K Movies"), "{}", page.state.description());
 }
 
+/// A library whose server has not reported its machine id is no library an order can name. The
+/// command a drop sends is the order of the libraries that CAN be named, in the order shown (here
+/// five of six); the unnamed one is not in it (the store places it by its default rule), cannot be
+/// picked up, and stands where it is while the named ones move around it. An empty command is
+/// never sent.
 #[test]
 fn a_library_whose_server_has_no_machine_id_yet_is_left_out_of_the_command() {
     let mut rows = six();
@@ -147,6 +152,50 @@ fn a_library_whose_server_has_no_machine_id_yet_is_left_out_of_the_command() {
     let Some(Sent::Set(libs)) = sent(&ok_lib(&mut page, &s, 3)).pop() else { panic!("a set") };
     assert_eq!(libs.len(), 5);
     assert!(libs.iter().all(|(machine, _)| !machine.is_empty()), "never an empty machine id: {libs:?}");
+    let keys: Vec<i64> = libs.iter().map(|(_, key)| *key).collect();
+    assert_eq!(keys, [1, 4, 3, 5, 6], "the named libraries, in the order shown (Kids moved up one)");
+}
+
+#[test]
+fn a_move_steps_over_a_library_no_order_can_name_so_the_named_order_always_changes() {
+    // shown = [A, U (unnamed), B, ...]: A down must trade with B, never with U
+    let mut rows = six();
+    rows[1].machine_id.clear();
+    let s = snap(rows, OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 0);
+    press(&mut page, &s, Key::Down);
+    assert_eq!(order(&page), [2, 1, 0, 3, 4, 5], "A took B's place; the unnamed row stood still");
+    let Some(Sent::Set(libs)) = sent(&ok_lib(&mut page, &s, 0)).pop() else { panic!("a move of the named order sends it") };
+    let keys: Vec<i64> = libs.iter().map(|(_, key)| *key).collect();
+    assert_eq!(keys, [3, 1, 4, 5, 6]);
+    assert!(matches!(page.state.mode, Mode::Dropped(_)));
+    assert!(matches!(page.state.basis, Shown::AwaitingEcho { .. }));
+    // the store's echo is that order: nothing snaps back
+    let echo = {
+        let mut rows = six();
+        rows[1].machine_id.clear();
+        rows.swap(0, 2);
+        snap(rows, RECORDED, WriteState::InFlight)
+    };
+    step_page(&mut page, &echo, tick_ev());
+    assert_eq!(page.state.basis, Shown::Published);
+}
+
+#[test]
+fn a_drop_that_changes_no_named_order_sends_nothing_and_claims_no_place() {
+    // the one named library has nowhere to go: the walls are the named libraries', not the rows'
+    let mut rows = six();
+    rows.truncate(2);
+    rows[1].machine_id.clear();
+    let s = snap(rows, OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 0);
+    press(&mut page, &s, Key::Down);
+    assert_eq!(order(&page), [0, 1], "no named library to trade with");
+    assert!(sent(&ok_lib(&mut page, &s, 0)).is_empty());
+    assert_eq!(page.state.mode, Mode::Idle);
+    assert_eq!(page.state.basis, Shown::Published);
 }
 
 #[test]
@@ -640,6 +689,38 @@ fn a_dropped_order_the_store_never_echoes_is_given_up_on_by_the_tick_clock() {
     step_page(&mut page, &s, at(13_000));
     assert_eq!(order(&page), [0, 1, 2, 3, 4, 5], "past it the page shows what the store says");
     assert_eq!(page.state.basis, Shown::Published);
+    assert_eq!(page.state.mode, Mode::Idle, "a refused order has no place to announce: the sentence is the focused row's");
+    assert!(!page.state.description().is_empty());
+}
+
+#[test]
+fn a_dropped_library_that_leaves_the_publication_ends_its_sentence_without_a_stray_space() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    ok_lib(&mut page, &s, 2);
+    let mut echoed = six();
+    echoed.swap(1, 2);
+    step_page(&mut page, &snap(echoed.clone(), RECORDED, WriteState::InFlight), tick_ev());
+    assert!(matches!(page.state.mode, Mode::Dropped(_)), "the echo landed: the place is announced");
+    // the library is gone from the next publication (its server left), and the write failed
+    echoed.retain(|row| row.section != 2);
+    step_page(&mut page, &snap(echoed, RECORDED, WriteState::Failed), tick_ev());
+    assert_eq!(page.state.mode, Mode::Idle);
+    let said = page.state.description();
+    assert!(!said.starts_with(' ') && !said.is_empty(), "{said:?}");
+}
+
+#[test]
+fn a_pointer_over_the_band_while_a_library_is_held_leaves_the_band_focused() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    let entry = page.entry;
+    step_page(&mut page, &s, ScreenEvent::FocusMoved { from: None, to: FocusKey { entry, elem: crate::registry::BAND }, by: plx_ui::screen::By::Dir });
+    assert_eq!(page.state.mode, Mode::Idle, "the held library went back");
+    assert!(!page.form.table.list_focused, "and the rebuild did not hand focus back to the list");
 }
 
 #[test]
