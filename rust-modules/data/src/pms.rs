@@ -1194,8 +1194,7 @@ enum ShelfLibrary {
     /// ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
     #[default]
     Unknown,
-    /// Computed: the row belongs to no single library (a whole-server `home.*` hub, or cards of
-    /// several).
+    /// Computed: the row belongs to no single library (a whole-server hub, or cards of several).
     Mixed,
     /// Computed: the row's cards (or its hub id) name this one library (`librarySectionID`).
     One(i64),
@@ -1203,10 +1202,12 @@ enum ShelfLibrary {
 
 impl ShelfLibrary {
     /// Decide at projection: the hub id when it names a library (`plex::library_order::hub_library`),
-    /// none for a whole-server `home.*` hub, else the one `librarySectionID` every card shares.
+    /// none for a hub that spans the server (`plex::library_order::is_whole_server_hub`), else the one
+    /// `librarySectionID` every card shares: which is how a `home.<type>.recent` hub, one per library
+    /// when a household owns two of a type, finds its library.
     fn projected(hub_id: &str, items: &[Arc<PmsMovie>]) -> Self {
         if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id) { return Self::One(library); }
-        if hub_id.starts_with("home.") { return Self::Mixed; }
+        if plx_plex::plex::library_order::is_whole_server_hub(hub_id) { return Self::Mixed; }
         let mut sections = items.iter().map(|m| m.sec).filter(|sec| *sec != 0);
         match sections.next() {
             Some(first) if sections.all(|sec| sec == first) => Self::One(first),

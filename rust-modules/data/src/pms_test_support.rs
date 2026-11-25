@@ -160,6 +160,27 @@ pub(super) fn shelf_in(slot: u16, sec: i64, title: &str, hub_id: &str, rks: &[&s
     sh
 }
 
+/// What one PMS answers `/hubs` with when the household owns TWO TV libraries: a SEPARATE
+/// `home.television.recent` hub per library, each with the library folded into its title
+/// (`docs/pms-api.md` §3). `librarySectionTitle` is present on every real item (§2), so the
+/// "Recently Added in {library}" override reproduces PMS's own disambiguation. The one fixture for
+/// everything that reads that shape (the merge, the titles, Library order on Home).
+pub(super) fn twin_tv_libraries_home() -> plx_plex::plex::MediaContainer {
+    const BODY: &str = r#"{"MediaContainer":{"Hub":[
+        {"type":"show","hubIdentifier":"home.television.recent",
+         "title":"Recently Added in TV","key":"/hubs/home/recentlyAdded?type=2&sectionID=1",
+         "Metadata":[{"ratingKey":"101","librarySectionID":"1","librarySectionTitle":"TV",
+                      "type":"show","title":"TV Show","thumb":"/tv.jpg","art":"/tv-art.jpg"}]},
+        {"type":"show","hubIdentifier":"home.television.recent",
+         "title":"Recently Added in TV HDR","key":"/hubs/home/recentlyAdded?type=2&sectionID=2",
+         "Metadata":[{"ratingKey":"202","librarySectionID":"2","librarySectionTitle":"TV HDR",
+                      "type":"show","title":"HDR Show","thumb":"/hdr.jpg","art":"/hdr-art.jpg"}]}
+    ]}}"#;
+    serde_json::from_str::<plx_plex::plex::Envelope>(BODY)
+        .expect("the two-library PMS response parses")
+        .media_container
+}
+
 /// A source's projection: `(lastViewedAt, rk)` deck entries plus whole shelves.
 pub(super) fn built(slot: u16, cw: &[(i64, &str)], shelves: Vec<Shelf>) -> SourceBuild {
     SourceBuild {

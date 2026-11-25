@@ -229,6 +229,34 @@ fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     assert_eq!(no_pins(&[]), 0, "nothing known, nothing to republish");
 }
 
+/// PMS mints one `home.television.recent` hub PER TV library when a household owns two
+/// (`twin_tv_libraries_home`), so the hub id does not span libraries: each row ranks by the one
+/// library its cards name, and reordering the two libraries swaps the two rows.
+#[test]
+fn a_reorder_of_two_same_type_libraries_swaps_their_shared_identifier_rows() {
+    let build = project(&twin_tv_libraries_home(), &plx_plex::plex::MediaContainer::default(), sid(0));
+    let srcs = [src(0, "", HubState::Ready, Some(build))];
+    let sections = |hubs: &[HubRow], cat: &[Arc<PmsMovie>]| hubs.iter().map(|hub| cat[hub.start].sec).collect::<Vec<_>>();
+    let natural = [(sid(0), 1), (sid(0), 2)];
+    let (cat, hubs, _) = merge_with_scope(&srcs, &scope(&natural, &defaults(&natural)));
+    assert_eq!(sections(&hubs, &cat), [1, 2]);
+    let swapped = [(sid(0), 2), (sid(0), 1)];
+    let (cat, hubs, _) = merge_with_scope(&srcs, &scope(&swapped, &defaults(&swapped)));
+    assert_eq!(ids(&hubs), ["home.television.recent", "home.television.recent"]);
+    assert_eq!(sections(&hubs, &cat), [2, 1], "TV HDR now leads TV");
+}
+
+/// A `home.<type>.recent` hub with one library's cards is that library's shelf (the household's only
+/// library of the type); a whole-server hub is nobody's, whatever its cards say.
+#[test]
+fn a_lone_type_hub_is_its_librarys_shelf_and_a_whole_server_hub_is_nobodys() {
+    let cards = shelf_in(0, 3, "x", "x", &["a", "b"]).items;
+    assert_eq!(ShelfLibrary::projected("home.movies.recent", &cards), ShelfLibrary::One(3));
+    for id in ["home.playlists", "home.ondeck", "home.continue"] {
+        assert_eq!(ShelfLibrary::projected(id, &cards), ShelfLibrary::Mixed, "{id}");
+    }
+}
+
 /// F7: a refresh re-projects every row, and a released row's library is the one it was given when
 /// it was first projected, not whatever the fresh preview's sample says.
 #[test]
