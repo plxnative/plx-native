@@ -176,11 +176,11 @@ pub struct AuthContext {
 /// install-wide top-level keys of the same names stay (they are the fallback every profile reads
 /// until it picks its own).
 ///
-/// The next three are each profile's own browsing and playback memory, which sign-out forgets with
+/// The next four are each profile's own browsing and playback memory, which sign-out forgets with
 /// the account whose profile it was: `subtitle_offsets` (the timing correction a profile tuned for
 /// one item, naming a `machineIdentifier` and a ratingKey), `library_sorts` (how each library was
 /// last browsed), `last_library` (the library each top tab opened in) and `library_order` (the order
-/// of its favourite libraries), all three naming a server and a section.
+/// of its favourite libraries); the last three name a server and a section.
 ///
 /// `recent_channels` (Live TV's Recent row, per profile) names a server's machine identifier and a
 /// channel, and goes with the account the same way.
