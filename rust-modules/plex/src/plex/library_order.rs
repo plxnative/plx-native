@@ -146,7 +146,8 @@ pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], pr
 /// (`custom.collection.<section>.…`); then, for a hub that is not [`is_whole_server_hub`], the
 /// `sectionID` of its `key`: PMS mints one `home.<type>.recent` hub per library when a household
 /// owns two of a type, and each one's key says which (`/hubs/home/recentlyAdded?type=2&sectionID=1`).
-/// `None` for every other shelf, which the cards it holds decide while it is on its first page.
+/// `None` for every other shelf, which the cards of its first page decide, once, at projection
+/// (`data::pms::ShelfLibrary`).
 pub fn hub_library(hub_identifier: &str, key: &str) -> Option<i64> {
     for prefix in super::hub_title::PER_LIBRARY_PREFIXES {
         if let Some(rest) = hub_identifier.strip_prefix(prefix) {
@@ -155,14 +156,14 @@ pub fn hub_library(hub_identifier: &str, key: &str) -> Option<i64> {
     }
     if let Some(rest) = hub_identifier.strip_prefix("custom.collection.") { return rest.split('.').next()?.parse().ok(); }
     if is_whole_server_hub(hub_identifier) { return None; }
-    key.split_once('?')?.1.split('&').find_map(|pair| pair.strip_prefix("sectionID="))?.parse().ok()
+    super::paging::query_value(key, "sectionID")?.parse().ok()
 }
 
 /// The `home.*` hubs that span the whole server whatever they hold: Continue Watching, On Deck (both
 /// spellings PMS has used) and Recent Playlists. **The only `home.*` identifiers that belong to no
 /// library by their id.** `home.<type>.recent` is NOT one: PMS mints one such hub per library when a
 /// household owns two of a type (`docs/pms-api.md` §3, `hub_title::is_recently_added_hub`), and a
-/// lone one is that library's own shelf, so those are decided by their key's `sectionID` ([`hub_library`]), else by the library their cards share.
+/// lone one is that library's own shelf, so those are decided by their key's `sectionID` ([`hub_library`]), else by the library their first page's cards share.
 pub fn is_whole_server_hub(hub_identifier: &str) -> bool {
     matches!(hub_identifier, "home.continue" | "home.ondeck" | "home.onDeck" | "home.playlists")
 }
