@@ -660,8 +660,8 @@ struct CanonicalSessionAuth {
 struct CanonicalSessionPreferences {
     #[serde(default)]
     language: plx_os::i18n::Preference,
-    /// Every flattened preference key (playback and display settings, the A5 rows and the two memory-door
-    /// lists), flattened ahead of `extensions` so a flattened struct takes its keys first and
+    /// Every flattened preference key (playback and display settings, the A5 rows and every memory-door list:
+    /// `track_memory`, `subtitle_offsets`, `recent_channels`), flattened ahead of `extensions` so a flattened struct takes its keys first and
     /// `extensions` still sees only unknown ones.
     #[serde(flatten)]
     prefs: Preferences,
