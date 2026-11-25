@@ -3008,8 +3008,9 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
                     finish_landed_play(app, matches!(outcome, plx_media::player::ResumeOutcome::Prepared));
                 }
                 if let Some(r) = plx_media::route::pump_play(&mut app.player.session, app.runtime.metadata_mut()) {
-                    // A live channel whose tune the server admitted joins the profile's Recent
-                    // (a refused tune left no live session, so it does not).
+                    // A live channel's plan landing joins the profile's Recent. `pump_play` hands back a
+                    // start only for a plan the server admitted, so a refused tune (all tuners busy, a
+                    // failed one) never gets here: this arm is the gate, and the note has none of its own.
                     app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
             app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
                     app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);

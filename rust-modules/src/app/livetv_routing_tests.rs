@@ -122,9 +122,9 @@ fn admit(app: &mut App) {
     app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
 }
 
-/// **A tune the server did not admit is not Recent.** The rig has no PMS, so every landing here is a
-/// tune that failed (as all tuners busy leaves one): a play and a zap through the real loop note
-/// nothing, with nobody seated or not.
+/// **Asking for a tune is not noting it.** The rig has no PMS, so no plan ever lands here: a play and
+/// a zap through the real loop's requests note nothing. (A tune the server refuses is the loop test
+/// `a_live_plan_landing_without_an_admitted_tune_notes_nothing`'s, which lands one.)
 #[test]
 fn a_tune_the_server_did_not_admit_joins_no_recent() {
     let _serial = plx_base::testlock::serial();
@@ -138,12 +138,6 @@ fn a_tune_the_server_did_not_admit_joins_no_recent() {
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(1));
     settle(&mut app, &mut now);
     assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing was admitted");
-    // The channel is asked for and no live session was opened (`cur_live` unset): the note itself
-    // refuses it, whatever reaches it.
-    assert!(plx_media::route::live_request(&app.player.session).is_some());
-    assert!(plx_media::route::live_tuned(&app.player.session).is_none());
-    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
-    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "a requested tune is not an admitted one");
 }
 
 /// A live play and every zap are noted in Recent once admitted: the first tune joins, a channel tuned
@@ -192,7 +186,7 @@ fn recent_is_stored_by_machine_and_read_back_under_another_slot_assignment() {
     {
         let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
         let mut bridge = owner.bridge();
-        bridge.seat_recent_for_test("");
+        bridge.seat_recent_for_test();
         bridge.note_recent_for_test(a, "7", "C101");
     }
     assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>(""), [RecentChannelEntry::new("machine-a", "7", "C101")],
@@ -205,7 +199,7 @@ fn recent_is_stored_by_machine_and_read_back_under_another_slot_assignment() {
     assert_ne!(moved, a, "the same server holds another slot");
     let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
     let mut bridge = owner.bridge();
-    bridge.seat_recent_for_test("");
+    bridge.seat_recent_for_test();
     bridge.clock_for_test(1_000);
     bridge.livetv_pump();
     let mut on_moved = channel("101", "Family Channel");
@@ -253,7 +247,7 @@ fn a_tune_and_a_restart_show_the_same_row_when_a_server_is_hidden() {
     };
     let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
     let mut bridge = owner.bridge();
-    bridge.seat_recent_for_test("");
+    bridge.seat_recent_for_test();
     bridge.clock_for_test(1_000);
     bridge.livetv_pump();
     lineup(&mut bridge);
@@ -265,10 +259,18 @@ fn a_tune_and_a_restart_show_the_same_row_when_a_server_is_hidden() {
     let tuned = names(&bridge);
     drop(bridge);
     drop(owner);
+    // A restart reads the list from the session record, not from this process's mirror: let the queued
+    // write land in the record, forget the mirror and seed it again from the record, as the handoff's
+    // restore does at the next boot.
+    plx_base::storage_worker::drain_for_test();
+    plx_media::route::unseed_memory_for_test::<RecentChannelEntry>();
+    assert!(plx_media::route::recall_all::<RecentChannelEntry>("").is_empty(), "the mirror is forgotten");
+    plx_media::route::restore_install_rows(&plx_plex::plex::session::peek());
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>("").len(), 5, "the record held the door's five");
 
     let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
     let mut bridge = owner.bridge();
-    bridge.seat_recent_for_test("");
+    bridge.seat_recent_for_test();
     bridge.clock_for_test(1_000);
     bridge.livetv_pump();
     lineup(&mut bridge);

@@ -135,14 +135,16 @@ fn a_live_plan_landing_through_the_loop_notes_the_channel_in_recent() {
     lineup_the_rig_channel(&mut rig);
     assert!(recent_names(&mut rig).is_empty(), "nothing tuned yet");
     tune_through_the_loop(&mut rig);
-    assert!(plx_media::route::live_tuned(&rig.app.player.session).is_some(), "the server admitted the tune");
+    assert!(plx_media::route::is_live(&rig.app.player.session), "the server admitted the tune");
     lineup_the_rig_channel(&mut rig);
     assert_eq!(recent_names(&mut rig), ["Family Channel"]);
 }
 
-/// **A tune the server did not admit joins nothing.** The same landing, with every tuner busy (the
-/// server answers the tune 503): the refusing plan installs (its verdict is on the session) and
-/// `pump_play` hands the loop no start for it, so the loop's arm never reaches the note.
+/// **A tune the server did not admit joins nothing, and this is the gate for it.** The same landing, with
+/// every tuner busy (the server answers the tune 503): the refusing plan installs (its verdict is on the
+/// session), the channel is still the one asked for, and `pump_play` hands the loop no start for it, so
+/// the loop's arm never reaches the note. The note has no check of its own: it is red if the note moves
+/// out of the arm.
 #[test]
 fn a_live_plan_landing_without_an_admitted_tune_notes_nothing() {
     let _serial = plx_base::testlock::serial();
@@ -156,8 +158,34 @@ fn a_live_plan_landing_without_an_admitted_tune_notes_nothing() {
     tune_through_the_loop(&mut rig);
     assert_eq!(plx_media::route::play_verdict(&rig.app.player.session).as_deref(),
         Some(plx_os::i18n::msg::widgets_verdict_tuners_busy()), "the refusing plan landed through the loop");
-    assert!(plx_media::route::live_tuned(&rig.app.player.session).is_none(), "no live session: the tune was not admitted");
     assert!(plx_media::route::live_request(&rig.app.player.session).is_some(), "the channel was asked for");
     lineup_the_rig_channel(&mut rig);
     assert!(recent_names(&mut rig).is_empty());
+}
+
+/// **A seated tune goes through the loop to the memory door.** With a profile seated the landing's note is
+/// the door's write (`route::remember`), by the server's machine id, and the row the Live TV store
+/// publishes reads it back from the door on its next step.
+#[test]
+fn a_seated_live_plan_landing_through_the_loop_writes_the_channel_to_the_door() {
+    use plx_plex::plex::session::prefs::RecentChannelEntry;
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("live-landing-seated");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+    let Some(mut rig) = Rig::serving_with(live_body) else {
+        eprintln!("SKIPPED a_seated_live_plan_landing_through_the_loop_writes_the_channel_to_the_door: fixture worker refused");
+        return;
+    };
+    rig.app.runtime.bridge(&mut rig.app.bridge).seat_recent_for_test();
+    assert!(plx_media::route::recall_all::<RecentChannelEntry>("").is_empty(), "nothing stored yet");
+    tune_through_the_loop(&mut rig);
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>(""),
+        [RecentChannelEntry::new("lifecycle-fixture", "7", "C101")], "the landing wrote the tune to the door");
+    lineup_the_rig_channel(&mut rig);
+    let mut bridge = rig.app.runtime.bridge(&mut rig.app.bridge);
+    bridge.livetv_pump();
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(row, ["Family Channel"], "and the next step's input carries it");
 }
