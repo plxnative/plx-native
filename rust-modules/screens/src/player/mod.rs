@@ -1278,8 +1278,9 @@ impl PlayerScreen {
             // The picker hangs off the control that opened it, by the drawn rect (the Detail hero's rule), not
             // off a fallback: it opens beside its own button and keeps that anchor when a page is pushed.
             A::ChangeTracks => {
-                let rect = readout.frames(measure).get(idx).copied().flatten();
-                let anchor = rect.map_or([0; 4], |r| [r.x, r.y, r.w, r.h].map(f32::to_bits));
+                // A control the read-out drew no frame for has nothing to hang off: it opens nothing.
+                let Some(rect) = readout.frames(measure).get(idx).copied().flatten() else { return };
+                let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
                 Self::ask(fx, PlayerReq::OpenFailedTracks { anchor })
             }
             A::Repair => {

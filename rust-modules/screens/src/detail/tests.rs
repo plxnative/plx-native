@@ -5863,6 +5863,27 @@ fn the_picker_follows_the_file_play_starts_when_no_version_was_chosen() {
     clear();
 }
 
+/// **A control the page no longer has is not performed**: the … menu was built from the page as it
+/// stood, and a row handed back after a read took the control away (no tracks now) opens nothing, while
+/// the same row on a page that still has it opens the picker on the menu's anchor.
+#[test]
+fn a_hero_control_handed_back_after_it_left_the_page_does_nothing() {
+    let anchor = [10.0f32, 20.0, 64.0, 64.0].map(f32::to_bits);
+    let handed_back = |d: Detail| {
+        let _guard = install(d);
+        let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
+        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::HeroCtl { ctl: hero::HeroCtl::AudioSubtitles, anchor }), None);
+        clear();
+        effects.iter().any(|e| matches!(
+            &e.fx,
+            Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { anchor: got }))) if *got == anchor
+        ))
+    };
+    let with_tracks = Detail { audio: vec![stream(1, true), stream(2, false)], subs: vec![stream(3, false)], ..versioned("movie", 1) };
+    assert!(handed_back(with_tracks.clone()), "control: the page still has the disc");
+    assert!(!handed_back(Detail { audio: Vec::new(), ..with_tracks }), "the page has no tracks now: nothing opens");
+}
+
 #[test]
 fn pdf_proposal_on_deck_watched_action_targets_one_episode() {
     let _guard = plx_base::testlock::serial();

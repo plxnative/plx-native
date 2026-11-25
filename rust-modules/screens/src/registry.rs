@@ -1385,7 +1385,7 @@ pub enum ContentPanel {
     /// rect of what opened it (the hero's disc, or its `…` menu's row). **The entry point for any
     /// host**: send `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from the Detail
     /// page; the subject is the page's `(sid, rk)` and the panel reads the tracks of the item the
-    /// hero PLAYS (`detail::play_subject`: a show page's hero episode, never the show).
+    /// hero PLAYS (`Detail::play_rk`: a show page's hero episode, never the show).
     PreplayTracks { anchor: [u32; 4] },
     /// *Track information* (`screens::tracks_panel`), opened at 1-based `page`. Every interactive
     /// opening passes 1; `/tmp/plxnative-tracks=<n>` is the only caller that does not, and it is

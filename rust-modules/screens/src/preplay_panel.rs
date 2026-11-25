@@ -41,7 +41,7 @@ use crate::registry::{AppFx, AppLike, ContentReq, MetadataLike, PageMemory};
 pub const SHAPE: &str = "PreplayPanel{arg:PreplayArg{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},audio:u32,sub:Option<u32>,depth:u32}";
 
 /// Where the panel's tracks come from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Source {
     /// The Detail page the panel is over: `PreplayTracks` of the item its hero plays.
     Page,
@@ -53,6 +53,20 @@ pub enum Source {
     /// store pick, not part of the surface's identity (the canon below does not write it).
     Failed { part_id: i64, pick: Option<plx_data::metadata::PreplayPick> },
 }
+
+/// **Identity is where the tracks come from, not what seeded the rows**: two failure panels over the
+/// same part are the same surface whatever pick they open on (the canon writes the part only), so
+/// `pick` is left out of the comparison as it is out of the shape.
+impl PartialEq for Source {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Source::Page, Source::Page) => true,
+            (Source::Failed { part_id: a, .. }, Source::Failed { part_id: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
+impl Eq for Source {}
 
 /// What the container is asked to present: the host instance, the item the page stands on, the drawn
 /// rect of what opened the panel (bit-preserving, like every panel argument) and where the tracks
@@ -424,6 +438,17 @@ pub(crate) mod tests {
         assert!(fx.is_empty() && p.picker().depth() == 0, "BACK pops the subtitle page first");
         let fx = drive(&mut p, |p, fx| p.back(fx));
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "BACK at the root closes");
+    }
+
+    /// A source's identity is where the tracks come from: the seed pick rides along but is not compared.
+    #[test]
+    fn a_source_is_the_same_surface_whatever_seeded_its_rows() {
+        let seeded = plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 11, sub: plx_data::metadata::SubPick::Off };
+        let failed = |part_id, pick| Source::Failed { part_id, pick };
+        assert_eq!(failed(9001, None), failed(9001, Some(seeded)));
+        assert_ne!(failed(9001, None), failed(9002, None), "another part is another surface");
+        assert_ne!(Source::Page, failed(9001, None));
+        assert_eq!(Source::Page, Source::Page);
     }
 
     /// On the failure screen a pick commits with the failure source (the loop holds it AND starts the

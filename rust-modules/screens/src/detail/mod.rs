@@ -2660,7 +2660,14 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
             // A row of the hero's … menu, handed back with the rect the menu hung off: the page performs the
             // control as if its own disc had been pressed, so `activate_hero` is the only action path.
             ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor }) => {
-                self.activate_hero(*ctl, Some(*anchor), cx, fx, H::metadata(cx));
+                // The menu was built from the page as it stood: a page read since (a version list that
+                // shrank, a resume point that finished) may have taken the control away, and a row of a
+                // menu that outlived it acts on nothing. The ONE check, at the one door the overflow
+                // uses, against the same list the row's buttons and … menu are built from.
+                let (actions, n) = hero::actions(self.hero_set(H::metadata(cx)));
+                if actions[..n].contains(ctl) {
+                    self.activate_hero(*ctl, Some(*anchor), cx, fx, H::metadata(cx));
+                }
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::SelectVersion(media)) => {
@@ -5057,7 +5064,7 @@ impl DetailScreen {
 /// Version, More): the control itself acts on no title. The panel or menu one of them opens has rows of its
 /// own, each guarded by its own subject: a library item's menu (`itemmenu.*`) carries its title's key, and the
 /// Select Version panel's `versions.row.<n>` (`versions_panel.rs`, OK delivers `AppMsg::SelectVersion`, which selects)
-/// carries [`play_subject`], this function's answer for Play. Exhaustive, so a new control must be placed here.
+/// carries [`Detail::play_rk`], this function's answer for Play. Exhaustive, so a new control must be placed here.
 pub(crate) fn hero_control_subject<'a>(
     ctl: hero::HeroCtl,
     d: &'a Detail,
