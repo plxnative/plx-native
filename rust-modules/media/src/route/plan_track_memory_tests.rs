@@ -462,8 +462,9 @@ fn the_route_says_when_a_remembered_subtitle_is_not_shown() {
 
 // ---- a pick made before playback (#1532) ---------------------------------------------------------
 
-/// A MOVIE has no show memory, so the pick reaches the first start only through the loaded page's
-/// `selected` flags (`MetadataCmd::PatchTracks`): after Off the plan reads no selected subtitle.
+/// A MOVIE has no show memory, so the pick reaches the first start only through the metadata store's
+/// pick (`MetadataCmd::PatchTracks`, applied by `PlayingItem::apply_picks`): after Off the plan reads no
+/// selected subtitle.
 #[test]
 fn a_preplay_subtitles_off_on_a_movie_plans_no_subtitle_at_the_first_start() {
     use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
@@ -638,7 +639,9 @@ fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
     let ps = crate::route::PlaybackSession::IDLE;
     let prefs = AudioLangPrefs::new(None, Some("en"));
     let first_intent = |store: &MetadataStore| {
-        let env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        let mut env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        env.fresh_play = true; // the viewer's own launch (`request_env`)
+        env.audio_sid = 4242; // what the session last had on screen: another item's track
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
         item.apply_picks(&env.picks);
         let session = env.under_pick(&item).map_or(env.audio_sid, |e| e.audio_sid);

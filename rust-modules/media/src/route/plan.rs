@@ -1523,10 +1523,12 @@ pub struct SelectionBeforeRetry {
 
 impl ResolveEnv {
     /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file
-    /// and no retry already holds one (the session's held pair outranks a pick made before the
-    /// first start). The single place the pick's `audio_sid` becomes `audio_sid`.
+    /// and this is the viewer's own launch (`fresh_play`): a retry carries the attempt's held pair, which
+    /// outranks a pick made before the first start, and a fresh launch's `audio_sid` is only what the
+    /// session last had on screen (another item's track), never a choice for this one. The single place
+    /// the pick's `audio_sid` becomes `audio_sid`.
     pub(super) fn under_pick(&self, item: &plx_data::metadata::PlayingItem) -> Option<ResolveEnv> {
-        if self.audio_sid > 0 {
+        if !self.fresh_play {
             return None;
         }
         let pick = plx_data::metadata::PreplayPick::for_file(&self.picks, &item.audio)?;
