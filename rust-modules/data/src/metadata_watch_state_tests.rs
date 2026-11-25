@@ -883,10 +883,10 @@ fn a_pick_is_spent_by_exactly_the_playback_it_fed() {
     let playing = cached_playing(state, SRV_A, "m1").expect("the page's streams");
     assert!(super::run(state, test_adapter(), MetadataCmd::InstallPlaying(Some(playing))));
     assert_eq!(state.picks.len(), 1, "installing a playing item is not a start: a refused plan installs one");
-    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m2".into(), audio: vec![11] }), "another item's playback");
-    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), audio: vec![12, 13] }), "another file of the item");
+    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m2".into(), part_id: 11 }), "another item's playback");
+    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), part_id: 12 }), "another file of the item");
     assert_eq!(state.picks.len(), 1);
-    assert!(super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), audio: vec![10, 11] }));
+    assert!(super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), part_id: 11 }));
     assert!(state.picks.is_empty(), "the playback that started under the pick spent it");
     clear(test_state(), test_adapter());
 }
@@ -899,15 +899,76 @@ fn applied_lends_the_pages_streams_without_a_pick_and_lays_the_pick_over_them_wi
     use std::borrow::Cow;
     let stream = |id, selected| Stream { id, selected, ..Default::default() };
     let (audio, subs) = (vec![stream(11, true), stream(12, false)], vec![stream(21, true), stream(22, false)]);
-    let none = PreplayPick::applied(&[], &audio, &subs);
+    let none = PreplayPick::applied(&[], 5, &audio, &subs);
     assert!(matches!((&none.audio, &none.subs), (Cow::Borrowed(_), Cow::Borrowed(_))), "nothing is cloned for the page's own flags");
     assert_eq!(none.session_audio, 0);
-    let elsewhere = PreplayPick { part_id: 5, audio_sid: 99, sub: SubPick::Off };
-    assert!(matches!(PreplayPick::applied(&[elsewhere], &audio, &subs).audio, Cow::Borrowed(_)), "a pick of another file");
+    let elsewhere = PreplayPick { part_id: 4, audio_sid: 99, sub: SubPick::Off };
+    assert!(matches!(PreplayPick::applied(&[elsewhere], 6, &audio, &subs).audio, Cow::Borrowed(_)), "a pick of another file");
     let pick = PreplayPick { part_id: 5, audio_sid: 12, sub: SubPick::Track(22) };
-    let picked = PreplayPick::applied(&[elsewhere, pick], &audio, &subs);
+    let picked = PreplayPick::applied(&[elsewhere, pick], 5, &audio, &subs);
     assert_eq!(picked.session_audio, 12);
     assert_eq!(picked.audio.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, true]);
     assert_eq!(picked.subs.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, true]);
     assert!(audio[0].selected && subs[0].selected, "the page's own copy is untouched");
+}
+
+/// **A pick's file key is its part, for the store, every read and the spend alike.** A file with no audio
+/// stream (a video-only part with subtitles) is named by no audio id, so a key made of one stored the pick
+/// and then never found it, and a spend by audio id never spent it. The key is the part id the pick is held
+/// under (`Chose`), found by (`for_file`, `applied`, `apply`) and spent by (`SpendPick`).
+#[test]
+fn a_pick_on_a_file_with_no_audio_is_found_and_spent_by_its_part() {
+    use crate::stores::metadata::MetadataCmd;
+    let _serial = plx_base::testlock::serial();
+    let keys = plx_plex::plex::ClientKeys::default();
+    let stream = |id, selected| Stream { id, selected, ..Default::default() };
+    let page = Detail {
+        sid: SRV_A,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/31/1/f.mkv".into(),
+        audio: Vec::new(),
+        subs: vec![stream(130, true), stream(131, false)],
+        ..Default::default()
+    };
+    let state = test_state();
+    assert!(install_landed_detail(state, test_adapter(), Some(page), &keys, false));
+    let pick = PreplayPick { part_id: 31, audio_sid: 0, sub: SubPick::Track(131) };
+    assert!(super::run(state, test_adapter(), MetadataCmd::PatchTracks { sid: SRV_A, rk: "m1".into(), pick }));
+    let held: Vec<_> = picks_of(state, SRV_A, "m1").copied().collect();
+    assert_eq!(held, [pick], "the pick is held");
+
+    // found by the part, and by nothing else
+    assert_eq!(PreplayPick::for_file(&held, 31), Some(&pick));
+    assert_eq!(PreplayPick::for_file(&held, 32), None, "another file");
+    assert_eq!(PreplayPick::for_file(&held, 0), None, "a file whose part is unknown has no pick");
+    let subs = [stream(130, true), stream(131, false)];
+    let picked = PreplayPick::applied(&held, 31, &[], &subs);
+    assert_eq!(picked.subs.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, true], "the pick lies over the flags");
+    assert_eq!(picked.session_audio, 0, "no audio: the pick names none");
+    let mut played = PlayingItem { subs: subs.to_vec(), ..PlayingItem::with_subs(Vec::new()) };
+    played.apply_picks(&held, 31);
+    assert_eq!(played.sub_choice, SubPick::Track(131), "the plan is planned under it");
+
+    // spent by the part
+    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), part_id: 32 }), "another file's start");
+    assert!(!super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), part_id: 0 }), "a start on no known part");
+    assert_eq!(state.picks.len(), 1);
+    assert!(super::run(state, test_adapter(), MetadataCmd::SpendPick { sid: SRV_A, rk: "m1".into(), part_id: 31 }));
+    assert!(state.picks.is_empty(), "the playback of its file spent it");
+    clear(test_state(), test_adapter());
+}
+
+/// A pick that names no part (`part_id` 0, unknown) could be neither found nor spent, so it is not held.
+#[test]
+fn a_pick_naming_no_part_is_not_held() {
+    use crate::stores::metadata::MetadataCmd;
+    let _serial = plx_base::testlock::serial();
+    let keys = plx_plex::plex::ClientKeys::default();
+    let state = test_state();
+    assert!(install_landed_detail(state, test_adapter(), Some(pick_page("m1", 11)), &keys, false));
+    let unkeyed = PreplayPick { part_id: 0, audio_sid: 11, sub: SubPick::Off };
+    assert!(!super::run(state, test_adapter(), MetadataCmd::PatchTracks { sid: SRV_A, rk: "m1".into(), pick: unkeyed }));
+    assert!(state.picks.is_empty());
+    clear(test_state(), test_adapter());
 }

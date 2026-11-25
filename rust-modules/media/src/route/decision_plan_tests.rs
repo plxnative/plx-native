@@ -1809,8 +1809,8 @@ fn a_refused_plan_keeps_the_pick_and_the_playable_one_spends_it() {
     assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
     let planned = |url: &str, store: &MetadataStore| {
         let mut playing = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        playing.apply_picks(&store.view().picks_of(sid, "m1"));
-        Plan { sid, url: url.into(), playing: Some(playing), ..Default::default() }
+        playing.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
+        Plan { sid, url: url.into(), part_id: 9001, playing: Some(playing), ..Default::default() }
     };
     // the plans are resolved at their presses; the first install marks the page's copy as played
     let url = "https://example.invalid/m1.mkv";

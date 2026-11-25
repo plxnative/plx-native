@@ -2407,7 +2407,7 @@ pub struct SubtitleOffsetEntry {
 }
 
 /// One profile's remembered version choices: the file Resume and Play start for an item. See
-/// [`Preferences::version_choices`]. The third tenant of the memory door ([`prefs::ProfileList`]).
+/// [`Preferences::version_choices`]. A tenant of the memory door ([`prefs::ProfileList`]).
 pub type VersionChoices = prefs::ProfileList<VersionChoiceEntry>;
 
 /// One item's remembered version: the PMS `Media.id` of the file the viewer selected, or that a

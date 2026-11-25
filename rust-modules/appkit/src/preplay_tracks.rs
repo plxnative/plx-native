@@ -86,6 +86,9 @@ pub type PickForm = Form<PickRow, (), PickPage>;
 /// in the server's order.
 #[derive(Clone, Copy)]
 pub struct TrackSet<'a> {
+    /// The part these lists are of: the file's key ([`PreplayPick::is_for`]), which a file with no audio
+    /// stream still has.
+    pub part_id: i64,
     pub audio: &'a [Stream],
     pub subs: &'a [Stream],
 }
@@ -108,7 +111,7 @@ fn offered(s: &Stream) -> bool {
 /// starts from. The ONE reading of a [`PreplayPick`] into indices; the panel's seed, its carried choice
 /// and each pick's diff all come through it.
 pub fn chosen(set: TrackSet<'_>, pick: Option<&PreplayPick>) -> Chosen {
-    let pick = pick.filter(|p| p.is_for(set.audio));
+    let pick = pick.filter(|p| p.is_for(set.part_id));
     let audio = pick
         .and_then(|p| set.audio.iter().position(|s| s.id == p.audio_sid))
         .or_else(|| set.audio.iter().position(|s| s.selected))
@@ -266,13 +269,13 @@ pub struct Selection {
     pub subtitle_memo: Option<SubtitleMemo>,
 }
 
-/// Apply `pick` over `standing` (the pick so far for this file, `part_id` its part): the new choice
+/// Apply `pick` over `standing` (the pick so far for this file, `set.part_id` its part): the new choice
 /// and everything [`commit`] writes. `None` for a drill-in or an index off the list. A subtitle row
 /// (Off or a track) replaces the standing subtitle, an audio pick keeps it.
-pub fn select(set: TrackSet<'_>, part_id: i64, standing: Option<&PreplayPick>, pick: Pick) -> Option<Selection> {
+pub fn select(set: TrackSet<'_>, standing: Option<&PreplayPick>, pick: Pick) -> Option<Selection> {
     let now = chosen(set, standing);
     let mut next = now;
-    let mut sub = standing.filter(|p| p.is_for(set.audio)).map_or(SubPick::Server, |p| p.sub);
+    let mut sub = standing.filter(|p| p.is_for(set.part_id)).map_or(SubPick::Server, |p| p.sub);
     let (mut audio_memo, mut subtitle_memo) = (None, None);
     match pick {
         Pick::Open(_) => return None,
@@ -299,7 +302,7 @@ pub fn select(set: TrackSet<'_>, part_id: i64, standing: Option<&PreplayPick>, p
         chosen: next,
         audio_sid,
         subtitle_sid: next.sub.map_or(0, |i| set.subs[i].id),
-        pick: PreplayPick { part_id, audio_sid, sub },
+        pick: PreplayPick { part_id: set.part_id, audio_sid, sub },
         audio_memo,
         subtitle_memo,
     })
@@ -368,7 +371,7 @@ impl PickerState {
     }
 
     fn set(&self) -> TrackSet<'_> {
-        TrackSet { audio: &self.tracks.audio, subs: &self.tracks.subs }
+        TrackSet { part_id: PreplayItem::of(&self.tracks).part_id, audio: &self.tracks.audio, subs: &self.tracks.subs }
     }
 
     pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
@@ -425,7 +428,7 @@ impl PickerState {
                 self.push(page, id);
                 Outcome::Pushed
             }
-            pick => match select(self.set(), PreplayItem::of(&self.tracks).part_id, self.pick.as_ref(), pick) {
+            pick => match select(self.set(), self.pick.as_ref(), pick) {
                 Some(sel) => {
                     self.pick = Some(sel.pick);
                     let form = self.page_form(self.page());
@@ -548,7 +551,7 @@ mod tests {
     #[test]
     fn the_first_page_has_two_rows_reading_the_current_tracks() {
         let (audio, subs) = item();
-        let set = TrackSet { audio: &audio, subs: &subs };
+        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
         let now = chosen(set, None);
         assert_eq!(now, Chosen { audio: 1, sub: None });
         let form = root_form(set, now);
@@ -560,7 +563,7 @@ mod tests {
     #[test]
     fn the_pages_list_every_track_and_off() {
         let (audio, subs) = item();
-        let set = TrackSet { audio: &audio, subs: &subs };
+        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
         let now = chosen(set, None);
         assert_eq!(rows(&audio_form(set, now)), 2);
         // Off + the two subtitles
@@ -570,30 +573,30 @@ mod tests {
     #[test]
     fn a_subtitle_pick_carries_both_ids_and_off_is_zero() {
         let (audio, subs) = item();
-        let set = TrackSet { audio: &audio, subs: &subs };
-        let on = select(set, 9, None, Pick::Subtitle(Some(1))).unwrap();
+        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
+        let on = select(set, None, Pick::Subtitle(Some(1))).unwrap();
         assert_eq!((on.audio_sid, on.subtitle_sid), (102, 202), "the audio half is kept, not erased");
         assert!(on.audio_memo.is_none() && on.subtitle_memo.is_some());
-        let off = select(set, 9, Some(&on.pick), Pick::Subtitle(None)).unwrap();
+        let off = select(set, Some(&on.pick), Pick::Subtitle(None)).unwrap();
         assert_eq!((off.audio_sid, off.subtitle_sid), (102, 0));
         assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off));
         assert_eq!((on.pick.sub, off.pick.sub), (SubPick::Track(202), SubPick::Off));
         assert_eq!(off.pick.part_id, 9);
         // Off sticks across an audio pick; a never-touched subtitle is not "Off chosen" by one.
-        let audio = select(set, 9, Some(&off.pick), Pick::Audio(0)).unwrap();
+        let audio = select(set, Some(&off.pick), Pick::Audio(0)).unwrap();
         assert_eq!(audio.pick.sub, SubPick::Off);
-        assert_eq!(select(set, 9, None, Pick::Audio(0)).unwrap().pick.sub, SubPick::Server);
+        assert_eq!(select(set, None, Pick::Audio(0)).unwrap().pick.sub, SubPick::Server);
     }
 
     #[test]
     fn an_audio_pick_changes_only_the_audio_and_a_drill_in_picks_nothing() {
         let (audio, subs) = item();
-        let set = TrackSet { audio: &audio, subs: &subs };
-        let sel = select(set, 9, None, Pick::Audio(0)).unwrap();
+        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
+        let sel = select(set, None, Pick::Audio(0)).unwrap();
         assert_eq!((sel.audio_sid, sel.subtitle_sid), (101, 0));
         assert!(sel.audio_memo.is_some() && sel.subtitle_memo.is_none());
-        assert!(select(set, 9, None, pick_of(PickRow::OpenAudio)).is_none());
-        assert!(select(set, 9, None, Pick::Audio(9)).is_none());
+        assert!(select(set, None, pick_of(PickRow::OpenAudio)).is_none());
+        assert!(select(set, None, Pick::Audio(9)).is_none());
     }
 
     fn picker() -> PickerState {
@@ -662,10 +665,10 @@ mod tests {
     #[test]
     fn a_pick_seeds_the_rows_over_the_servers_flags() {
         let (audio, subs) = item();
-        let set = TrackSet { audio: &audio, subs: &subs };
+        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
         let pick = PreplayPick { part_id: 9, audio_sid: 101, sub: SubPick::Track(202) };
         assert_eq!(chosen(set, Some(&pick)), Chosen { audio: 0, sub: Some(1) });
-        let other_file = PreplayPick { part_id: 9, audio_sid: 999, sub: SubPick::Track(202) };
+        let other_file = PreplayPick { part_id: 8, audio_sid: 101, sub: SubPick::Track(202) };
         assert_eq!(chosen(set, Some(&other_file)), chosen(set, None), "a pick of another file seeds nothing");
     }
 
@@ -713,7 +716,7 @@ mod tests {
         let item = |part: &VersionPart| {
             let mut it = PlayingItem::with_subs(part.subs.clone());
             it.audio = part.audio.clone();
-            it.apply_picks(&picks);
+            it.apply_picks(&picks, plx_plex::plex::part_id_of(&part.part));
             it
         };
         let on_v2 = item(&v2);

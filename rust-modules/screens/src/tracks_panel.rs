@@ -971,7 +971,7 @@ struct Content {
 /// the one read the facts line takes too), so "playing" is the pick while one is held and the
 /// server's selection otherwise.
 fn content_of(d: &Detail, picks: &[plx_data::metadata::PreplayPick]) -> Content {
-    let picked = plx_data::metadata::PreplayPick::applied(picks, &d.audio, &d.subs);
+    let picked = plx_data::metadata::PreplayPick::applied(picks, plx_plex::plex::part_id_of(d.streams_part()), &d.audio, &d.subs);
     let (audio, subs) = (&*picked.audio, &*picked.subs);
     Content {
         cols: [

@@ -105,6 +105,8 @@ impl TestCommandResources {
                     repause_at: 0, refresh_hubs: false, ptr: crate::app::input::Pointer::IDLE,
                     rec: crate::app::recorder::Recplay::Off, boot_initial: None }
     }
+    /// The session the commands in this fixture act on.
+    pub(super) fn session(&self) -> &plx_media::route::PlaybackSession { &self.player.session }
     pub(super) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
         crate::app::content::CommandResources { player: &mut self.player,
             adapters: &mut self.adapters, menu_play_await: &mut self.menu_play_await, playback: &mut self.playback,

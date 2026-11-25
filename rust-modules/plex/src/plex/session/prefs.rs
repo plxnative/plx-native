@@ -5,8 +5,8 @@
 //! falling back to the frozen install-wide key beside it, see [`profile_prefs`]), and since A5
 //! every other preference key of the
 //! session (`auto_sign_in`, `last_hero_blur`, `ui_resolution`, `hold_hint_taught`, the two Account-scope lists, the
-//! two per-profile library lists and the three memory-door lists, `track_memory`,
-//! `subtitle_offsets` and `recent_channels`), that used to be spelled, field for field, in
+//! two per-profile library lists and the four memory-door lists, `track_memory`,
+//! `subtitle_offsets`, `version_choices` and `recent_channels`), that used to be spelled, field for field, in
 //! [`Session`] AND in the canonical (DB8) preference record: the struct field, the manual
 //! `Default`, the copy in and out of the canonical form, the getter and a `with_<x>` builder, ten
 //! sites per setting. The one key that remains outside it is `language` (its two forms differ on
@@ -33,9 +33,9 @@
 //! remembered audio and subtitle picks per show ([`TrackMemoryEntry`], in the memory door below).
 //! It is a [`Row`] only, so it has no whole-list `items_mut`: its writes go through
 //! [`ProfileMemory::upsert_with`], which merges, prunes and budgets, never through a `Vec`
-//! assignment. `subtitle_offsets` and `recent_channels` (Live TV's per-profile Recent row,
+//! assignment. `subtitle_offsets`, `version_choices` and `recent_channels` (Live TV's per-profile Recent row,
 //! [`RecentChannelEntry`]) are the other tenants of the door and are declared the same way
-//! ([`SubtitleOffsetsPref`], [`RecentChannelsPref`]).
+//! ([`SubtitleOffsetsPref`], [`VersionChoicesPref`], [`RecentChannelsPref`]).
 use super::{
     MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
     PlaintextConsent, HoldHintTaught, PlaybackQuality, ServerKeyPin, Session, SkipInterval, SubtitleOffsetEntry, SubtitleOffsets, SubtitlePosition,
@@ -762,10 +762,10 @@ impl Session {
 // ---- the memory door: per-profile, per-item lists ---------------------------------------------
 
 /// **One profile's remembered entries of one kind**, oldest first: the record shape a per-profile
-/// list shares (`subtitle_offsets`, `track_memory` and `recent_channels`). `{user, items, extensions}` is
+/// list shares (`subtitle_offsets`, `track_memory`, `version_choices` and `recent_channels`). `{user, items, extensions}` is
 /// exactly what `subtitle_offsets` was on disk before the door, so a file is read and written
 /// byte for byte as before; `account` is the stamp of an account-bound list and is skipped while
-/// empty. `subtitle_offsets`, `track_memory` and `recent_channels` are the three tenants, and all are account-bound, so
+/// empty. `subtitle_offsets`, `track_memory`, `version_choices` and `recent_channels` are the four tenants, and all are account-bound, so
 /// every record they write carries the stamp. A `subtitle_offsets` file written before it was bound
 /// holds records with none, which the list adopts ([`MemoryEntry::ADOPTS_UNSTAMPED`]) and so stamps
 /// at its next write; a `track_memory` record without one is nobody's.

@@ -2952,6 +2952,7 @@ mod failed_pick_tests {
             let mut session = PlaybackSession::default();
             let (mut asked, mut closed) = (0, 0);
             commit_failed_pick(&mut session, &pick(), |_| { asked += 1; started }, || closed += 1);
+            assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the pair is held either way");
             assert_eq!(asked, 1, "the pick starts the retry once");
             assert_eq!(closed, usize::from(started), "retry started = {started}");
         }
@@ -2975,5 +2976,46 @@ mod failed_pick_tests {
             || closed = true,
         );
         assert!(!closed, "no request descriptor: the retry is refused and the panel stays");
+        assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the refused retry leaves the pair held for Try again");
+    }
+
+    /// **The `content_command` arm itself**, not only the helper it calls: a pick committed on the failure
+    /// screen reaches the session's held pick through the product runner (`execute_resource_command`), and
+    /// a retry that cannot start (this session has no request to resolve again) leaves the pair held for
+    /// Try again. The tracks name no part, so the selection PUT is not queued.
+    #[test]
+    fn the_commit_arm_holds_the_failure_screens_pick_on_the_session() {
+        use plx_appkit::preplay_tracks::{select, Pick, TrackSet};
+        use plx_data::metadata::{PreplayTracks, Stream};
+        use plx_machine::machine::MachineId;
+        use plx_screens::preplay_panel::Source;
+        use plx_screens::registry::{ContentReq, ResourceAppFx};
+        let _guard = plx_base::testlock::serial();
+        let mut d = plx_ui::dispatch::Dispatcher::<crate::app::bridge::AppHost>::new();
+        let mut harness = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut rig = harness.bridge();
+        crate::app::bridge::nav_root(&mut d, plx_screens::registry::AppArg::Home);
+        crate::app::bridge::frame(&mut d, &mut rig, plx_machine::machine::Tick::default(), vec![]);
+        let instance = d.nav.top_page().and_then(|page| page.inst.as_ref()).expect("Home root").id;
+        let stream = |id| Stream { id, ..Default::default() };
+        let (audio, subs) = (vec![stream(21)], vec![stream(31)]);
+        let set = TrackSet { part_id: 9001, audio: &audio, subs: &subs };
+        let sel = select(set, None, Pick::Subtitle(None)).expect("Off is a row");
+        assert_eq!(sel.pick, pick());
+        let tracks = PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0), rk: "1".into(), kind: "movie".into(), show_rk: String::new(),
+            part: String::new(), audio: audio.clone(), subs: subs.clone(), pick: None,
+        };
+        let mut resources = crate::app::bridge_test_support::TestCommandResources::new();
+        assert_eq!(plx_media::route::failed_pick(resources.session()), None, "nothing held before the commit");
+        let outcome = super::execute_resource_command(
+            &mut d, &mut rig, &mut resources.borrow(), MachineId::Instance(instance),
+            ResourceAppFx::Content(ContentReq::CommitPreplayPick {
+                tracks, sel, source: Source::Failed { part_id: 9001, pick: None },
+            }),
+            plx_ui::screen::ReturnState::default(), 0,
+        );
+        assert_eq!(outcome, plx_machine::machine::AppCommandOutcome::Completed);
+        assert_eq!(plx_media::route::failed_pick(resources.session()), Some(pick()), "the arm held the pick on the session");
     }
 }

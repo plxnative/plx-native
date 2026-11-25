@@ -2401,7 +2401,7 @@ fn the_preview_follows_the_viewers_pre_play_pick() {
     assert_eq!(preview(&[]), Some(Preview::OriginalAudioConverted), "control: no pick, the default's audio is converted");
     let fra = PreplayPick { part_id: 1, audio_sid: 2, sub: SubPick::Server };
     assert_eq!(preview(&[fra]), Some(Preview::DirectPlay), "the picked French AC3 plays as it is");
-    let other_file = PreplayPick { part_id: 1, audio_sid: 99, sub: SubPick::Server };
+    let other_file = PreplayPick { part_id: 2, audio_sid: 99, sub: SubPick::Server };
     assert_eq!(preview(&[other_file]), Some(Preview::OriginalAudioConverted), "a pick of another file changes nothing");
 }
 

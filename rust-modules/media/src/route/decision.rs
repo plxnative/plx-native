@@ -10644,7 +10644,7 @@ fn playback_preview_with_capability<'d>(
         None => (file.primary_part, &d.audio, &d.subs),
     };
     // The viewer's pick over the page's flags, through the plan's own path.
-    let picked = plx_data::metadata::PreplayPick::applied(picks, audio, subs);
+    let picked = plx_data::metadata::PreplayPick::applied(picks, part_id_of(part), audio, subs);
     let (audio, subs, session_audio) = (&*picked.audio, &*picked.subs, picked.session_audio);
     let presentation = file.dv.presentation;
     if mode == DirectPlayMode::Forced {
@@ -12189,12 +12189,12 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     // predicate that says the plan has a source to start.
     let preview = ps.request.as_ref().is_some_and(|r| r.preview);
     let started = plan.playing.as_ref().filter(|_| source_ready && !preview)
-        .map(|item| (item.sid, item.rk.clone(), item.audio.iter().map(|a| a.id).collect::<Vec<_>>()));
+        .map(|item| (item.sid, item.rk.clone(), plan.part_id));
     meta.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(
         plan.playing,
     ));
-    if let Some((sid, rk, audio)) = started {
-        meta.run(plx_data::stores::metadata::MetadataCmd::SpendPick { sid, rk, audio });
+    if let Some((sid, rk, part_id)) = started {
+        meta.run(plx_data::stores::metadata::MetadataCmd::SpendPick { sid, rk, part_id });
     }
     // main thread only — `up_next()`/`with_queue()` lend out of this (see their docs). The rows
     // arrive already projected: the worker never retained a `Metadata` tree to install here.

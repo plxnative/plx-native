@@ -483,7 +483,7 @@ fn a_preplay_subtitles_off_on_a_movie_plans_no_subtitle_at_the_first_start() {
     plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
     let start = |store: &MetadataStore| {
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        item.apply_picks(&store.view().picks_of(sid, "m1"));
+        item.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
         pick_subtitle(&item, &NO_SHOW_RULES(), SubtitleLangPrefs::default(), "eng", None, None).pick
     };
     assert_eq!(start(&store), Some((22, 1)), "control: PMS's selection plays");
@@ -558,7 +558,7 @@ fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
     let always_eng = SubtitleLangPrefs { language: Some("eng"), mode: 2, forced: 0 };
     let start = |store: &MetadataStore| {
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        item.apply_picks(&store.view().picks_of(sid, "m1"));
+        item.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
         pick_subtitle(&item, &NO_SHOW_RULES(), always_eng, "eng", None, None)
     };
     assert_eq!(start(&store).pick, Some((21, 0)), "control: the account rule turns the English track on");
@@ -611,9 +611,9 @@ fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
     let played = PlayingItem { sid, rk: "ep-7".into(), ..item("episode", "show-1", vec![text_sub(22, "spa", "")]) };
     assert!(store.run(MetadataCmd::InstallPlaying(Some(played))));
     assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "installing the playing item is not the start");
-    assert!(!store.run(MetadataCmd::SpendPick { sid, rk: "ep-8".into(), audio: vec![11] }), "another item's playback leaves the pick");
+    assert!(!store.run(MetadataCmd::SpendPick { sid, rk: "ep-8".into(), part_id: 777 }), "another item's playback leaves the pick");
     assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1);
-    assert!(store.run(MetadataCmd::SpendPick { sid, rk: "ep-7".into(), audio: vec![11] }));
+    assert!(store.run(MetadataCmd::SpendPick { sid, rk: "ep-7".into(), part_id: 777 }));
     assert!(store.view().picks_of(sid, "ep-7").is_empty(), "the playback that started under the pick spent it");
     assert!(ResolveEnv::snapshot(&crate::route::PlaybackSession::IDLE, store.view(), sid, "ep-7").picks.is_empty(),
         "Resume's resolve is fed no pick: it plans from the server's selection");
@@ -646,8 +646,8 @@ fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
         env.fresh_play = true; // the viewer's own launch (`request_env`)
         env.audio_sid = 4242; // what the session last had on screen: another item's track
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        item.apply_picks(env.picks_in_force());
-        let session = env.under_pick(&item).map_or(env.audio_sid, |e| e.audio_sid);
+        item.apply_picks(env.picks_in_force(), 9001);
+        let session = env.under_pick(9001).map_or(env.audio_sid, |e| e.audio_sid);
         audio_intents(&item.audio, prefs, session)[0]
     };
     assert_eq!(first_intent(&store), AudioIntent::Language("en"), "control: no pick, the account's English dub plays");
@@ -692,8 +692,8 @@ fn both_halves_of_a_pick_follow_one_gate() {
     };
     let halves = |env: &ResolveEnv| {
         let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        item.apply_picks(env.picks_in_force());
-        (item.sub_choice == SubPick::Off, env.under_pick(&item).map(|e| e.audio_sid) == Some(11))
+        item.apply_picks(env.picks_in_force(), 9001);
+        (item.sub_choice == SubPick::Off, env.under_pick(9001).map(|e| e.audio_sid) == Some(11))
     };
     assert_eq!(halves(&env_of(true, false, false)), (true, true), "the viewer's launch");
     assert_eq!(halves(&env_of(false, false, false)), (true, true), "Try again after a resolve that failed before the item was fetched");

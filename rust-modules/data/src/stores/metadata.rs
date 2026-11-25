@@ -88,7 +88,7 @@
 //!   change, answers whether it actually changed anything.
 //! - `InstallPlaying(Option<PlayingItem>)` → `metadata::install_playing` — the playback plan's leaf
 //!   (`route.rs`).
-//! - `PatchTracks{sid, rk, pick}` / `SpendPick{sid, rk, audio}` → `metadata::pick_step` — the pre-play
+//! - `PatchTracks{sid, rk, pick}` / `SpendPick{sid, rk, part_id}` → `metadata::pick_step` — the pre-play
 //!   pick's events: the viewer's choice in the Audio & Subtitles panel, and the start of a playback of its
 //!   file. Its third event is the page's end: `Clear`, `ClearItem`, `Reset` and the landing of another
 //!   item drop every pick. `pick_step` is the one writer of all three.
@@ -241,12 +241,12 @@ pub enum MetadataCmd {
     /// page whose backfilled streams are that episode's). Readers: the panel's seed and the resolve,
     /// which applies it to the item it plans.
     PatchTracks { sid: ServerId, rk: String, pick: crate::metadata::PreplayPick },
-    /// A playable, non-preview playback of `(sid, rk)` has STARTED on the file whose audio streams are
-    /// `audio` (`route::apply_plan`): a pick is the viewer's word for the first start and no more, so the
+    /// A playable, non-preview playback of `(sid, rk)` has STARTED on the file whose part is `part_id`
+    /// (`route::apply_plan`): a pick is the viewer's word for the first start and no more, so the
     /// pick held for that file is spent, whether or not that playback was planned under it (a retry that
     /// carries the failure screen's pair is not). The only spend; nothing else but the page's own close or
     /// replacement removes a pick.
-    SpendPick { sid: ServerId, rk: String, audio: Vec<i64> },
+    SpendPick { sid: ServerId, rk: String, part_id: i64 },
     MarkSkipped(crate::metadata::Marker),
     RetirePlaying,
     RetirePlayingItem,

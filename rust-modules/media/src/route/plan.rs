@@ -1533,13 +1533,13 @@ impl ResolveEnv {
         if self.preview || self.selection_before_retry.is_some() { &[] } else { &self.picks }
     }
 
-    /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file and
+    /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for the file whose part is `part_id` and
     /// [`Self::picks_in_force`] feeds this resolve: a retry that carries the attempt's held pair has that
     /// pair instead, and a fresh launch's `audio_sid` is only what the session last had on screen (another
     /// item's track), never a choice for this one. The single place the pick's `audio_sid` becomes
     /// `audio_sid`; the same gate as the subtitle half, so the two cannot disagree.
-    pub(super) fn under_pick(&self, item: &plx_data::metadata::PlayingItem) -> Option<ResolveEnv> {
-        let pick = plx_data::metadata::PreplayPick::for_file(self.picks_in_force(), &item.audio)?;
+    pub(super) fn under_pick(&self, part_id: i64) -> Option<ResolveEnv> {
+        let pick = plx_data::metadata::PreplayPick::for_file(self.picks_in_force(), part_id)?;
         Some(ResolveEnv { audio_sid: pick.audio_sid, ..self.clone() })
     }
 
@@ -1955,13 +1955,13 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // sidecar, the log, the write-back), and `sub_choice` carries the Off no flag can say,
             // which `pick_subtitle` ranks.
             if let Some(item) = plan.playing.as_mut() {
-                item.apply_picks(env.picks_in_force());
+                item.apply_picks(env.picks_in_force(), plan.part_id);
             }
             // The audio half rides the same typed door as a retry's: the session's audio pick
             // (`env.audio_sid`), which [`audio_intents`] ranks first. The `selected` flags the pick
             // also set cannot carry it for the file's default track (`audio_intents` skips a
             // selected default, so the account's language would win over the viewer's choice).
-            let under_pick = plan.playing.as_ref().and_then(|item| env.under_pick(item));
+            let under_pick = plan.playing.as_ref().and_then(|_| env.under_pick(plan.part_id));
             let env = under_pick.as_ref().unwrap_or(env);
             if let (Some(id), Some(item)) = (env.subtitle_override, plan.playing.as_mut()) {
                 // The retry's explicit selection owns both embedded and sidecar restoration; a stale
@@ -4843,16 +4843,9 @@ fn part_file_name(part_key: &str) -> &str {
 }
 
 
-/// Extract the numeric Part id from a Plex part key (/library/parts/{id}/…/file.mkv).
-pub(super) fn part_id_of(part_key: &str) -> i64 {
-    let mut it = part_key.split('/');
-    while let Some(seg) = it.next() {
-        if seg == "parts" {
-            return it.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        }
-    }
-    0
-}
+/// The numeric Part id of a Plex part key (/library/parts/{id}/…/file.mkv), read by the one rule
+/// the pre-play pick's file key shares (`plx_plex::plex::part_id_of`).
+pub(super) use plx_plex::plex::part_id_of;
 
 // ---- async resolve: worker computes an owned Plan, main thread installs it ------------------
 // The house idiom (metadata::load_season / browse.rs): generation counter + single-flight +
