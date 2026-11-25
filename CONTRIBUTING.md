@@ -40,7 +40,9 @@ reports the failure in Actions.
 - Set the GitHub repository variable `PLXNATIVE_ISSUE_SUPPORT` to `shadow` for **shadow** mode.
   This is also the workflow default.
   Area labels apply normally. Support decisions, related issues and proposed replies appear in
-  the Actions summary. That summary is visible on the public repository.
+  the Actions summary, for the report and for the reporter's follow-up comments. That summary is
+  visible on the public repository. Shadow never posts a reply or a support label: the summary
+  shows the label change it would have made as `support.state_change`.
 - After reviewing the shadow results, set the variable to `public` to allow replies, or
   `off` for labels alone. Manually dispatch **Issue labels** with issue numbers and dry run
   selected to preview a case, including a closed one. Manual backfills never send support
@@ -50,6 +52,18 @@ reports the failure in Actions.
   reporter's new replies can advance the thread. A maintainer reply, assignment, lock, close,
   Pullfrog comment outside this support workflow, or a maintainer's `ready` or `needs-info`
   label hands off to a human. Maintainers own Type, Status, duplicate handling, and closure.
+- In public mode the thread's support state is two labels. `support:waiting-reporter` means the
+  assistant asked a question and waits for the reporter. `support:handoff` means a human has the
+  thread: the assistant handed it off, ran out of replies or reporter updates, or noticed a
+  maintainer comment, assignee, lock or human label while it was waiting. The assistant does
+  nothing on a thread with `support:handoff`. To give a thread back, remove that label: the
+  assistant then takes the reporter's next comment, unless another human signal remains (a
+  maintainer comment, an assignee, a lock, a human label) or the thread is still past its reply
+  limits, which hands it off again. The assistant only notices a human signal when the reporter
+  next comments, because only reporter comments, new reports and edits start a run.
+- An edit to a report that is still unlabeled re-runs intake on the new text. A model result
+  for text that changed meanwhile is discarded without writing anything, so the edit's run
+  starts clean.
 
 To evaluate the pilot, record the number of **maintainer-account requests for missing diagnostics
 before investigation** per report. Compare the next ten eligible reports with ten recent reports

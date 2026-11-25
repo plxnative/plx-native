@@ -5,6 +5,12 @@ The model recommends area labels, related issues or PRs, and a support decision.
 script owns issue selection and all GitHub writes. The issue form and maintainers own
 the Type field. Dry runs only read and report.
 
+Support state lives on the issue as two labels, written in public mode only: `support:waiting-reporter`
+after a reply and `support:handoff` once a human should take the thread. Shadow and preview report the
+transition they would make as `support.state_change` and write nothing. A maintainer removes
+`support:handoff` to give a thread back. A model result for an edited report writes nothing: the
+queued `edited` run classifies the new text.
+
 Use `select` for a batch, `prepare NUMBER` to write the model prompt and snapshot IDs,
 and `apply NUMBER` with the same ISSUE_REVISION and SUPPORT_CONVERSATION plus optional
 PULLFROG_RESULT. `apply --dry-run` reports the proposed result. An unavailable model
@@ -20,11 +26,13 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from itertools import count
 
 from issue_support import (
-    has_exposed_credential, support_instructions, support_preview, support_turn, thread_revision,
+    has_exposed_credential, support_instructions, support_preview, support_state_change, support_turn,
+    thread_revision,
 )
 
 API = "https://api.github.com"
@@ -35,6 +43,7 @@ AREA_LABELS = {
 USER_REPORT = "user-report"
 MAX_AREAS = 3
 USER_ASSOCIATIONS = {"NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR"}
+SUPPORT_MODES = {"off", "shadow", "preview", "public"}
 
 
 def candidates(repo_labels):
@@ -165,15 +174,21 @@ def write_summary(preview):
             output.writelines(f"    {line}\n" for line in report.split("\n"))
 
 
+def support_is_current(issue_url, token, mode, comment_id, revision, conversation, *, exhausted=False):
+    """Re-read the thread: is the turn the model answered still the thread's turn?"""
+    issue = request("GET", issue_url, token)
+    comments = paged(f"{issue_url}/comments", token)
+    turn = support_turn(issue, comments, mode, comment_id)
+    return bool(issue_revision(issue) == revision and thread_revision(issue, comments) == conversation
+                and turn and (turn.phase == "exhausted") == exhausted
+                and not has_exposed_credential(issue, comments))
+
+
 def publish_support(issue_url, token, preview, mode, comment_id, revision, conversation, *, write_token):
     support = preview.get("support")
     if mode != "public" or not support or not support["reply"]:
         return "withheld"
-    issue = request("GET", issue_url, token)
-    comments = paged(f"{issue_url}/comments", token)
-    if (issue_revision(issue) == revision and thread_revision(issue, comments) == conversation
-            and support_turn(issue, comments, mode, comment_id)
-            and not has_exposed_credential(issue, comments)):
+    if support_is_current(issue_url, token, mode, comment_id, revision, conversation):
         if not write_token:
             print("::error::Pullfrog installation token unavailable; support reply was not posted.")
             return "unavailable"
@@ -182,6 +197,37 @@ def publish_support(issue_url, token, preview, mode, comment_id, revision, conve
         return "posted"
     print("::notice::Issue or conversation changed; skipped the stale support reply.")
     return "stale"
+
+
+def write_support_labels(issue_url, change, write_token):
+    """Add first, so a failure between the two leaves the thread handed off rather than waiting."""
+    if change["add"]:
+        request("POST", f"{issue_url}/labels", write_token, {"labels": change["add"]})
+    for name in change["remove"]:
+        try:
+            request("DELETE", f"{issue_url}/labels/{urllib.parse.quote(name, safe='')}", write_token)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:  # the issue never carried it
+                raise
+
+
+def publish_state_change(issue_url, token, change, mode, comment_id, revision, conversation, *,
+                         publication, write_token):
+    """Write a support label transition once the same freshness checks as a reply still hold."""
+    reason = change["reason"]
+    if reason == "reply":
+        if publication != "posted":
+            return publication  # the label follows the comment
+    elif reason != "human_owned" and not support_is_current(
+            issue_url, token, mode, comment_id, revision, conversation, exhausted=reason == "exhausted"):
+        print("::notice::Issue or conversation changed; skipped the stale support label change.")
+        return "stale"
+    if not write_token:
+        print("::error::Pullfrog installation token unavailable; support labels were not written.")
+        return "unavailable"
+    write_support_labels(issue_url, change, write_token)
+    print(f"Support: {reason}: added {', '.join(change['add'])}.")
+    return "applied"
 
 
 def set_output(name, value):
@@ -223,26 +269,35 @@ def main():
         print(f"#{args.number}: {'a pull request' if 'pull_request' in issue else 'already labeled'}, skipped",
               file=sys.stderr)
         return 0
-    mode = os.environ.get("SUPPORT_MODE", "off")
-    if mode not in {"off", "shadow", "preview", "public"}:
-        ap.error("SUPPORT_MODE must be off, shadow, preview or public")
+    mode = os.environ.get("SUPPORT_MODE") or "off"
+    if mode not in SUPPORT_MODES:
+        # stderr: `prepare` prints the model prompt on stdout.
+        print(f"::warning::SUPPORT_MODE {mode!r} is not off, shadow, preview or public; using shadow.",
+              file=sys.stderr)
+        mode = "shadow"
     comment_id = int(os.environ.get("SUPPORT_COMMENT_ID") or "0")
     comments = paged(f"{issue_url}/comments", token) if mode != "off" else []
     sensitive = os.environ.get("TRIAGE_SENSITIVE") == "true" or has_exposed_credential(issue, comments)
     if sensitive:
         print(f"::notice::#{args.number} may contain credentials; left for human handling.", file=sys.stderr)
     turn = None if sensitive else support_turn(issue, comments, mode, comment_id)
-    if comment_id and turn is None:
+    exhausted = turn is not None and turn.phase == "exhausted"
+    # A thread the bot was waiting on that a human has since taken still needs its label swapped.
+    owned = mode != "off" and support_state_change(issue, comments, None, {}, "") is not None
+    if comment_id and turn is None and not owned:
         print(f"#{args.number}: no active support turn for this comment", file=sys.stderr)
         return 0
+    # An exhausted or human-owned thread is handed off without asking the model.
+    expects_model = not comment_id or (turn is not None and not exhausted)
     if args.command == "prepare":
-        if not sensitive:
+        if expects_model and not sensitive:
             repo_labels = paged(f"{base}/labels", token)
             print(pullfrog_prompt(repo, issue, repo_labels, args.dry_run, turn), end="")
         set_output("revision", issue_revision(issue))
         set_output("conversation", thread_revision(issue, comments))
         set_output("eligible", "true")
         set_output("sensitive", str(sensitive).lower())
+        set_output("model", str(expects_model and not sensitive).lower())
         return 0
 
     def lookup(number):
@@ -255,17 +310,19 @@ def main():
 
     raw = os.environ.get("PULLFROG_RESULT")
     revision = os.environ["ISSUE_REVISION"]
-    fresh = revision == issue_revision(issue)
-    if not fresh:
-        print(f"::warning::#{args.number} changed during classification; skipped the stale model result.")
+    if revision != issue_revision(issue):
+        # The edit queued its own run, which classifies the new text. Writing even user-report here
+        # would make that run skip the issue as already labeled.
+        print(f"::notice::#{args.number} changed during classification; wrote nothing and left it to the edit's run.")
+        return 0
     conversation = os.environ.get("SUPPORT_CONVERSATION")
     if turn and conversation != thread_revision(issue, comments):
         print("::notice::Conversation changed; skipped the stale support decision.")
         turn = None
     repo_labels = paged(f"{base}/labels", token)
-    result = json.loads(raw) if raw and fresh and not sensitive else {"labels": [], "related": []}
-    preview = result_preview(issue, repo_labels, result, lookup, turn if raw and fresh else None,
-                             followup=bool(comment_id))
+    result = json.loads(raw) if raw and not sensitive else {"labels": [], "related": []}
+    answered = turn if raw or exhausted else None
+    preview = result_preview(issue, repo_labels, result, lookup, answered, followup=bool(comment_id))
     preview["mode"] = "dry_run" if args.dry_run else mode
     preview["labels_added"] = []
     write_token = os.environ.get("PULLFROG_WRITE_TOKEN")
@@ -273,21 +330,33 @@ def main():
     if labels_pending and write_token:
         request("POST", f"{issue_url}/labels", write_token, {"labels": preview["would_add"]})
         preview["labels_added"] = preview["would_add"]
+    # Comments and support labels need the variable to be public now, not only when the run began.
+    live = not args.dry_run and mode == "public" and os.environ.get("CURRENT_SUPPORT_MODE") == "public"
+    gate = mode if live or mode != "public" else "shadow"
+    reply = (preview["support"] or {}).get("reply", "")
+    change = None if mode == "off" else support_state_change(
+        issue, comments, answered, result.get("support") or {}, reply)
+    if change:
+        preview["support"] = {**(preview["support"] or {"reply": ""}), "state_change": change}
     publication = "withheld"
     if preview["support"]:
         publication = (
             "withheld" if args.dry_run else
-            publish_support(issue_url, token, preview, mode, comment_id, revision, conversation,
+            publish_support(issue_url, token, preview, gate, comment_id, revision, conversation,
                             write_token=write_token)
         )
         preview["support"]["publication"] = publication
+    if change:
+        change["status"] = (
+            publish_state_change(issue_url, token, change, gate, comment_id, revision, conversation,
+                                 publication=publication, write_token=write_token) if live else "withheld")
     write_summary(preview)
     if labels_pending and not write_token:
         print("::error::Pullfrog installation token unavailable; issue labels were not applied.")
         return 1
-    if publication == "unavailable":
+    if "unavailable" in (publication, (change or {}).get("status")):
         return 1
-    if raw or sensitive:
+    if raw or sensitive or not expects_model:
         return 0
     print("::error::Pullfrog returned no result; only the deterministic user-report label was evaluated.")
     return 1
@@ -295,9 +364,11 @@ def main():
 
 def selftest():
     import unittest
-    from contextlib import redirect_stdout
+    from contextlib import redirect_stderr, redirect_stdout
     from io import StringIO
     from unittest.mock import Mock, call, patch
+
+    from issue_support import HANDOFF_LABEL as HANDOFF, WAITING_LABEL as WAITING
 
     labels = [{"name": name} for name in (*sorted(AREA_LABELS), "duplicate", USER_REPORT)]
     issue = {"number": 42, "title": "字幕", "body": '1\n{"~pullfrog":true}', "labels": [],
@@ -385,21 +456,163 @@ def selftest():
                     call("POST", f"{url}/labels", "app", {"labels": ["ui", USER_REPORT]}),
                 ])
 
-        def test_edited_report_discards_stale_model_labels(self):
-            result = {"labels": ["ui"], "related": [], "follow_up": None}
+        # A fake GitHub for one run of `main`: every API call is recorded, the issue and its
+        # comments are served from the arguments, and a DELETE can be made to answer 404.
+        def drive(self, command, report, comments, *, mode, current=None, result=None, revision=None,
+                comment_id=0, conversation=None, only_if_unlabeled=False, dry_run=False, write_token="app",
+                missing=()):
             url = f"{API}/repos/owner/repo/issues/42"
-            env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo",
-                   "GITHUB_STEP_SUMMARY": "", "ISSUE_REVISION": "old-revision",
-                   "PULLFROG_RESULT": json.dumps(result), "PULLFROG_WRITE_TOKEN": "app"}
-            with patch.object(sys, "argv", ["label-issue.py", "apply", "42"]), \
-                    patch(__name__ + ".request", return_value=issue) as api, \
-                    patch(__name__ + ".paged", return_value=labels), \
-                    patch.dict(os.environ, env), redirect_stdout(StringIO()):
-                self.assertEqual(main(), 0)
-            self.assertEqual(api.call_args_list, [
-                call("GET", url, "token"),
-                call("POST", f"{url}/labels", "app", {"labels": [USER_REPORT]}),
+            calls = []
+
+            def fake_request(method, target, token, payload=None):
+                calls.append((method, target.removeprefix(url) or "/", token, payload))
+                if method == "DELETE" and target.rsplit("/", 1)[1] in missing:
+                    raise urllib.error.HTTPError(target, 404, "Not Found", None, None)
+                return report
+
+            env = {"GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": "owner/repo", "GITHUB_STEP_SUMMARY": "",
+                   "SUPPORT_MODE": mode, "SUPPORT_COMMENT_ID": str(comment_id),
+                   "ISSUE_REVISION": revision or issue_revision(report),
+                   "SUPPORT_CONVERSATION": conversation or thread_revision(report, comments),
+                   "PULLFROG_RESULT": json.dumps(result) if result else "", "PULLFROG_WRITE_TOKEN": write_token}
+            if current:
+                env["CURRENT_SUPPORT_MODE"] = current
+            argv = ["label-issue.py", command, "42"] + (["--only-if-unlabeled"] if only_if_unlabeled else []) \
+                + (["--dry-run"] if dry_run else [])
+            outputs = {}
+            with patch.object(sys, "argv", argv), patch(__name__ + ".request", side_effect=fake_request), \
+                    patch(__name__ + ".paged", side_effect=lambda target, token: (
+                        comments if target.endswith("/comments") else labels)), \
+                    patch(__name__ + ".set_output", side_effect=outputs.__setitem__), \
+                    patch.dict(os.environ, env, clear=True), redirect_stdout(StringIO()) as stdout, \
+                    redirect_stderr(StringIO()) as stderr:
+                code = main()
+            out = stdout.getvalue()
+            self.stdout, self.stderr = out, stderr.getvalue()
+            summary = json.loads(out[out.index("{"):]) if command == "apply" and "{" in out else None
+            writes = [c for c in calls if c[0] != "GET"]
+            return code, writes, summary, outputs, out + self.stderr
+
+        def test_outdated_model_result_writes_nothing_and_the_edit_run_retries_intake(self):
+            old = dict(issue, state="open", user={"id": 7, "type": "User"}, title="Playback fails")
+            edited = dict(old, body="Playback fails on webOS 4.5")
+            model = {"labels": ["ui"], "related": [], "support": {
+                "outcome": "ask", "topic": "platform", "category": "unclear", "handoff": None}}
+            # The `opened` run's model read the old text; the report changed before it applied.
+            code, writes, summary, _, out = self.drive("apply", edited, [], mode="shadow", result=model,
+                                                     revision=issue_revision(old))
+            self.assertEqual((code, writes, summary), (0, [], None))
+            self.assertIn("::notice::#42 changed during classification", out)
+            # The queued `edited` run finds the issue still unlabeled: the labels and intake land now.
+            code, writes, summary, _, _ = self.drive("apply", edited, [], mode="shadow", result=model,
+                                                   only_if_unlabeled=True)
+            self.assertEqual(code, 0)
+            self.assertEqual(writes, [("POST", "/labels", "app", {"labels": ["ui", USER_REPORT]})])
+            self.assertEqual((summary["support"]["phase"], summary["support"]["topic"]), ("intake", "platform"))
+
+        def test_exhausted_thread_is_handed_off_without_a_model(self):
+            bot = {"login": "github-actions[bot]", "id": 20, "type": "Bot"}
+            marker = lambda number, topic: {"id": number, "user": bot, "body": (
+                f"<!-- plxnative-support:v1 topic={topic} -->\nQuestion")}
+            reporter = {"id": 7, "type": "User"}
+            thread = [marker(1, "platform"), marker(2, "playback_events"),
+                      {"id": 3, "user": reporter, "body": "Failure code 100"},
+                      {"id": 4, "user": reporter, "body": "Only when seeking"}]
+            report = dict(issue, state="open", user=reporter, labels=[{"name": WAITING}])
+            args = dict(mode="public", current="public", comment_id=4)
+            code, writes, summary, outputs, _ = self.drive("prepare", report, thread, **args)
+            self.assertEqual((code, outputs["eligible"], outputs["model"]), (0, "true", "false"))
+            code, writes, summary, _, _ = self.drive("apply", report, thread, **args)
+            self.assertEqual(code, 0)
+            self.assertEqual(writes, [
+                ("POST", "/labels", "app", {"labels": [HANDOFF]}),
+                ("DELETE", f"/labels/{WAITING.replace(':', '%3A')}", "app", None),
             ])
+            self.assertEqual(summary["support"]["state_change"]["reason"], "exhausted")
+            self.assertEqual(summary["support"]["state_change"]["status"], "applied")
+            # A label the issue never carried answers 404, which is as good as removed.
+            code, writes, _, _, _ = self.drive("apply", dict(report, labels=[]), thread,
+                                             missing={WAITING.replace(":", "%3A")}, **args)
+            self.assertEqual((code, len(writes)), (0, 2))
+            # The handoff label ends the thread: the same comment is no longer a turn.
+            handed = dict(report, labels=[{"name": HANDOFF}])
+            self.assertEqual(self.drive("prepare", handed, thread, **args)[3], {})
+
+        def test_support_labels_follow_a_reply_and_a_model_handoff(self):
+            report = dict(issue, state="open", user={"id": 7, "type": "User"}, labels=[{"name": USER_REPORT}])
+            ask = {"labels": [], "related": [], "support": {
+                "outcome": "ask", "topic": "platform", "category": "unclear", "handoff": None}}
+            hand = {"labels": [], "related": [], "support": {
+                "outcome": "handoff", "topic": None, "category": "app_bug", "handoff": "Check the decoder"}}
+            quiet = {"labels": [], "related": [], "support": {
+                "outcome": "quiet", "topic": None, "category": "unclear", "handoff": None}}
+            live = dict(mode="public", current="public")
+            _, writes, summary, _, _ = self.drive("apply", report, [], result=ask, **live)
+            self.assertEqual([w[:2] for w in writes], [("POST", "/comments"), ("POST", "/labels")])
+            self.assertEqual(writes[1][3], {"labels": [WAITING]})
+            self.assertEqual(summary["support"]["state_change"]["status"], "applied")
+            _, writes, _, _, _ = self.drive("apply", report, [], result=hand, **live)
+            self.assertEqual(writes, [("POST", "/labels", "app", {"labels": [HANDOFF]}),
+                                      ("DELETE", f"/labels/{WAITING.replace(':', '%3A')}", "app", None)])
+            self.assertEqual(self.drive("apply", report, [], result=quiet, **live)[1], [])
+            # The state change is gated by the same checks as a reply: a changed thread writes none.
+            changed = {"id": 1, "user": {"id": 7, "type": "User"}, "body": "More detail"}
+            _, writes, summary, _, _ = self.drive("apply", report, [changed], result=hand,
+                                                conversation=thread_revision(report, []), **live)
+            self.assertEqual((writes, summary["support"]), ([], None))
+
+        def test_a_human_taking_a_waiting_thread_swaps_the_label(self):
+            maintainer = {"id": 30, "type": "User"}
+            report = dict(issue, state="open", user={"id": 7, "type": "User"}, labels=[{"name": WAITING}])
+            thread = [{"id": 5, "user": maintainer, "author_association": "MEMBER", "body": "Looking"},
+                      {"id": 6, "user": {"id": 7, "type": "User"}, "body": "webOS 4.5"}]
+            args = dict(mode="public", current="public", comment_id=6)
+            _, _, _, outputs, _ = self.drive("prepare", report, thread, **args)
+            self.assertEqual((outputs["eligible"], outputs["model"]), ("true", "false"))
+            code, writes, summary, _, _ = self.drive("apply", report, thread, **args)
+            self.assertEqual(code, 0)
+            self.assertEqual(writes, [("POST", "/labels", "app", {"labels": [HANDOFF]}),
+                                      ("DELETE", f"/labels/{WAITING.replace(':', '%3A')}", "app", None)])
+            self.assertEqual(summary["support"]["state_change"]["reason"], "human_owned")
+            # With nothing waiting there is no state to swap, and a reporter comment is simply skipped.
+            plain = dict(report, labels=[])
+            self.assertEqual(self.drive("prepare", plain, thread, **args)[3], {})
+
+        def test_shadow_and_a_changed_variable_never_write_support_state(self):
+            report = dict(issue, state="open", user={"id": 7, "type": "User"}, labels=[{"name": USER_REPORT}])
+            ask = {"labels": [], "related": [], "support": {
+                "outcome": "ask", "topic": "platform", "category": "unclear", "handoff": None}}
+            for args in (dict(mode="shadow", current="shadow"), dict(mode="shadow", current="public"),
+                         dict(mode="public", current="shadow"), dict(mode="public"),
+                         dict(mode="preview", current="public")):
+                code, writes, summary, _, _ = self.drive("apply", report, [], result=ask, **args)
+                change = summary["support"]["state_change"]
+                self.assertEqual((code, writes), (0, []), args)
+                self.assertEqual((change["add"], change["status"], summary["support"]["publication"]),
+                                 ([WAITING], "withheld", "withheld"), args)
+            # Shadow now evaluates a reporter's follow-up, and still posts nothing.
+            bot = {"login": "github-actions[bot]", "id": 20, "type": "Bot"}
+            thread = [{"id": 1, "user": bot, "body": "<!-- plxnative-support:v1 topic=platform -->\nQ"},
+                      {"id": 2, "user": {"id": 7, "type": "User"}, "body": "webOS 4.5"}]
+            _, writes, summary, outputs, _ = self.drive("apply", report, thread, result=ask, mode="shadow",
+                                                      current="shadow", comment_id=2)
+            self.assertEqual((writes, summary["support"]["phase"]), ([], "followup"))
+
+        def test_an_unrecognised_support_mode_falls_back_to_shadow(self):
+            report = dict(issue, state="open", user={"id": 7, "type": "User"})
+            ask = {"labels": [], "related": [], "support": {
+                "outcome": "ask", "topic": "platform", "category": "unclear", "handoff": None}}
+            code, writes, summary, outputs, out = self.drive("apply", report, [], result=ask,
+                                                           mode="Public", current="public")
+            self.assertEqual(code, 0)
+            self.assertEqual(summary["mode"], "shadow")
+            self.assertNotIn("/comments", [w[1] for w in writes])
+            self.assertIn("::warning::SUPPORT_MODE 'Public'", out)
+            # The model prompt on stdout stays clean: the warning goes to stderr.
+            self.drive("prepare", report, [], mode="Public")
+            self.assertNotIn("::warning::", self.stdout)
+            self.assertIn("::warning::SUPPORT_MODE 'Public'", self.stderr)
+            self.assertIn("issue #42", self.stdout)
 
         def test_credential_notice_keeps_deterministic_label_without_inference(self):
             report = dict(issue, body="x-plex-token=abcdefgh12345678")
