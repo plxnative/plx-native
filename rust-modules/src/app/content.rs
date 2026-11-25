@@ -53,6 +53,7 @@ pub(crate) fn content_command_label(request: &ContentReq) -> &'static str {
         ContentReq::PreviewStart { .. } => "content:PreviewStart", ContentReq::PreviewStop => "content:PreviewStop",
         ContentReq::PreviewTransport(_) => "content:PreviewTransport", ContentReq::PreviewSeek(_) => "content:PreviewSeek",
         ContentReq::Panel(_) => "content:Panel", ContentReq::ItemMenu => "content:ItemMenu",
+        ContentReq::CommitPreplayPick { .. } => "content:CommitPreplayPick",
     }
 }
 
@@ -770,6 +771,13 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             // page's Play and Resume and its facts line read. It starts nothing and leaves the page.
             ContentReq::SelectVersion { sid, rk, media } => {
                 plx_media::route::choose_version(sid, &rk, media);
+            }
+            ContentReq::CommitPreplayPick { tracks, sel } => {
+                // The selection PUT (queued off the frame thread) and, for an episode, the show's
+                // track memory; the panel already patched the loaded page's copy.
+                if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
+                    plx_base::eventlog::log("preplay: pick not written (no part to address)");
+                }
             }
             ContentReq::Panel(panel) => {
                 halt_screen_preview(app);
