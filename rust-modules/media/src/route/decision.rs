@@ -37,6 +37,8 @@ pub use memory::{
 };
 pub use memory::{confirm_uri_audio_pick, confirm_uri_subtitle_pick,
     remember_accepted_source_audio, remember_accepted_source_subtitle};
+pub use memory::{choose_version, chosen_version};
+use memory::settle_version;
 #[cfg(any(test, feature = "test-support"))]
 pub use memory::{park_write_back_for_test, write_back_parked};
 pub(super) use memory::ParkedWriteBack;
@@ -10577,7 +10579,32 @@ pub fn detail_playback_preview(d: &plx_data::metadata::Detail) -> Option<(Previe
 
 pub fn detail_played_video(d: &plx_data::metadata::Detail) -> Option<PlayedVideo<'_>> {
     let caps = plx_os::devcaps::start_caps(&plx_plex::plex::session::peek().applied_refusals());
-    played_video(d, direct_play_mode(), &caps, dolby_vision_mode(), plx_os::devcaps::dv::capability())
+    played_video(d, direct_play_mode(), &caps, dolby_vision_mode(), plx_os::devcaps::dv::capability(), chosen_for(d))
+}
+
+/// **The version this profile selected for the item this page's Play starts**
+/// ([`chosen_version`]), which the facts line, the play-mode clause and the Play they describe all
+/// follow. The one read both [`detail_played_video`] and [`detail_playback_preview`] take, so the
+/// resolution chip and the play-mode clause cannot describe two files.
+pub fn chosen_for(d: &plx_data::metadata::Detail) -> Option<plx_plex::plex::MediaId> {
+    chosen_version(item_sid(d.sid), d.played_rk()?)
+}
+
+/// **The version a Play of `versions` starts now**, for the check mark on the Select Version list:
+/// the viewer's `chosen` one while its media is still in the list, else what plays unasked (the
+/// automatic substitute for a first file the set cannot decode, [`version_play_starts`]), else the
+/// server's first file. The same answer [`played_video`] describes for the facts line.
+pub fn taken_version(
+    versions: &[plx_data::pms::MediaVersion],
+    chosen: Option<plx_plex::plex::MediaId>,
+) -> Option<plx_plex::plex::MediaId> {
+    if let Some(id) = chosen.filter(|id| versions.iter().any(|v| v.id == *id)) {
+        return Some(id);
+    }
+    let caps = plx_os::devcaps::start_caps(&plx_plex::plex::session::peek().applied_refusals());
+    version_play_starts(versions, direct_play_mode(), &caps, dolby_vision_mode(), plx_os::devcaps::dv::capability())
+        .or_else(|| versions.first())
+        .map(|v| v.id)
 }
 
 fn playback_preview_with_capability(
@@ -10592,7 +10619,7 @@ fn playback_preview_with_capability(
     let caps = plx_os::devcaps::start_caps(&plx_plex::plex::session::peek().applied_refusals());
     let dv_mode = dolby_vision_mode();
     let dv_probed = capability.unwrap_or_else(plx_os::devcaps::dv::capability);
-    let file = played_video(d, mode, &caps, dv_mode, dv_probed)?;
+    let file = played_video(d, mode, &caps, dv_mode, dv_probed, chosen_for(d))?;
     let (part, audio, subs) = match file.version {
         Some(v) => {
             let streams = d.version_parts.iter().find(|p| p.id == v.id)?;
@@ -10865,6 +10892,13 @@ pub fn request_play(
     version: Option<plx_plex::plex::MediaId>,
     show_rk: &str,
 ) -> bool {
+    // The one place a viewer's version is read and written (the `version_choices` memory): a play
+    // that names a version remembers it, one that names none takes the remembered one. (A preview
+    // and a trailer start through their own requests and never reach this.)
+    let version = {
+        let known = meta.view().current().filter(|d| item_sid(d.sid) == sid).and_then(|d| d.versions_known(rk));
+        settle_version(sid, rk, version, known)
+    };
     request_play_inner(
         ps,
         meta,
@@ -14989,6 +15023,10 @@ mod queue_predecessor_tests;
 #[cfg(test)]
 #[path = "decision_track_memory_tests.rs"]
 mod track_memory_tests;
+
+#[cfg(test)]
+#[path = "decision_version_choice_tests.rs"]
+mod version_choice_tests;
 
 #[cfg(test)]
 #[path = "decision_write_back_tests.rs"]

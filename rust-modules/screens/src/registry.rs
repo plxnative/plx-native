@@ -616,6 +616,21 @@ pub enum ItemMenuKind {
     /// `sid` is `UNSET` and `rk` empty; the subject is [`ItemMenuArg::catalog`] and `state` picks the
     /// rows (`item_menu::hold::rows_for`).
     Catalog { state: plx_data::watchlist::model::TileState },
+    /// The Detail hero's More (…) menu: the actions that did not fit the row's three round buttons
+    /// (`detail::hero::split_actions`), in the row's priority order, captured when it opened. `rk` on the
+    /// argument is the item Play from Start and Play Version act on (the on-deck episode on a show page).
+    HeroOverflow { rows: Vec<OverflowRow> },
+}
+
+/// One row of the hero's … menu. Each wears the icon and label of the round button it replaces, and OK
+/// does what that button does (`Action::GoToShow`, `Action::PlayFromStart`, `Action::ChooseVersion`).
+/// A new hero action joins the menu as one more variant here and one more arm in `item_menu::build_hero_overflow`.
+#[derive(Clone)]
+pub enum OverflowRow {
+    GoToShow { show_rk: String, season: std::os::raw::c_int },
+    PlayFromStart,
+    /// The versions are the ones Play Version lists, captured at open.
+    PlayVersion { versions: Vec<plx_data::pms::MediaVersion> },
 }
 
 /// **Identity, not contents.** `PmsMovie` is a wire DTO with no `PartialEq` of its own, and one
@@ -630,6 +645,8 @@ impl PartialEq for ItemMenuKind {
             (Self::Card { row: a, from_deck: da }, Self::Card { row: b, from_deck: db }) =>
                 da == db && a.sid == b.sid && a.rk == b.rk && a.kind == b.kind,
             (Self::Episode { mark: a, .. }, Self::Episode { mark: b, .. }) => a == b,
+            (Self::HeroOverflow { rows: a }, Self::HeroOverflow { rows: b }) =>
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::mem::discriminant(x) == std::mem::discriminant(y)),
             (Self::Season { mark: a, show_rk: sa, index: ia }, Self::Season { mark: b, show_rk: sb, index: ib }) =>
                 a == b && sa == sb && ia == ib,
             (Self::Catalog { state: a }, Self::Catalog { state: b }) => a == b,
@@ -658,6 +675,7 @@ impl plx_machine::machine::LogicalState for ItemMenuArg {
             ItemMenuKind::Episode { mark, .. } => { c.u32(1).u32(*mark as u32); }
             ItemMenuKind::Season { mark, show_rk, index } => { c.u32(2).u32(*mark as u32).str(show_rk).u64(*index as u64); }
             ItemMenuKind::Catalog { state } => { c.u32(3).u32(*state as u32); }
+            ItemMenuKind::HeroOverflow { rows } => { c.u32(6).seq(rows.len()); }
         }
         c.u32(self.host.0);
         c.option(self.focus, |c, key| { c.u32(key.entry.0).u32(key.elem); });
@@ -823,9 +841,9 @@ fn versions_page<'a>(
     meta.current().filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
 }
 
-/// **The ratingKey a Play Version row plays**, the subject of its accessibility id: the page's Play pill's own
+/// **The ratingKey a Select Version row selects for**, the subject of its accessibility id: the page's Play pill's own
 /// (`detail::hero_control_subject(Play, ..)`: on a show the episode the hero plays, else the page's item), because
-/// the row's OK delivers `AppMsg::PlayVersion` to that page, which plays it as its Play pill would. It lives here
+/// the row's OK delivers `AppMsg::SelectVersion` to that page, which selects it for what its Play pill plays. It lives here
 /// because a panel may not name the page's module (`ci/check-deps.sh`, `sibling`), and it reads the page off
 /// the host's metadata view, the way the mount does.
 pub(crate) fn versions_subject<H: MetadataLike>(cx: &Cx<'_, H>, arg: &crate::versions_panel::VersionsArg) -> Option<String> {
@@ -1266,6 +1284,11 @@ pub enum ContentReq {
     Present(ContentArg),
     Back,
     Play { play: PlayIntent, resume_ns: i64 },
+    /// **The viewer selected a version** of the item `(sid, rk)` on the Select Version list: the app
+    /// remembers it for the profile (`route::choose_version`), which is what Resume, Play and the
+    /// page's facts line read. A request, not a write from the screen's step, as the track picks
+    /// are. Starts nothing.
+    SelectVersion { sid: plx_plex::plex::ServerId, rk: String, media: plx_plex::plex::MediaId },
     /// Start a hero preview. Does not push the player route.
     PreviewStart {
         sid: plx_plex::plex::ServerId,
@@ -1317,7 +1340,7 @@ pub enum ContentPanel {
     /// *Also available* (`screens::alt_sources`), anchored to the drawn rect of the pill that
     /// opened it — bit-preserving, so a canonical argument holds it without float equality.
     AltSources { anchor: [u32; 4] },
-    /// *Play Version* (`screens::versions_panel`), anchored to the drawn rect of the disc that
+    /// *Select Version* (`screens::versions_panel`), anchored to the drawn rect of the disc that
     /// opened it, as [`Self::AltSources`] is to its pill.
     Versions { anchor: [u32; 4] },
     /// *Track information* (`screens::tracks_panel`), opened at 1-based `page`. Every interactive
@@ -1663,9 +1686,11 @@ pub enum AppMsg {
     /// the destination and the PAGE navigates, which is `LibraryMenu`'s shape (`LibraryMenuSelect`) and
     /// what keeps "what a press means on the Detail page" in one place instead of two.
     AltSourceOpen(ContentArg),
-    /// The *Play Version* surface committed a row: play that version of the page's item, as its
-    /// Play pill would (resuming). The surface names the version and the page plays it.
-    PlayVersion(plx_plex::plex::MediaId),
+    /// The *Select Version* surface committed a row: that version is the file Play and Resume
+    /// start for the page's item from now on. It plays nothing. The surface names the version and
+    /// the page reports the choice (`ContentReq::SelectVersion`), so "what Play means on this
+    /// page" stays in one place.
+    SelectVersion(plx_plex::plex::MediaId),
     /// **A `toggle_section` command was performed** (`app::playback::perform_hud_command`, from a tab's
     /// OK or click or from a package's disc): the player page opens that section if it is closed and closes it
     /// if it is open, under the package's policy. The page owns the sections ([`crate::player::input::Sections`]),
@@ -2542,8 +2567,10 @@ where
                 crate::alt_sources::AltSourcesScreen::new(entry, arg.clone(), H::metadata(cx)),
             ),
             AppArg::VersionsPanel(arg) => {
-                let versions = versions_page(H::metadata(cx), arg).map_or(&[][..], crate::detail::hero_versions);
-                Box::new(crate::versions_panel::VersionsPanelScreen::new(entry, arg.clone(), versions, H::screen_inputs(cx).can_play()))
+                let page = versions_page(H::metadata(cx), arg);
+                let versions = page.map_or(&[][..], crate::detail::hero_versions);
+                let taken = page.and_then(crate::detail::taken_version);
+                Box::new(crate::versions_panel::VersionsPanelScreen::new(entry, arg.clone(), versions, taken, H::screen_inputs(cx).can_play()))
             }
             AppArg::TracksPanel(arg) => Box::new(
                 crate::tracks_panel::TracksPanelScreen::new(entry, *arg),

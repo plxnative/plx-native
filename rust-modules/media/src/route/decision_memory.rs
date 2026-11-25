@@ -18,7 +18,7 @@
 
 use super::*;
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo, TrackMemoryEntry};
-use plx_plex::plex::session::SubtitleOffsetEntry;
+use plx_plex::plex::session::{SubtitleOffsetEntry, VersionChoiceEntry};
 use super::super::track_memory::{forced_only_shown, memory_show, rematch_with_names, subtitle_pick_changed};
 
 /// **Whose memory this is**: the active profile's key and the machine id of `sid`'s server, the two
@@ -55,6 +55,61 @@ pub(super) fn recalled_track_memory(sid: ServerId) -> Vec<TrackMemoryEntry> {
 pub(super) fn remembered_subtitle_offset(sid: ServerId, rk: &str) -> Option<i64> {
     let (profile, machine_id) = memory_scope(sid)?;
     recall::<SubtitleOffsetEntry>(&profile, &(machine_id, rk.to_string())).map(|e| e.offset_ms)
+}
+
+/// **The version this profile selected, or last played, for `rk` on `sid`'s server** (the
+/// `version_choices` tenant of the memory door): what Resume and Play start when they name no
+/// version, and what the Detail page's facts line describes. Per ITEM: an episode's choice is that
+/// episode's alone, so it is never carried to the next one. `None` when nothing is remembered, the
+/// server is not registered yet, or no profile is seated.
+pub fn chosen_version(sid: ServerId, rk: &str) -> Option<plx_plex::plex::MediaId> {
+    let (profile, machine_id) = memory_scope(sid)?;
+    recall::<VersionChoiceEntry>(&profile, &(machine_id, rk.to_string())).map(|e| plx_plex::plex::MediaId(e.media_id))
+}
+
+/// Remember that `rk` on `sid`'s server plays `media` from now on (Select Version, or a playback
+/// that ran this specific version). Nothing is written when it is already the remembered one.
+/// Refused without a seated profile and a registered server, like every write of the door.
+pub fn choose_version(sid: ServerId, rk: &str, media: plx_plex::plex::MediaId) -> bool {
+    let Some((user, machine_id)) = memory_scope(sid) else {
+        return false;
+    };
+    if chosen_version(sid, rk) == Some(media) {
+        return true;
+    }
+    let rk = rk.to_string();
+    let key = (machine_id.clone(), rk.clone());
+    remember::<VersionChoiceEntry>(&user, key, move |current| {
+        Some(VersionChoiceEntry {
+            machine_id: machine_id.clone(),
+            rating_key: rk.clone(),
+            media_id: media.0,
+            extensions: current.map(|e| e.extensions.clone()).unwrap_or_default(),
+        })
+    })
+}
+
+/// **Which version a play asks for**: the caller's own (`Some`: the viewer picked it, so it is
+/// remembered), else the remembered one. A remembered id whose media is gone from the item
+/// resolves to `None` where the item's versions are `known` (the page that is playing it),
+/// so a stale choice plays exactly what no choice would, the automatic default included.
+/// Where they are not known the id stands, and the resolve falls back to the default file itself
+/// (`route: version N is gone from the item`).
+pub(super) fn settle_version(
+    sid: ServerId,
+    rk: &str,
+    asked: Option<plx_plex::plex::MediaId>,
+    known: Option<&[plx_data::pms::MediaVersion]>,
+) -> Option<plx_plex::plex::MediaId> {
+    if let Some(media) = asked {
+        choose_version(sid, rk, media);
+        return Some(media);
+    }
+    let stored = chosen_version(sid, rk)?;
+    match known {
+        Some(versions) if !versions.iter().any(|v| v.id == stored) => None,
+        _ => Some(stored),
+    }
 }
 
 /// Remember the viewer's subtitle sync-timing correction for the CURRENTLY PLAYING item, so the

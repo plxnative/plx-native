@@ -85,10 +85,10 @@ fn mark_episode_watched_label() -> &'static CStr { plx_os::i18n::msg::browse_det
 fn mark_episode_unwatched_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_mark_episode_unwatched_c() }
 fn play_from_start_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_play_start_c() }
 fn trailer_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_trailer_c() }
-fn play_version_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_play_version_c() }
+fn select_version_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_select_version_c() }
 fn go_to_show_label() -> &'static CStr { plx_os::i18n::msg::browse_menu_go_show_c() }
 
-/// The Play Version disc's mark: a portrait card with another behind it — several copies of one
+/// The Select Version disc's mark: a portrait card with another behind it — several copies of one
 /// title, which is what a version list is. It used to be [`plx_ui::icons::Icon::Show`], the item
 /// menu's own *Go to Show* glyph; that mark is now the Go to Show disc's, and two identical glyphs
 /// in one row would make the only icon-only pair of controls indistinguishable at three metres.
@@ -224,7 +224,8 @@ impl HeroCtl {
 
 /// Which of the conditional controls the row is showing: the independent bits (bookmark, Go to
 /// Show, Play Version, restart, trailer, Also available), plus the item's watch state, which
-/// decides which FACE the watched toggle wears.
+/// decides which FACE the watched toggle wears. Whether the row carries a More (…) button is NOT a
+/// bit: it follows from how many actions the page has ([`actions`], [`split_actions`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct HeroSet {
     /// the item carries a `plex://movie|show` guid the Watchlist takes — the bookmark disc exists only then
@@ -237,46 +238,82 @@ pub struct HeroSet {
     pub trailer: bool,
     pub alt: bool,
     pub mark: PosterMark,
-    pub more: bool,
+}
+
+/// How many round buttons follow Play/Resume. A page with more actions than this shows
+/// `ROUND_SLOTS - 1` of them and a More (…) button that holds the rest (VER-8).
+pub const ROUND_SLOTS: usize = 3;
+
+/// The longest action list a page can have: Watchlist, the watch toggle and the movable ones.
+const MAX_ACTIONS: usize = 8;
+
+/// **The page's actions, in priority order**: Watchlist, the watch toggle, then the movable ones —
+/// Go to Show, Play from Start, Play Version. A new action (Audio & Subtitles) is one more `push` at
+/// the END of this list; [`split_actions`] and the row follow from it. Play/Resume, the hidden
+/// Trailer and *Also available* are not actions in this sense: they never count toward
+/// [`ROUND_SLOTS`] and are never moved.
+pub fn actions(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
+    let mut v = [HeroCtl::Play; MAX_ACTIONS];
+    let mut n = 0;
+    let mut push = |c: HeroCtl, on: bool| {
+        if on {
+            v[n] = c;
+            n += 1;
+        }
+    };
+    push(HeroCtl::Watchlist, set.watchlist);
+    push(if set.mark == PosterMark::Watched { HeroCtl::MarkUnwatched } else { HeroCtl::MarkWatched }, true);
+    push(HeroCtl::GoToShow, set.go_show);
+    push(HeroCtl::Restart, set.restart);
+    push(HeroCtl::Version, set.version);
+    (v, n)
+}
+
+/// **The overflow rule**: up to [`ROUND_SLOTS`] actions are all round buttons; more than that shows
+/// the first `ROUND_SLOTS - 1` and moves the rest under …, which takes the last slot. So … exists
+/// only when at least two actions move into it (4 actions move 2, 5 move 3) and never holds a single
+/// one. Generic over the element so the rule is pinned independent of which actions exist.
+pub fn split_actions<T>(all: &[T]) -> (&[T], &[T]) {
+    if all.len() <= ROUND_SLOTS {
+        return (all, &[]);
+    }
+    let (round, moved) = all.split_at(ROUND_SLOTS - 1);
+    debug_assert!(moved.len() >= 2, "… never holds a single item");
+    (round, moved)
+}
+
+/// The actions that live under … for this set, in menu order (empty when the row has no …).
+pub fn overflow_ctls(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
+    let (all, n) = actions(set);
+    let (_, moved) = split_actions(&all[..n]);
+    let mut v = [HeroCtl::Play; MAX_ACTIONS];
+    v[..moved.len()].copy_from_slice(moved);
+    (v, moved.len())
 }
 
 /// The row's controls, in drawn order, for a given set. A fixed [`MAX_CTLS`]-slot array plus a
-/// live count, so no per-frame allocation. The bookmark disc (only when `set.watchlist`) is SECOND, after Play/Resume;
-/// whether it wears the outline or the filled face is membership ([`face`]), not presence. The Go to
-/// Show disc (only when `set.go_show`) follows the bookmark, before the state discs: it names the
-/// page the episode belongs to, which is navigation rather than an action on the item. The Play
-/// Version disc follows the watched toggle, then More. Also available is the trailing pill when
-/// present, so it leaves the disc positions intact as its result lands.
+/// live count, so no per-frame allocation. After Play/Resume come the page's round buttons per the
+/// overflow rule ([`split_actions`]) — Watchlist, the watch toggle, then the movable actions, or the
+/// first two and then More (…) — and Also available is the trailing pill when present, so it leaves
+/// the disc positions intact as its result lands. The hidden Trailer (never set by the page today)
+/// sits after the round buttons and does not count.
 pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; MAX_CTLS], usize) {
     let mut v = [HeroCtl::Play; MAX_CTLS];
     let mut n = 1;
-    if set.watchlist {
-        v[n] = HeroCtl::Watchlist;
-        n += 1;
-    }
-    if set.go_show {
-        v[n] = HeroCtl::GoToShow;
-        n += 1;
-    }
-    if set.restart {
-        v[n] = HeroCtl::Restart;
+    let (all, count) = actions(set);
+    let (round, moved) = split_actions(&all[..count]);
+    for &c in round {
+        v[n] = c;
         n += 1;
     }
     if set.trailer {
         v[n] = HeroCtl::Trailer;
         n += 1;
     }
-    v[n] = if set.mark == PosterMark::Watched {
-        HeroCtl::MarkUnwatched
-    } else {
-        HeroCtl::MarkWatched
-    };
-    n += 1;
-    if set.version {
-        v[n] = HeroCtl::Version;
+    if !moved.is_empty() {
+        v[n] = HeroCtl::More;
         n += 1;
     }
-    if set.more { v[n] = HeroCtl::More; n += 1; }
     if set.alt {
         v[n] = HeroCtl::Alt;
         n += 1;
@@ -490,7 +527,7 @@ pub fn disc_verb(ctl: HeroCtl, name_episode: bool) -> Option<(usize, &'static CS
         (HeroCtl::MarkWatched, true) => Some((2, mark_episode_watched_label())),
         (HeroCtl::MarkUnwatched, false) => Some((2, mark_unwatched_label())),
         (HeroCtl::MarkUnwatched, true) => Some((2, mark_episode_unwatched_label())),
-        (HeroCtl::Version, _) => Some((3, play_version_label())),
+        (HeroCtl::Version, _) => Some((3, select_version_label())),
         (HeroCtl::GoToShow, _) => Some((4, go_to_show_label())),
         _ => None,
     }
@@ -523,6 +560,10 @@ pub fn press(guid: &str, m: Membership) -> Option<crate::registry::ItemMenuActio
 #[cfg(test)]
 #[path = "hero_watchlist_tests.rs"]
 mod watchlist_tests;
+
+#[cfg(test)]
+#[path = "hero_overflow_tests.rs"]
+mod overflow_tests;
 
 /// The Trailer disc's play fields — extra identity and HUD title, always from start.
 /// `None` when the loaded item has no playable trailer (no button, no-op activate).
@@ -1079,7 +1120,6 @@ mod tests {
 
     fn set_full(restart: bool, alt: bool, mark: PosterMark, trailer: bool) -> HeroSet {
         HeroSet {
-            more: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1252,7 +1292,7 @@ mod tests {
         assert!(has_restart(1), "any positive resume position offers one");
         let with = set(true, false, PosterMark::None);
         let without = set(false, false, PosterMark::None);
-        assert_eq!(index_of(with, HeroCtl::Restart), Some(2), "after Play and the bookmark disc");
+        assert_eq!(index_of(with, HeroCtl::Restart), Some(3), "after Play, the bookmark disc and the watch toggle");
         assert_eq!(
             index_of(without, HeroCtl::Restart),
             None,
@@ -1567,7 +1607,7 @@ mod tests {
 
     #[test]
     fn restart_and_the_watch_tail_are_independent() {
-        let set = HeroSet { more: false,
+        let set = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1579,13 +1619,13 @@ mod tests {
         let (controls, n) = hero_ctls(set);
         assert_eq!(
             &controls[..n],
-            &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::Restart, HeroCtl::MarkUnwatched]
+            &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::MarkUnwatched, HeroCtl::Restart]
         );
     }
 
     #[test]
     fn the_actions_row_grows_an_also_available_control_only_for_a_second_source() {
-        let without = HeroSet { more: false,
+        let without = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1609,7 +1649,7 @@ mod tests {
     fn the_hero_row_carries_no_track_information_disc() {
         for alt in [false, true] {
             for trailer in [false, true] {
-                let set = HeroSet { more: false,
+                let set = HeroSet {
                     watchlist: true,
                     go_show: false,
                     version: false,
@@ -1744,7 +1784,7 @@ mod tests {
 
     #[test]
     fn hero_indices_mean_different_actions_in_the_two_control_sets() {
-        let compact = HeroSet { more: false,
+        let compact = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1753,7 +1793,7 @@ mod tests {
             alt: false,
             mark: PosterMark::None,
         };
-        let wide = HeroSet { more: false,
+        let wide = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1765,14 +1805,14 @@ mod tests {
         assert_eq!(ctl_at(compact, 1), Some(HeroCtl::Watchlist));
         assert_eq!(ctl_at(compact, 2), Some(HeroCtl::MarkWatched));
         assert_eq!(ctl_at(wide, 1), Some(HeroCtl::Watchlist));
-        assert_eq!(ctl_at(wide, 2), Some(HeroCtl::Restart));
-        assert_eq!(ctl_at(wide, 3), Some(HeroCtl::MarkWatched));
+        assert_eq!(ctl_at(wide, 2), Some(HeroCtl::MarkWatched));
+        assert_eq!(ctl_at(wide, 3), Some(HeroCtl::Restart));
         assert_eq!(ctl_at(wide, 4), Some(HeroCtl::Alt));
     }
 
     #[test]
     fn the_actions_row_accumulates_around_a_variable_width_control() {
-        let set = HeroSet { more: false,
+        let set = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1857,7 +1897,7 @@ mod tests {
         use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
         let measure = plx_base::fontcov::advances::ShippedMeasure;
         // Go to Show belongs to an episode page; the on-deck More disc is absent there.
-        let wide = HeroSet { more: false,
+        let wide = HeroSet {
             watchlist: true,
             go_show: true,
             version: true,
@@ -1889,7 +1929,7 @@ mod tests {
     #[test]
     fn the_real_verbs_all_fit_the_widest_row() {
         let measure = plx_ui::fixture::FixtureMeasure;
-        let wide = HeroSet { more: false,
+        let wide = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1915,7 +1955,7 @@ mod tests {
             "the 5-control row collapses rather than crossing People"
         );
 
-        let roomy = HeroSet { more: false,
+        let roomy = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1944,7 +1984,7 @@ mod tests {
 
     #[test]
     fn a_verb_that_does_not_fit_is_dropped_whole() {
-        let set = HeroSet { more: false,
+        let set = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -1986,7 +2026,7 @@ mod tests {
 
     #[test]
     fn the_widest_action_row_clears_the_people_column() {
-        let set = HeroSet { more: false,
+        let set = HeroSet {
             watchlist: true,
             go_show: false,
             version: false,
@@ -2018,15 +2058,15 @@ mod tests {
             &[
                 HeroCtl::Play,
                 HeroCtl::Watchlist,
-                HeroCtl::Restart,
                 HeroCtl::MarkWatched,
+                HeroCtl::Restart,
                 HeroCtl::Alt
             ]
         );
     }
 
     #[test]
-    fn trailer_true_inserts_between_restart_and_watch() {
+    fn trailer_true_follows_the_round_buttons() {
         let set = set_full(true, true, PosterMark::None, true);
         let (controls, n) = hero_ctls(set);
         assert_eq!(
@@ -2034,9 +2074,9 @@ mod tests {
             &[
                 HeroCtl::Play,
                 HeroCtl::Watchlist,
+                HeroCtl::MarkWatched,
                 HeroCtl::Restart,
                 HeroCtl::Trailer,
-                HeroCtl::MarkWatched,
                 HeroCtl::Alt
             ]
         );
@@ -2049,9 +2089,9 @@ mod tests {
         assert_eq!(index_of(before, HeroCtl::Play), Some(0));
         assert_eq!(index_of(after, HeroCtl::Play), Some(0));
         assert_eq!(index_of(before, HeroCtl::Trailer), None);
-        assert_eq!(index_of(after, HeroCtl::Trailer), Some(2));
+        assert_eq!(index_of(after, HeroCtl::Trailer), Some(3), "after the round buttons, and it never counts");
         let watch = index_of(after, HeroCtl::MarkWatched).unwrap();
-        assert_eq!(watch, index_of(before, HeroCtl::MarkWatched).unwrap() + 1);
+        assert_eq!(watch, index_of(before, HeroCtl::MarkWatched).unwrap(), "the hidden trailer moves nothing before it");
         assert_eq!(ctl_at(after, watch).unwrap().elem(), ELEM_MARK_WATCHED);
     }
 
@@ -2059,7 +2099,7 @@ mod tests {
     fn losing_the_trailer_disc_drops_its_identity() {
         let with = set_full(true, false, PosterMark::None, true);
         let without = set(true, false, PosterMark::None);
-        assert_eq!(index_of(with, HeroCtl::Trailer), Some(3));
+        assert_eq!(index_of(with, HeroCtl::Trailer), Some(4));
         assert_eq!(index_of(without, HeroCtl::Trailer), None);
     }
 
@@ -2213,10 +2253,10 @@ mod tests {
 
         let bare = HeroSet { go_show: true, ..Default::default() };
         let (ctls, n) = hero_ctls(bare);
-        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::GoToShow, HeroCtl::MarkWatched]);
+        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::MarkWatched, HeroCtl::GoToShow]);
         let with_bookmark = HeroSet { watchlist: true, go_show: true, ..Default::default() };
         let (ctls, n) = hero_ctls(with_bookmark);
-        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::GoToShow, HeroCtl::MarkWatched]);
+        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::MarkWatched, HeroCtl::GoToShow]);
         assert_eq!(HeroCtl::GoToShow.elem(), ELEM_GO_TO_SHOW);
         assert_eq!(HeroCtl::of_elem(ELEM_GO_TO_SHOW), Some(HeroCtl::GoToShow));
         assert_eq!(disc_verb(HeroCtl::GoToShow, false), Some((4, go_to_show_label())));
@@ -2292,7 +2332,7 @@ mod tests {
         for restart in [false, true] {
             for version in [false, true] {
                 for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-                    let set = HeroSet { more: false, watchlist: false, version, restart, trailer: false, alt: false, mark, go_show: true };
+                    let set = HeroSet { watchlist: false, version, restart, trailer: false, alt: false, mark, go_show: true };
                     for language in SHIPPED {
                         let _guard = language_on_this_thread_for_test(language);
                         let mut unfurl = [0.0; DISCS];

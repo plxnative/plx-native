@@ -4520,6 +4520,7 @@ pub fn played_video<'a>(
     caps: &plx_os::devcaps::Caps,
     dv_mode: plx_plex::plex::session::DolbyVisionMode,
     dv_probed: plx_os::devcaps::dv::DvCapability,
+    chosen: Option<plx_plex::plex::MediaId>,
 ) -> Option<PlayedVideo<'a>> {
     // A show's primary stream metadata is backfilled on Detail. Its part and codecs live on
     // the episode, so the show container itself retains its identity as a non-playable item.
@@ -4532,7 +4533,15 @@ pub fn played_video<'a>(
     } else {
         (&d.part, &d.vcodec, &d.acodec, &d.versions)
     };
-    let version = version_play_starts(versions, mode, caps, dv_mode, dv_probed);
+    // A version the viewer chose is the file Play takes in EVERY direct-play mode, ahead of the
+    // automatic substitute. The first of the list is the primary part's own facts, so choosing it is
+    // the `None` shape below, as with no choice and no substitute. A choice whose media is gone
+    // from `versions` is no choice at all.
+    let version = match chosen.and_then(|id| versions.iter().position(|v| v.id == id)) {
+        Some(0) => None,
+        Some(at) => versions.get(at),
+        None => version_play_starts(versions, mode, caps, dv_mode, dv_probed),
+    };
     Some(match version {
         Some(v) => PlayedVideo {
             version, primary_part, resolution: &v.resolution, width: v.width, height: v.height,

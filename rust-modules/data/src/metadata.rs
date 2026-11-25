@@ -1796,6 +1796,30 @@ impl Detail {
         }
     }
 
+    /// **The item whose file Play starts from this page**: the page's own item (a movie, an
+    /// episode) when it carries its stream, else a show page's play episode while that episode's
+    /// streams are the ones loaded. The same owner `route::played_video` reads its versions from,
+    /// so a remembered version choice is keyed by the item whose file it names, never by the show.
+    pub fn played_rk(&self) -> Option<&str> {
+        if !self.part.is_empty() {
+            return Some(&self.rk);
+        }
+        let ep = self.play_episode().filter(|ep| !ep.part.is_empty())?;
+        (self.stream_episode_key() == Some(ep.rk.as_str())).then_some(ep.rk.as_str())
+    }
+
+    /// The versions this page knows for item `rk`: its own for the page's item, an episode's for an
+    /// episode of its strip that carries them. `None` is "not known" (the item is not on this page,
+    /// or its versions were not fetched), which is not the same as "has none".
+    pub fn versions_known(&self, rk: &str) -> Option<&[crate::pms::MediaVersion]> {
+        let known = if self.rk == rk {
+            &self.versions
+        } else {
+            &self.episodes.position(rk).and_then(|i| self.episodes.get(i))?.versions
+        };
+        (!known.is_empty()).then_some(known.as_slice())
+    }
+
     /// **The show an episode played from this page belongs to**, which the play queue is built
     /// from so the episodes BEFORE it are in the queue: a show page's own key, a season page's
     /// parent, an episode page's grandparent, empty for anything else (a movie). The `show_rk` field

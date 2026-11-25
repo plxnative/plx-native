@@ -1930,13 +1930,12 @@ impl Bridge<'_> {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);
             let meta = <AppHost as plx_screens::registry::MetadataLike>::metadata(&cx);
-            if let Some((ep, mark)) = page.hero_menu_episode(ret.focus, meta) {
-                let mut arg = strip_menu_arg(sid, &ep.rk,
-                    ItemMenuKind::Episode { mark, versions: ep.versions.clone() }, entry, ret.focus, rect);
-                // The on-deck episode need not be in the loaded season window. The ordinary
-                // addressed item path fetches it, rather than the filmstrip's loaded-only path.
+            if let Some((rk, rows)) = page.hero_overflow(ret.focus, meta) {
+                // The hero's …: the item Play from Start / Play Version act on may be the on-deck
+                // episode, which need not be in the loaded season window, so the ordinary
+                // addressed-item path fetches it rather than the filmstrip's loaded-only one.
+                let mut arg = strip_menu_arg(sid, &rk, ItemMenuKind::HeroOverflow { rows }, entry, ret.focus, rect);
                 arg.loaded_episode = false;
-                arg.watchlist = self.watchlist_face(page.watchlist_hex(), plx_data::watchlist::model::Kind::Show, true);
                 return Some(arg);
             }
             if let Some((rk, show_rk, index, mark)) = page.focused_season(ret.focus, meta) {

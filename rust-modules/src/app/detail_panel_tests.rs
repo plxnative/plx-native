@@ -229,13 +229,14 @@ struct PickTap {
     last: Option<Asked>,
     /// `(what was asked, who asked, how it ended)`, in the order the runner finished them.
     commands: Vec<(Asked, MachineId, plx_machine::machine::AppCommandOutcome)>,
-    /// How many times a panel reported a picked version (`AppMsg::PlayVersion`) to its page.
+    /// How many times a panel reported a picked version (`AppMsg::SelectVersion`) to its page.
     play_version_reported: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Asked {
     Play(Option<plx_plex::plex::MediaId>),
+    Select(plx_plex::plex::MediaId),
     Present(plx_plex::plex::ServerId, String),
     /// Any other app command, named by family: not what these tests grade, but a failure prints it.
     /// (The Play Version page also asks for a hero `PreviewStart` while the panel covers it; that one
@@ -246,7 +247,7 @@ enum Asked {
 impl plx_ui::dispatch::Tap<AppHost> for PickTap {
     fn effect(&mut self, _: u64, stamped: &plx_machine::machine::Stamped<AppHost>) {
         use plx_screens::registry::{AppFx, AppMsg, ContentArg, ContentReq, PlayIntent};
-        if let Fx::Deliver(_, plx_machine::machine::Delivery::Screen(plx_ui::screen::ScreenEvent::App(AppMsg::PlayVersion(_)))) = &stamped.fx {
+        if let Fx::Deliver(_, plx_machine::machine::Delivery::Screen(plx_ui::screen::ScreenEvent::App(AppMsg::SelectVersion(_)))) = &stamped.fx {
             self.play_version_reported += 1;
         }
         if let Fx::App(app) = &stamped.fx {
@@ -255,6 +256,7 @@ impl plx_ui::dispatch::Tap<AppHost> for PickTap {
                     PlayIntent::Item { version, .. } | PlayIntent::Movie { version, .. } => *version,
                     PlayIntent::Live { .. } => unreachable!("a detail action cannot tune a channel"),
                 }),
+                AppFx::Content(ContentReq::SelectVersion { media, .. }) => Asked::Select(*media),
                 AppFx::Content(ContentReq::Present(ContentArg::Detail { sid, rk })) => Asked::Present(*sid, rk.clone()),
                 AppFx::Content(ContentReq::PreviewStart { .. }) => Asked::Other("content:PreviewStart"),
                 AppFx::Content(_) => Asked::Other("content"),
@@ -305,15 +307,12 @@ fn page_instance(d: &Dispatcher<AppHost>) -> InstanceId {
     d.nav.top_page().and_then(|e| e.inst.as_ref()).expect("the page mounted").id
 }
 
-/// **Play Version, the reporter's case (#1424):** a title with two versions, the panel open, the
-/// second row picked. The page's play command for THAT version is executed and the Player is
-/// entered.
-///
-/// Red first on `origin/main` (`3878e4f55`): the page asked for the second version and the runner
-/// answered `Refused` (`content_command`'s input-owner gate, run before the panel's `Dismiss`
-/// committed), so no Player was ever pushed.
+/// **Select Version, through the product frame (the shape of #1424):** a title with two versions, the
+/// panel open, the second row picked. The page's command to select THAT version is executed (not
+/// refused while the panel is still closing), the panel closes and NOTHING plays: the player is not
+/// entered and the page stays on top.
 #[test]
-fn a_picked_version_plays_that_version_though_its_panel_is_still_closing() {
+fn a_picked_version_is_selected_and_nothing_plays_though_its_panel_is_still_closing() {
     use plx_machine::machine::AppCommandOutcome;
     let versions = plx_appkit::version_list::sample();
     let pick = versions[1].id;
@@ -334,20 +333,21 @@ fn a_picked_version_plays_that_version_though_its_panel_is_still_closing() {
         plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
     );
     w.frames(40);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Play Version panel is up");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
     let mut tap = PickTap::default();
     let mut t = w.frame;
     let mut bridge = w.bridge.bridge();
     pick_key(&mut w.d, &mut bridge, &mut t, Key::Down, &mut tap);
     pick_key(&mut w.d, &mut bridge, &mut t, Key::Ok, &mut tap);
     assert_eq!(
-        tap.ended(host, &Asked::Play(Some(pick))), [AppCommandOutcome::Completed],
-        "the page asked to play the SECOND version, once, and the runner executed it: {}", tap.account());
+        tap.ended(host, &Asked::Select(pick)), [AppCommandOutcome::Completed],
+        "the page asked to select the SECOND version, once, and the runner executed it: {}", tap.account());
+    assert!(tap.commands.iter().all(|(asked, ..)| !matches!(asked, Asked::Play(_))), "nothing was asked to play: {}", tap.account());
     assert!(w.d.nav.modals.surfaces.is_empty(), "the panel closed");
-    assert!(matches!(w.d.top_arg(), Some(AppArg::Player)), "the pick entered the player");
+    assert!(!matches!(w.d.top_arg(), Some(AppArg::Player)), "the pick did not enter the player");
 }
 
-/// **Play Version on a platform that composed no playback driver (W6c):** the panel's rows are the
+/// **Select Version on a platform that composed no playback driver (W6c):** the panel's rows are the
 /// shared disabled rows, so the pick presses nothing: no play is asked, the player is not entered
 /// and the panel stays up (OK on a disabled row does nothing; BACK still closes it). The mount
 /// reads the platform's fact (`ScreenInputs::can_play`), which the previous test, on the default
@@ -374,7 +374,7 @@ fn a_version_pick_asks_for_no_play_when_the_platform_composed_no_driver() {
         plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
     );
     w.frames(40);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Play Version panel is up");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
     let mut tap = PickTap::default();
     let mut t = w.frame;
     let mut bridge = w.bridge.bridge();

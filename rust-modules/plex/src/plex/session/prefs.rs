@@ -38,7 +38,7 @@
 use super::{
     MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
     PlaintextConsent, HoldHintTaught, PlaybackQuality, ServerKeyPin, Session, SkipInterval, SubtitleOffsetEntry, SubtitleOffsets, SubtitlePosition,
-    SubtitleSize, SubtitleTone, UiResolution, UnderPosters,
+    SubtitleSize, SubtitleTone, UiResolution, UnderPosters, VersionChoiceEntry, VersionChoices,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -370,6 +370,22 @@ pub struct Preferences {
     /// that never tuned a subtitle's timing serializes exactly as it did before the field existed.
     #[serde(default, deserialize_with = "super::de_soft_vec", skip_serializing_if = "Vec::is_empty")]
     pub subtitle_offsets: Vec<SubtitleOffsets>,
+    /// **The file Resume and Play start for an item**, per profile: the `Media.id` the viewer
+    /// selected on the Detail page's Select Version list (or the item menu's), or that a playback
+    /// ran as a specific version. Read when a play names no version (the stored one wins while that
+    /// media still exists on the item, else the server's first file as before), and by the Detail
+    /// page's facts line, which describes the file Play takes. Per ITEM, never per show.
+    ///
+    /// The third tenant of the memory door (`media::route::{remember, recall}`), account-bound like
+    /// the other two (every record carries the account stamp; sign-out drops the whole key,
+    /// `storage::state::ACCOUNT_BOUND_PREFERENCES`). Not count-capped: bounded by
+    /// [`VersionChoiceEntry`]'s byte budget ([`MemoryEntry::BUDGET`]), which evicts the oldest entry
+    /// of the heaviest profile, and by the document guard (`shed_memory`).
+    ///
+    /// Soft-parsed and omitted while empty, so a session that never chose a version serializes
+    /// exactly as it did before the field existed.
+    #[serde(default, deserialize_with = "super::de_soft_vec", skip_serializing_if = "Vec::is_empty")]
+    pub version_choices: Vec<VersionChoices>,
     // ---- per-profile player settings ----
     /// **Each profile's own playback and display settings** — see [`ProfilePrefsRecord`] and the
     /// module doc of `profile_prefs`. A record per (profile, account stamp), soft-parsed per element so one junk
@@ -714,6 +730,7 @@ pub const DESCRIPTORS: &[Descriptor] = &[
     // The memory-door tenants (lists with no value API).
     Descriptor::of::<TrackMemoryPref>(),
     Descriptor::of::<SubtitleOffsetsPref>(),
+    Descriptor::of::<VersionChoicesPref>(),
 ];
 
 impl Session {
@@ -1153,6 +1170,10 @@ pub(super) fn shed_memory(
         "subtitle_offsets",
         shed_list::<ProfileList<SubtitleOffsetEntry>>(object, "subtitle_offsets", freed_total.get(), &mut still_over),
     );
+    note(
+        "version_choices",
+        shed_list::<ProfileList<VersionChoiceEntry>>(object, "version_choices", freed_total.get(), &mut still_over),
+    );
     note("library_sorts", shed_list::<super::LibraryViews>(object, "library_sorts", freed_total.get(), &mut still_over));
     shed
 }
@@ -1251,6 +1272,53 @@ impl ProfileList<SubtitleOffsetEntry> {
         });
         self.place(&(machine_id.to_string(), rating_key.to_string()), entry);
     }
+}
+
+impl MemoryEntry for VersionChoiceEntry {
+    type Key = (String, String);
+    /// No count cap: a version choice is a few dozen bytes, and the household byte budget below is
+    /// the bound (the oldest entry of the heaviest profile goes first), so a viewer's choice is
+    /// never dropped by the count of OTHER items.
+    const CAP: usize = usize::MAX;
+    /// The household budget in logical bytes, a few hundred choices across every profile.
+    const BUDGET: Option<usize> = Some(VERSION_CHOICES_BUDGET_BYTES);
+    /// Sign-out drops the whole key, so every record carries the account stamp (bound from its
+    /// first write: an unstamped record is nobody's).
+    const ACCOUNT_BOUND: bool = true;
+    fn key(&self) -> Self::Key {
+        (self.machine_id.clone(), self.rating_key.clone())
+    }
+    fn matches(&self, key: &Self::Key) -> bool {
+        self.machine_id == key.0 && self.rating_key == key.1
+    }
+    /// An item with no machine id or ratingKey, or no media id (`0` is "the server sent none"),
+    /// is never recorded.
+    fn forgets(&self) -> bool {
+        self.machine_id.is_empty() || self.rating_key.is_empty() || self.media_id <= 0
+    }
+    fn slot(session: &Session) -> &Vec<ProfileList<Self>> {
+        &session.prefs.version_choices
+    }
+    fn slot_mut(session: &mut Session) -> &mut Vec<ProfileList<Self>> {
+        &mut session.prefs.version_choices
+    }
+}
+
+/// The household budget of `version_choices`, in the os layer's logical bytes (16 KiB: about 150
+/// entries across every profile of a television).
+pub const VERSION_CHOICES_BUDGET_BYTES: usize = 16 * 1024;
+
+/// The `version_choices` row: one item, one profile, bound to the account, applied when a play is
+/// requested (not a live cell), with no Settings row. A [`Row`] and deliberately not a
+/// [`ListRow`], like [`SubtitleOffsetsPref`]: written only through [`ProfileMemory::upsert_with`].
+pub struct VersionChoicesPref;
+impl Row for VersionChoicesPref {
+    const KEY: &'static str = "version_choices";
+    const SCOPE: Scope = Scope::PerItem;
+    const ACCOUNT_BOUND: bool = true;
+    const LIVE: bool = false;
+    const SETTINGS: Option<SettingsWrite> = None;
+    const PARSE: Parse = Parse::SoftVec;
 }
 
 impl Session {

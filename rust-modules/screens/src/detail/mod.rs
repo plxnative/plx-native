@@ -861,13 +861,33 @@ impl DetailScreen {
         }
     }
 
-    /// The More disc follows the on-deck subject even when a different season is loaded below it.
-    pub fn hero_menu_episode<'a>(&self, focus: Option<FocusKey<u32>>, meta: plx_data::metadata::MetadataView<'a>)
-        -> Option<(&'a plx_data::metadata::Episode, PosterMark)> {
+    /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
+    /// episode on a show page, via [`play_subject`]) and one row per action the round buttons had no
+    /// room for ([`hero::overflow_ctls`]), in the row's order. `None` unless focus is on the … button.
+    /// A new hero action is one more arm in the `match` below.
+    pub fn hero_overflow(
+        &self,
+        focus: Option<FocusKey<u32>>,
+        meta: plx_data::metadata::MetadataView<'_>,
+    ) -> Option<(String, Vec<crate::registry::OverflowRow>)> {
+        use crate::registry::OverflowRow;
         let key = focus.filter(|key| key.entry == self.entry)?;
-        if key.elem != hero::ELEM_MORE { return None; }
-        let ep = hero::hero_episode(self.detail(meta)?)?;
-        Some((ep, episodes::watch_state(ep)))
+        if key.elem != hero::ELEM_MORE {
+            return None;
+        }
+        let d = self.detail(meta)?;
+        let (moved, n) = hero::overflow_ctls(self.hero_set(meta));
+        let rows: Vec<_> = moved[..n]
+            .iter()
+            .filter_map(|ctl| match ctl {
+                hero::HeroCtl::GoToShow => hero::go_to_show_target(d)
+                    .map(|(show_rk, season)| OverflowRow::GoToShow { show_rk: show_rk.to_string(), season: season as std::os::raw::c_int }),
+                hero::HeroCtl::Restart => Some(OverflowRow::PlayFromStart),
+                hero::HeroCtl::Version => Some(OverflowRow::PlayVersion { versions: hero_versions(d).to_vec() }),
+                _ => None,
+            })
+            .collect();
+        Some((play_subject(d)?.to_string(), rows)).filter(|(_, rows)| !rows.is_empty())
     }
 
     pub fn focused_episode(
@@ -2631,13 +2651,13 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                 self.content(fx, ContentReq::Present(arg.clone()));
                 Handled::Yes
             }
-            // The *Play Version* surface committed a row: this page plays that version as its
-            // Play pill would.
-            ScreenEvent::App(AppMsg::PlayVersion(media)) => {
+            // The *Select Version* surface committed a row: that version is now the file this page's
+            // Play and Resume start (and its facts line describes). Nothing plays.
+            ScreenEvent::App(AppMsg::SelectVersion(media)) => {
                 // The panel's rows are disabled with no driver composed (`versions_panel`) and send
-                // nothing; a message that arrives anyway starts nothing.
+                // nothing; a message that arrives anyway selects nothing.
                 if H::screen_inputs(cx).can_play() {
-                    self.play_hero(false, Some(*media), fx, H::metadata(cx));
+                    self.select_version(*media, fx, H::metadata(cx));
                 }
                 Handled::Yes
             }
@@ -4607,7 +4627,6 @@ impl DetailScreen {
         // `!hero_set().trailer` and then drive `ELEM_TRAILER` directly to prove `activate_hero`'s
         // handling stays correct even though the disc itself is never shown.)
         hero::HeroSet {
-            more: self.detail(meta).is_some_and(|d| hero::hero_episode(d).is_some()),
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
             restart,
@@ -4867,6 +4886,27 @@ impl DetailScreen {
 
     /// Play what the hero is about. `version` is a pick off the Play Version panel
     /// ([`hero_versions`]): on a show page it is a version of the episode the hero plays.
+    /// **Select `media` as the file this page's Play takes**: reported as a request for the app to
+    /// remember (`ContentReq::SelectVersion`), keyed by the item Play plays (the page's movie or
+    /// episode; on a show page the hero's episode, never the show), then a redraw, since the facts
+    /// line reads the choice. Refused for a version the item does not have.
+    fn select_version<H: ContentLike>(
+        &mut self,
+        media: plx_plex::plex::MediaId,
+        fx: &mut Effects<'_, H>,
+        meta: plx_data::metadata::MetadataView<'_>,
+    ) {
+        let Some(d) = self.detail(meta) else { return };
+        let Some(rk) = play_subject(d) else { return };
+        if !hero_versions(d).iter().any(|v| v.id == media) {
+            return;
+        }
+        let sid = plx_media::route::item_sid(d.sid);
+        let rk = rk.to_owned();
+        self.content(fx, ContentReq::SelectVersion { sid, rk, media });
+        fx.invalidate(Provenance::Input);
+    }
+
     fn play_hero<H: ContentLike>(
         &mut self,
         from_start: bool,
@@ -5002,7 +5042,7 @@ impl DetailScreen {
 /// `None` for the controls that only navigate or open a menu or a panel (Go to Show, Also available, Play
 /// Version, More): the control itself acts on no title. The panel or menu one of them opens has rows of its
 /// own, each guarded by its own subject: a library item's menu (`itemmenu.*`) carries its title's key, and the
-/// Play Version panel's `versions.row.<n>` (`versions_panel.rs`, OK delivers `AppMsg::PlayVersion`, which plays)
+/// Select Version panel's `versions.row.<n>` (`versions_panel.rs`, OK delivers `AppMsg::SelectVersion`, which selects)
 /// carries [`play_subject`], this function's answer for Play. Exhaustive, so a new control must be placed here.
 pub(crate) fn hero_control_subject<'a>(
     ctl: hero::HeroCtl,
@@ -5023,8 +5063,8 @@ pub(crate) fn hero_control_subject<'a>(
 }
 
 /// **The ratingKey the hero's Play plays** ([`hero_control_subject`] of Play, with no loaded card to prefer): what the
-/// Play Version panel's rows play too, since a committed row plays the hero's title in that version
-/// (`AppMsg::PlayVersion`, [`DetailScreen::play_hero`]).
+/// Select Version panel's rows select for too, since a committed row names the version of the hero's title
+/// that Play then takes (`AppMsg::SelectVersion`, [`DetailScreen::select_version`]).
 pub(crate) fn play_subject(d: &Detail) -> Option<&str> {
     hero_control_subject(hero::HeroCtl::Play, d, None)
 }
@@ -5037,6 +5077,13 @@ pub(crate) fn hero_versions(d: &Detail) -> &[plx_data::pms::MediaVersion] {
     } else {
         &d.versions
     }
+}
+
+/// **The version Play takes now**, the row of the Select Version list that wears the check mark: the profile's
+/// choice for the hero's item while its media is still there, else what plays unasked (`route::taken_version`).
+pub(crate) fn taken_version(d: &Detail) -> Option<plx_plex::plex::MediaId> {
+    let chosen = play_subject(d).and_then(|rk| plx_media::route::chosen_version(plx_media::route::item_sid(d.sid), rk));
+    plx_media::route::taken_version(hero_versions(d), chosen)
 }
 
 /// A presented preview must leave the framebuffer transparent. The player route punches this

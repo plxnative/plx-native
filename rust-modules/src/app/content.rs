@@ -49,6 +49,7 @@ pub(crate) fn content_command_label(request: &ContentReq) -> &'static str {
     match request {
         ContentReq::Push(_) => "content:Push", ContentReq::Present(_) => "content:Present",
         ContentReq::Back => "content:Back", ContentReq::Play { .. } => "content:Play",
+        ContentReq::SelectVersion { .. } => "content:SelectVersion",
         ContentReq::PreviewStart { .. } => "content:PreviewStart", ContentReq::PreviewStop => "content:PreviewStop",
         ContentReq::PreviewTransport(_) => "content:PreviewTransport", ContentReq::PreviewSeek(_) => "content:PreviewSeek",
         ContentReq::Panel(_) => "content:Panel", ContentReq::ItemMenu => "content:ItemMenu",
@@ -764,6 +765,11 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
                 );
                 #[cfg(not(feature = "play-feed"))]
                 let _ = target_ns;
+            }
+            // The Select Version list's commit: remembered for the seated profile, which is what the
+            // page's Play and Resume and its facts line read. It starts nothing and leaves the page.
+            ContentReq::SelectVersion { sid, rk, media } => {
+                plx_media::route::choose_version(sid, &rk, media);
             }
             ContentReq::Panel(panel) => {
                 halt_screen_preview(app);
