@@ -292,7 +292,8 @@ where
             reachable: AxisMask::BOTH,
             edge: [EdgeRule::Geometric; 4],
             extent: self.frame,
-            len: self.table.n_rows().max(0) as usize,
+            // a table nothing can land on (every row a hairline or inert) counts none, like one whose data has not landed
+            len: if self.table.last_row().is_some() { self.table.n_rows().max(0) as usize } else { 0 },
             elem: ElemKind::Control,
         });
     }
@@ -918,5 +919,27 @@ mod tests {
         let mut foreign = Vec::new();
         Focusable::<H>::a11y_elems(&table, GroupId(6), &c, &mut foreign);
         assert!(foreign.is_empty(), "a foreign group lists nothing");
+    }
+
+    /// A table whose every row is inert or a hairline (a page whose only row is a greyed action)
+    /// lists no element, so its group counts none either: `a11y::conformance` holds `len` to the
+    /// listing, and a screen reader must not be told of a row nothing can reach.
+    #[test]
+    fn a_table_nothing_can_land_on_counts_no_group_members() {
+        use crate::a11y::conformance;
+        use crate::table::{Row, Section, TableView};
+        type H = FixtureHost;
+        let (m, v) = (FixtureMeasure, FixtureView::default());
+        let c = cx(&m, &v);
+        let mut t = TableView::new();
+        t.set_sections(vec![Section::new("Only").row(Row::new("Reset").inert(true)).row(Row::separator())], 0, false);
+        let table = Table { table: &t, frame: Rect::new(0.0, 0.0, 600.0, 120.0), group: GroupId(5), entry: E };
+        conformance(&table, &c);
+        let mut groups = Vec::new();
+        Focusable::<H>::groups(&table, &c, &mut groups);
+        assert_eq!(groups[0].len, 0, "nothing to land on, nothing counted");
+        let mut elems = Vec::new();
+        Focusable::<H>::a11y_elems(&table, GroupId(5), &c, &mut elems);
+        assert!(elems.is_empty());
     }
 }

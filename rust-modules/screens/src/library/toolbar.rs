@@ -82,6 +82,6 @@ impl LibraryScreen {
 
 /// The two pieces of [`LibraryScreen::library_name`] as one name: the title, then the owner's handle
 /// when there is one. The one place the join is spelled; the capsule builds it only when a piece changes.
-pub(super) fn joined_name(title: &str, owner: &str) -> String {
+pub(crate) fn joined_name(title: &str, owner: &str) -> String {
     if owner.is_empty() { title.to_owned() } else { format!("{title} {owner}") }
 }

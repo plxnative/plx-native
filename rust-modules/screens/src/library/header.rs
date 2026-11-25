@@ -51,6 +51,73 @@ fn divider() -> HeaderItem {
     HeaderItem { divider: true, ..Default::default() }
 }
 
+/// **The header's right cluster** as the screen's state says it, and in its widest case (every value
+/// at its longest), as pure data: the ONE builder of both, so a page that must show what the Library
+/// header would do (Settings' Library order preview) builds them through it and cannot drift from
+/// the real header. `sorts` are the labels of every sort the library offers (the widest sizes the
+/// sort control's slot), `sort` the one in force.
+pub(super) fn header_controls(
+    readout: Option<String>, collections: CollectionsControl, listing: Listing, sort: &str, sorts: &[&str], measure: &dyn Measure,
+) -> (Vec<HeaderItem>, Vec<HeaderItem>) {
+    use plx_os::i18n::msg;
+    let locale = plx_os::i18n::current();
+    let mut right = Vec::new();
+    let mut widest = Vec::new();
+    if let Some(readout) = readout {
+        let item = HeaderItem { label: readout, readout: true, ..Default::default() };
+        widest.push(item.clone());
+        right.push(item);
+    }
+    // The control is on the row only with its count: an unknown answer lays out as none (see
+    // [`CollectionsControl`]), so "Collections" is never drawn bare. The slot is the widest
+    // count the cluster's BUDGET allows for (THREE digits; a library whose count needs more
+    // widens only its own slot, here and in the widest case). It is no air inside the row: the
+    // control is placed by the text it draws, so the gap to "Recommended" is the row's one gap
+    // whatever the count is. The budget reserves it for EVERY answer, a library with none
+    // included: a cold cache reads Unknown for a round trip and then Hidden, and the names
+    // must not repack between the two (the room they pack into is measured once and never
+    // moves).
+    let slot_of = |count: u32| Some(locale.number(i64::from(count.max(999))));
+    let control = |value, slot| HeaderItem { value, value_slot: slot, ..place("collections", msg::library_header_collections()) };
+    match collections {
+        CollectionsControl::Count(count) => {
+            let slot = slot_of(count);
+            right.push(HeaderItem { selected_plate: listing == Listing::Collections,
+                ..control(Some(locale.number(i64::from(count))), slot.clone()) });
+            widest.push(control(slot.clone(), slot));
+        }
+        CollectionsControl::Unknown | CollectionsControl::Hidden => {
+            let slot = slot_of(0);
+            widest.push(control(slot.clone(), slot));
+        }
+    }
+    right.push(HeaderItem { selected_plate: listing == Listing::Recommended,
+        ..place("recommended", msg::library_header_recommended()) });
+    widest.push(place("recommended", msg::library_header_recommended()));
+    // The divider and the sort control draw what the criterion says, with no slot for it: the
+    // control ends at the row's edge and the places slide as the criterion's width changes. The
+    // widest criterion only sizes the room the library names may use.
+    right.push(divider());
+    widest.push(divider());
+    let longest = sorts.iter().copied().chain([sort])
+        .map(|label| (page_header::cluster_width(&[HeaderItem::sort_control("", label)], measure), label))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or("", |(_, label)| label).to_owned();
+    right.push(HeaderItem::sort_control(msg::library_header_sort_filter(), sort));
+    widest.push(HeaderItem::sort_control(msg::library_header_sort_filter(), longest));
+    (right, widest)
+}
+
+/// **The header's right cluster for a library at rest** (no filter, the Collections answer not in,
+/// the grid on Title, every sort the shared table knows as a candidate for the widest): what a page
+/// that previews the header (Settings' Library order) lays its names out against. A real library
+/// offers a subset of those sorts plus the server's own, so its row can differ by a sort's width.
+pub(crate) fn header_controls_at_rest(measure: &dyn Measure) -> (Vec<HeaderItem>, Vec<HeaderItem>) {
+    use plx_data::sortfacts::SortFact;
+    let sorts: Vec<&str> = SortFact::ALL.iter().map(|fact| fact.label()).collect();
+    header_controls(None, CollectionsControl::Unknown, Listing::All, SortFact::Title.label(), &sorts, measure)
+}
+
 impl LibraryScreen {
     /// Every focusable element of the header row in focus order: favorite shortcuts, options, the
     /// current visit when present, then the controls (on Collections, the crumb's root, then Sort).
@@ -154,54 +221,8 @@ impl LibraryScreen {
     /// fixes the cluster's BUDGET so the room the library names may use does not change when a
     /// value does.
     pub(super) fn header_right<H: LibraryLike>(&self, cx: &Cx<'_, H>) -> (Vec<HeaderItem>, Vec<HeaderItem>) {
-        use plx_os::i18n::msg;
-        let locale = plx_os::i18n::current();
-        let mut right = Vec::new();
-        let mut widest = Vec::new();
-        if let Some(readout) = self.filtered_readout(cx) {
-            let item = HeaderItem { label: readout, readout: true, ..Default::default() };
-            widest.push(item.clone());
-            right.push(item);
-        }
-        // The control is on the row only with its count: an unknown answer lays out as none (see
-        // [`CollectionsControl`]), so "Collections" is never drawn bare. The slot is the widest
-        // count the cluster's BUDGET allows for (THREE digits; a library whose count needs more
-        // widens only its own slot, here and in the widest case). It is no air inside the row: the
-        // control is placed by the text it draws, so the gap to "Recommended" is the row's one gap
-        // whatever the count is. The budget reserves it for EVERY answer, a library with none
-        // included: a cold cache reads Unknown for a round trip and then Hidden, and the names
-        // must not repack between the two (the room they pack into is measured once and never
-        // moves).
-        let slot_of = |count: u32| Some(locale.number(i64::from(count.max(999))));
-        let control = |value, slot| HeaderItem { value, value_slot: slot, ..place("collections", msg::library_header_collections()) };
-        match self.collections {
-            CollectionsControl::Count(count) => {
-                let slot = slot_of(count);
-                right.push(HeaderItem { selected_plate: self.listing == Listing::Collections,
-                    ..control(Some(locale.number(i64::from(count))), slot.clone()) });
-                widest.push(control(slot.clone(), slot));
-            }
-            CollectionsControl::Unknown | CollectionsControl::Hidden => {
-                let slot = slot_of(0);
-                widest.push(control(slot.clone(), slot));
-            }
-        }
-        right.push(HeaderItem { selected_plate: self.listing == Listing::Recommended,
-            ..place("recommended", msg::library_header_recommended()) });
-        widest.push(place("recommended", msg::library_header_recommended()));
-        // The divider and the sort control draw what the criterion says, with no slot for it: the
-        // control ends at the row's edge and the places slide as the criterion's width changes. The
-        // widest criterion only sizes the room the library names may use.
-        right.push(divider());
-        widest.push(divider());
-        let sort = self.sort_value(cx);
-        let longest = H::listing(cx).sorts().iter().map(|sort| sort.label()).chain([sort])
-            .map(|label| (page_header::cluster_width(&[HeaderItem::sort_control("", label)], cx.measure), label))
-            .max_by(|a, b| a.0.total_cmp(&b.0))
-            .map_or("", |(_, label)| label).to_owned();
-        right.push(HeaderItem::sort_control(msg::library_header_sort_filter(), sort));
-        widest.push(HeaderItem::sort_control(msg::library_header_sort_filter(), longest));
-        (right, widest)
+        let sorts: Vec<&str> = H::listing(cx).sorts().iter().map(|sort| sort.label()).collect();
+        header_controls(self.filtered_readout(cx), self.collections, self.listing, self.sort_value(cx), &sorts, cx.measure)
     }
 
     /// A fingerprint of everything [`Self::refresh_header`] reads, cheap enough for every frame.
