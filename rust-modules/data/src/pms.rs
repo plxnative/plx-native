@@ -1173,10 +1173,10 @@ struct Shelf {
     /// ([`HubRef::epoch`]). Bookkeeping of this run: not recorded, not hashed.
     #[serde(skip)]
     epoch: u32,
-    /// Which library this row belongs to ([`ShelfLibrary`]): decided once at projection, while the row
-    /// still holds its cards, and carried across every replacement of the row (a refresh, a window
-    /// read, a landing), so Library order ranks the row the same whether it holds its cards or gave
-    /// them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
+    /// Which library this row belongs to ([`ShelfLibrary`]): decided at projection from the cards the row
+    /// holds, again by each refresh that brings a full preview, re-decided by [`admit`] from what its hub names alone, no cards, once its window has moved ([`Shelf::paged`]), and carried across every replacement
+    /// of a row that has given its cards up (a refresh, a window read, a landing), so Library order
+    /// ranks the row the same whether it holds its cards or gave them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
     #[serde(skip)]
     library: ShelfLibrary,
 }
@@ -1184,14 +1184,14 @@ struct Shelf {
 /// **Which library a Home row belongs to**: three states, not a number with a sentinel.
 ///
 /// Library order ranks a row by its library, and a row's cards cannot be asked for it later (a row in
-/// the ring has given them up), so the answer is computed once, at projection, and travels with the
-/// row.
+/// the ring has given them up), so the answer is computed while the row holds its cards (at projection, and again
+/// by a refresh's full preview), and travels with the row once it gives them up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ShelfLibrary {
     /// Not computed: a row built from a page read (it replaces a window of a row that was projected, and
     /// never stands alone), or decoded from a recording. A full build is decided as it is admitted
-    /// ([`admit`]); a row that is still `Unknown` is read from its hub id alone
-    /// ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
+    /// ([`admit`], [`Shelf::decide_library`]); a row that is still `Unknown` is read from its hub id
+    /// alone ([`ShelfLibrary::resolve`]), never from the cards it happens to hold.
     #[default]
     Unknown,
     /// Computed: the row belongs to no single library (a whole-server hub, or cards of several).
@@ -1201,12 +1201,13 @@ enum ShelfLibrary {
 }
 
 impl ShelfLibrary {
-    /// Decide at projection: the hub id when it names a library (`plex::library_order::hub_library`),
-    /// none for a hub that spans the server (`plex::library_order::is_whole_server_hub`), else the one
-    /// `librarySectionID` every card shares: which is how a `home.<type>.recent` hub, one per library
-    /// when a household owns two of a type, finds its library.
-    fn projected(hub_id: &str, items: &[Arc<PmsMovie>]) -> Self {
-        if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id) { return Self::One(library); }
+    /// Decide at projection, in this order: what the hub NAMES (`plex::library_order::hub_library`:
+    /// its id, else the `sectionID` of its key, which is how a `home.<type>.recent` hub, one per library
+    /// when a household owns two of a type, finds its library), none for a hub that spans the server
+    /// (`plex::library_order::is_whole_server_hub`), else the one `librarySectionID` every card
+    /// shares. A moved window passes no cards ([`Shelf::decide_library`]), so the last step is `Mixed`.
+    fn projected(hub_id: &str, key: &str, items: &[Arc<PmsMovie>]) -> Self {
+        if let Some(library) = plx_plex::plex::library_order::hub_library(hub_id, key) { return Self::One(library); }
         if plx_plex::plex::library_order::is_whole_server_hub(hub_id) { return Self::Mixed; }
         let mut sections = items.iter().map(|m| m.sec).filter(|sec| *sec != 0);
         match sections.next() {
@@ -1215,11 +1216,11 @@ impl ShelfLibrary {
         }
     }
     /// The library the row ranks by, `None` for a row that belongs to none or to several.
-    fn resolve(self, hub_id: &str) -> Option<i64> {
+    fn resolve(self, hub_id: &str, key: &str) -> Option<i64> {
         match self {
             Self::One(library) => Some(library),
             Self::Mixed => None,
-            Self::Unknown => plx_plex::plex::library_order::hub_library(hub_id),
+            Self::Unknown => plx_plex::plex::library_order::hub_library(hub_id, key),
         }
     }
     /// What a row that replaces another knows: its own decision, else the one it replaces.
@@ -1230,6 +1231,22 @@ impl Shelf {
     fn is(&self, id: &str, key: &str) -> bool { self.hub_id == id && self.key == key }
     /// A descriptor: the row gave its cards up to the ring and keeps what is needed to ask for them.
     fn released(&self) -> bool { self.items.is_empty() && self.shown > 0 }
+    /// The window has moved off the row's first page: it starts past the head of the listing, or the
+    /// row has left the state its preview began in (a ledger, a sample, a probed listing). Such a
+    /// window's cards say nothing of the row's library, and the first-page preview that did is not
+    /// in a recording. (A Recently Added row that grew from the head and never slid keeps `Head`
+    /// mode and offset 0, so it counts as its first page; its hub names its library, so its cards
+    /// are never asked.)
+    fn paged(&self) -> bool { self.offset > 0 || self.row != paging::preview_state(&self.hub_id, &self.key) }
+    /// **The one rule for a row's library**, run by [`admit`] on every full build, live or replayed:
+    /// what the hub names (its id, else its key's `sectionID`: `hub_library`), then, ONLY for a row
+    /// still on its first page, the cards it holds (a decision projection already made is kept, one a
+    /// recording decoded as `Unknown` is made now), else `Mixed`. A moved window ([`Shelf::paged`])
+    /// never reads its cards.
+    fn decide_library(&mut self) {
+        self.library = if self.paged() { ShelfLibrary::projected(&self.hub_id, &self.key, &[]) }
+            else { self.library.or(ShelfLibrary::projected(&self.hub_id, &self.key, &self.items)) };
+    }
 }
 
 /// ONE source's whole contribution to Home — its Continue Watching items (merged with everyone
@@ -1640,7 +1657,9 @@ fn land_reload(source: &mut Src, page: &PageQuery, build: SourceBuild) -> bool {
 
 /// A window read replaces the first-page shelf `/hubs` just projected. The row keeps the title and the
 /// library the projection gave it: a page read has no title of its own and its cards are no evidence
-/// of the row's library (a window of a mixed row may hold cards of one).
+/// of the row's library (a window of a mixed row may hold cards of one). That library is only
+/// provisional: [`admit`] decides a row whose window has moved without reading its cards ([`Shelf::paged`]),
+/// the one answer a replay can also reach, since the first-page projection is not in the recording.
 fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
     refreshed.title = shelf.title.clone();
     if let Some(mut ledger) = old.row.ledger.clone() {
@@ -1652,15 +1671,22 @@ fn adopt_window(shelf: &mut Shelf, mut refreshed: Shelf, old: &Shelf) {
     *shelf = refreshed;
 }
 
-/// **Where a full build is admitted as a source's `last`**: every landing path ends here, so a row
-/// leaves it with its library DECIDED. A row built by projection already is; one decoded from a
-/// recording (a replay) is [`ShelfLibrary::Unknown`] and is decided now from its hub id and the cards
-/// it holds, which is what projection did when the live run built it, so the two runs rank it alike.
-/// Then what the build replaces hands its rows' libraries and descriptors on ([`carry_descriptors`]).
+/// **Where a full build is admitted as a source's `last`**: every landing path ends here, live and
+/// replayed, so a row leaves it with its library DECIDED by ONE rule ([`Shelf::decide_library`]) that
+/// reads nothing but what the recording holds:
+/// - what the hub names decides first: its id, else its key's `sectionID` (`hub_library`), which a
+///   recording keeps for a row whatever its window;
+/// - a row still on its first page (offset 0, the state its preview began in) then keeps the
+///   decision projection made from its cards, and a row decoded from a recording
+///   ([`ShelfLibrary::Unknown`]) is decided now from the cards it holds, which is what projection did;
+/// - a row whose window has moved ([`Shelf::paged`]) reads no cards, whatever it was decided before:
+///   its first page is not in the recording, and the cards of a window are no evidence of the row's
+///   library. It is `Mixed` when the hub names none.
+///
+/// So the live run and its replay rank every row alike. Then what the build replaces hands its rows'
+/// libraries and descriptors on ([`carry_descriptors`]).
 fn admit(old: Option<&SourceBuild>, new: &mut SourceBuild) {
-    for shelf in &mut new.shelves {
-        shelf.library = shelf.library.or(ShelfLibrary::projected(&shelf.hub_id, &shelf.items));
-    }
+    for shelf in &mut new.shelves { shelf.decide_library(); }
     if let Some(old) = old { carry_descriptors(old, new); }
 }
 
@@ -1670,10 +1696,12 @@ fn admit(old: Option<&SourceBuild>, new: &mut SourceBuild) {
 fn carry_descriptors(old: &SourceBuild, new: &mut SourceBuild) {
     for shelf in &mut new.shelves {
         let Some(was) = find_shelf(&old.shelves, &shelf.hub_id, &shelf.key) else { continue };
-        // the row's library was decided when it was first projected; a refresh's own preview (a random
-        // sample, perhaps) does not re-decide it
-        shelf.library = was.library.or(shelf.library);
         if !was.released() { continue; }
+        // a row that gave its cards up keeps the decision made while it held them: nothing of it is
+        // left to decide from, and the refresh's own preview is a sample. A row that still holds a
+        // full fresh preview (the early `continue` above) keeps what `admit` decided from that preview;
+        // one whose window moved was decided by `admit` from its hub id alone, live and replayed.
+        shelf.library = was.library.or(shelf.library);
         if !pages(&shelf.key) {
             // nothing but the refresh's own preview says what the row shows now (a row the refresh
             // already gave up has put those keys in `kept`)
@@ -1764,7 +1792,7 @@ fn rank_keys(srcs: &[Src], effective: &[(ServerId, i64)], default: &[(ServerId, 
         let own = |list: &[(ServerId, i64)]| list.iter().filter(|(sid, _)| *sid == source.sid).map(|(_, key)| *key).collect::<Vec<_>>();
         let reordered = own(effective) != own(default);
         let places: Vec<Option<usize>> = build.shelves.iter().map(|shelf| {
-            shelf.library.resolve(&shelf.hub_id).and_then(|library| effective.iter().position(|ranked| *ranked == (source.sid, library)))
+            shelf.library.resolve(&shelf.hub_id, &shelf.key).and_then(|library| effective.iter().position(|ranked| *ranked == (source.sid, library)))
         }).collect();
         let mut slots: Vec<usize> = places.iter().flatten().copied().collect();
         slots.sort_unstable();
@@ -2336,7 +2364,7 @@ impl<'a> Projection<'a> {
                 title: String::new(),
                 hub_id: hub.hub_identifier.clone(),
                 key: hub.key.clone(),
-                library: ShelfLibrary::projected(&hub.hub_identifier, &items),
+                library: ShelfLibrary::projected(&hub.hub_identifier, &hub.key, &items),
                 items, positions,
                 total: hub.total(),
                 offset: 0,
@@ -2706,8 +2734,8 @@ struct Src {
     /// [`sync_roster`] time, never inside a worker.
     ///
     /// An empty handle is NOT what orders Home: [`roster_with_scope`] ranks sources by
-    /// [`browse::source_rank`], Browse's household verdict first; the handle only breaks ties inside
-    /// one verdict (a server with an owner to name after one without). So a share plex.tv never
+    /// [`browse::source_rank`], Browse's household verdict first; the handle (Browse's, in the same verdict)
+    /// only breaks ties inside one household grade (a server with an owner to name after one without). So a share plex.tv never
     /// named, which has an empty handle but is not the household's, sorts with the shares (the
     /// mistake `docs/shared-servers.md` §13 describes cannot recur through Home's order).
     handle: String,
@@ -3177,11 +3205,12 @@ fn feeds_home(sid: ServerId, pinned: &[ServerId], known: &[ServerId]) -> bool {
 struct BrowseScope<'a> {
     sections_gen: u32,
     pins: &'a [(ServerId, i64, bool)],
-    /// Browse's household verdict per source ([`browse::DirectoryView::source_households`]), which
-    /// [`roster_with_scope`] orders the sources by (the default source order, [`browse::source_rank`]).
-    /// A source it does not name is unclassified: [`browse::source_rank`] grades it behind the
-    /// classified ones, the same as Browse's own table does for a source it no longer holds.
-    households: &'a [(ServerId, bool)],
+    /// Browse's WHOLE verdict per source ([`browse::DirectoryView::source_verdicts`]: household and
+    /// handle), which [`roster_with_scope`] hands to [`browse::source_rank`] as it is: Home computes no
+    /// part of it, so it cannot disagree with the Library header inside one publication. A source it
+    /// does not name is unclassified: [`browse::source_rank`] grades it behind the classified ones,
+    /// the same as Browse's own table does for a source it no longer holds.
+    verdicts: &'a [(ServerId, crate::browse::SourceVerdict)],
     /// The profile's Library order as Home reads it ([`HomeOrder`]); [`HomeOrder::Natural`] for the
     /// server order (and always for a fixture), which leaves Home exactly as it was.
     order: HomeOrder<&'a [(ServerId, i64)]>,
@@ -3195,14 +3224,14 @@ impl<'a> BrowseScope<'a> {
     /// code only: a production step is handed them ([`BrowseScope::retained`]).
     #[cfg(any(test, feature = "test-support"))]
     fn standalone() -> Self {
-        Self { sections_gen: 0, pins: &[], households: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
+        Self { sections_gen: 0, pins: &[], verdicts: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
     }
 
     fn retained(directory: crate::stores::browse::DirectoryView<'a>, clients: &'a ClientKeys) -> Self {
         Self {
             sections_gen: directory.sections_gen(),
             pins: directory.favorite_sections(),
-            households: directory.source_households(),
+            verdicts: directory.source_verdicts(),
             order: directory.home_order(),
             clients: std::borrow::Cow::Borrowed(clients),
         }
@@ -3219,14 +3248,15 @@ impl<'a> BrowseScope<'a> {
                 hash = (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
             }
         };
-        // The roster's order follows the households (`roster_with_scope`): a source that changes sides
-        // is a moved roster, with or without a pin table or a generation moving beside it.
-        for (sid, household) in self.households {
+        // The roster's order follows the verdicts (`roster_with_scope`): a source that changes sides, or
+        // gains an owner to name, is a moved roster, with or without a pin table or a generation
+        // moving beside it.
+        for (sid, verdict) in self.verdicts {
             fold(&sid.raw().to_le_bytes());
-            fold(&[*household as u8]);
+            fold(&[verdict.household as u8, verdict.has_handle as u8]);
         }
         // An empty pin table carries no new Home membership, even when discovery advances.
-        if self.pins.is_empty() { return if self.households.is_empty() { 0 } else { hash }; }
+        if self.pins.is_empty() { return if self.verdicts.is_empty() { 0 } else { hash }; }
         fold(&self.sections_gen.to_le_bytes());
         fold(&(self.pins.len() as u64).to_le_bytes());
         for (sid, section, pinned) in self.pins {
@@ -3310,8 +3340,9 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 /// The registry IS the granted roster — a server is in it only once plex.tv (or the
 /// `plxnative-servers` dev trigger) handed us a token for it — and [`feeds_home`] is what narrows
 /// the grant to a pin. The handle comes from the same place (`ServerFacts`), so nothing here has an
-/// opinion about who a server belongs to that the Sources list does not share; the household verdict
-/// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
+/// opinion about who a server belongs to that the Sources list does not share; the whole verdict, the
+/// handle half included, is Browse's own ([`BrowseScope::verdicts`]), because the household half needs
+/// the Plex Home roster Home does not hold. The handle read here is only the credit a shelf carries.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
     let mut ranked: Vec<(crate::browse::SourceRank, ServerId, String)> = Vec::new();
@@ -3322,8 +3353,7 @@ fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
         let handle = scope.clients.facts(sid).and_then(|facts| facts.described)
             .map(|f| f.handle.clone())
             .unwrap_or_default();
-        let verdict = scope.households.iter().find(|(known, _)| *known == sid)
-            .map(|(_, household)| (*household, !handle.is_empty()));
+        let verdict = scope.verdicts.iter().find(|(known, _)| *known == sid).map(|(_, verdict)| *verdict);
         ranked.push((crate::browse::source_rank(verdict, sid), sid, handle));
     }
     ranked.sort_by_key(|(rank, ..)| *rank);

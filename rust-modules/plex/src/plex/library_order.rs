@@ -27,7 +27,7 @@
 //!   stored and in effect over no favourite, say once the one library it moved is unfavourited.
 //!
 //! [`hub_library`] is the other half of Home's use of this: which library a `/hubs` shelf belongs to,
-//! from its `hubIdentifier` alone, so the answer does not depend on whether the shelf still holds
+//! from its `hubIdentifier`, else its key's `sectionID`, so the answer does not depend on whether the shelf still holds
 //! its cards.
 use super::session::LibraryOrder;
 
@@ -140,26 +140,29 @@ pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], pr
     (carried || moves).then_some(list)
 }
 
-/// Which library a `/hubs` shelf belongs to, from its `hubIdentifier`: the per-library Recently
-/// Added family (`movie.recentlyadded.<id>`, `show.recentlyadded.<id>`, `tv.recentlyadded.<id>`) and
-/// a promoted collection (`custom.collection.<section>.…`). `None` for every other identifier — a
-/// [`is_whole_server_hub`] one spans libraries by construction, and any other (a `home.<type>.recent`
-/// among them) is decided by the cards it holds.
-pub fn hub_library(hub_identifier: &str) -> Option<i64> {
-    const PER_LIBRARY: [&str; 3] = ["movie.recentlyadded.", "show.recentlyadded.", "tv.recentlyadded."];
-    for prefix in PER_LIBRARY {
+/// Which library a `/hubs` shelf belongs to, from what it NAMES, never from the cards it holds: its
+/// `hubIdentifier` first: the per-library Recently Added family (`movie.recentlyadded.<id>`,
+/// `show.recentlyadded.<id>`, `tv.recentlyadded.<id>`) and a promoted collection
+/// (`custom.collection.<section>.…`); then, for a hub that is not [`is_whole_server_hub`], the
+/// `sectionID` of its `key`: PMS mints one `home.<type>.recent` hub per library when a household
+/// owns two of a type, and each one's key says which (`/hubs/home/recentlyAdded?type=2&sectionID=1`).
+/// `None` for every other shelf, which the cards it holds decide while it is on its first page.
+pub fn hub_library(hub_identifier: &str, key: &str) -> Option<i64> {
+    for prefix in super::hub_title::PER_LIBRARY_PREFIXES {
         if let Some(rest) = hub_identifier.strip_prefix(prefix) {
             return rest.parse().ok();
         }
     }
-    hub_identifier.strip_prefix("custom.collection.")?.split('.').next()?.parse().ok()
+    if let Some(rest) = hub_identifier.strip_prefix("custom.collection.") { return rest.split('.').next()?.parse().ok(); }
+    if is_whole_server_hub(hub_identifier) { return None; }
+    key.split_once('?')?.1.split('&').find_map(|pair| pair.strip_prefix("sectionID="))?.parse().ok()
 }
 
 /// The `home.*` hubs that span the whole server whatever they hold: Continue Watching, On Deck (both
 /// spellings PMS has used) and Recent Playlists. **The only `home.*` identifiers that belong to no
 /// library by their id.** `home.<type>.recent` is NOT one: PMS mints one such hub per library when a
 /// household owns two of a type (`docs/pms-api.md` §3, `hub_title::is_recently_added_hub`), and a
-/// lone one is that library's own shelf, so those are decided by the library their cards share.
+/// lone one is that library's own shelf, so those are decided by their key's `sectionID` ([`hub_library`]), else by the library their cards share.
 pub fn is_whole_server_hub(hub_identifier: &str) -> bool {
     matches!(hub_identifier, "home.continue" | "home.ondeck" | "home.onDeck" | "home.playlists")
 }
@@ -294,14 +297,27 @@ mod tests {
     }
 
     #[test]
-    fn hub_library_names_only_what_the_identifier_names() {
-        assert_eq!(hub_library("movie.recentlyadded.3"), Some(3));
-        assert_eq!(hub_library("tv.recentlyadded.12"), Some(12));
-        assert_eq!(hub_library("show.recentlyadded.7"), Some(7));
-        assert_eq!(hub_library("custom.collection.2.420.420"), Some(2));
-        assert_eq!(hub_library("custom.collection.x.420.420"), None);
-        assert_eq!(hub_library("home.movies.recent"), None, "a whole-server hub spans libraries");
-        assert_eq!(hub_library("home.ondeck"), None);
-        assert_eq!(hub_library("movie.recentlyadded.x"), None);
+    fn hub_library_names_only_what_the_identifier_or_key_names() {
+        assert_eq!(hub_library("movie.recentlyadded.3", ""), Some(3));
+        assert_eq!(hub_library("tv.recentlyadded.12", ""), Some(12));
+        assert_eq!(hub_library("show.recentlyadded.7", ""), Some(7));
+        assert_eq!(hub_library("custom.collection.2.420.420", ""), Some(2));
+        assert_eq!(hub_library("custom.collection.x.420.420", ""), None);
+        assert_eq!(hub_library("home.movies.recent", ""), None, "a whole-server hub spans libraries");
+        assert_eq!(hub_library("home.ondeck", ""), None);
+        // a `home.<type>.recent` hub per library: the library is in its key
+        let key = |id: i64| format!("/hubs/home/recentlyAdded?type=2&sectionID={id}");
+        assert_eq!(hub_library("home.television.recent", &key(2)), Some(2));
+        assert_eq!(hub_library("home.television.recent", "/hubs/home/recentlyAdded?type=2"), None);
+        assert_eq!(hub_library("home.television.recent", "/hubs/home/recentlyAdded?type=2&sectionID=x"), None);
+        assert_eq!(hub_library("home.ondeck", &key(2)), None, "a whole-server hub is nobody's whatever its key says");
+        assert_eq!(hub_library("movie.recentlyadded.3", &key(9)), Some(3), "the id outranks the key");
+        // one list of the per-library prefixes: every one `is_recently_added_hub` accepts names its library here
+        for prefix in crate::plex::hub_title::PER_LIBRARY_PREFIXES {
+            let id = format!("{prefix}5");
+            assert!(crate::plex::hub_title::is_recently_added_hub(&id), "{id}");
+            assert_eq!(hub_library(&id, ""), Some(5), "{id}");
+        }
+        assert_eq!(hub_library("movie.recentlyadded.x", ""), None);
     }
 }

@@ -156,7 +156,7 @@ pub(super) fn shelf_in(slot: u16, sec: i64, title: &str, hub_id: &str, rks: &[&s
     for m in &mut sh.items {
         Arc::make_mut(m).sec = sec;
     }
-    sh.library = ShelfLibrary::projected(&sh.hub_id, &sh.items);
+    sh.library = ShelfLibrary::projected(&sh.hub_id, &sh.key, &sh.items);
     sh
 }
 

@@ -129,15 +129,27 @@ pub enum SourceState {
 /// read it; so does Home's roster (`pms::roster_with_scope`), so a profile's shelves and its header
 /// never disagree about which server leads.
 ///
-/// `verdict` is Browse's classification of the source, `(household, has_handle)`; `None` is a source
+/// `verdict` is Browse's classification of the source ([`BrowseSource::verdict`]); `None` is a source
 /// Browse has not classified (its table does not hold it yet, or no longer: the step after a reset), and
 /// it ranks behind every classified one, in slot order among its own kind. That is the ONE grade of an
 /// unclassified source, whichever surface asks: nothing else guesses a verdict from a handle.
-pub(crate) fn source_rank(verdict: Option<(bool, bool)>, sid: ServerId) -> SourceRank {
+pub(crate) fn source_rank(verdict: Option<SourceVerdict>, sid: ServerId) -> SourceRank {
     match verdict {
-        Some((household, has_handle)) => (false, !household, has_handle, sid.raw()),
+        Some(SourceVerdict { household, has_handle }) => (false, !household, has_handle, sid.raw()),
         None => (true, true, true, sid.raw()),
     }
+}
+
+/// **Browse's whole verdict on one source**, the only input [`source_rank`] reads besides the slot:
+/// whether the source is the household's, and whether it has an owner to name. It is assembled in ONE
+/// place ([`BrowseSource::verdict`]) and travels as it is: the Library header ranks by it
+/// ([`BrowseState::default_section_order`]) and so does Home, which is handed it with the directory
+/// ([`DirectoryView::source_verdicts`](crate::stores::browse::DirectoryView::source_verdicts)) and
+/// adds no half of its own, so the two surfaces never disagree inside one publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceVerdict {
+    pub household: bool,
+    pub has_handle: bool,
 }
 
 /// [`source_rank`]'s key: unclassified, then not the household's, then has an owner to name, then the slot.
@@ -228,6 +240,12 @@ pub struct BrowseSource {
 }
 
 impl BrowseSource {
+    /// Browse's verdict on this source: the ONE place its two halves are assembled ([`SourceVerdict`]).
+    /// An empty handle is not "owned" (a share plex.tv never named has none), so `household` is the
+    /// table's own derivation, not a reading of the handle.
+    pub(crate) fn verdict(&self) -> SourceVerdict {
+        SourceVerdict { household: self.household, has_handle: !self.handle.is_empty() }
+    }
     /// Did the last dial succeed? The old `bool`, preserved as a QUESTION so that widening the
     /// field did not have to become a behaviour change at the same time.
     ///
@@ -2180,7 +2198,7 @@ impl BrowseState {
             let src = self.sections[index].src;
             let source = self.sources.get(src);
             // a section whose source is gone is unclassified: last, then by source index
-            (source_rank(source.map(|source| (source.household, !source.handle.is_empty())), source.map_or(ServerId::UNSET, |source| source.sid)), src)
+            (source_rank(source.map(BrowseSource::verdict), source.map_or(ServerId::UNSET, |source| source.sid)), src)
         });
         order
     }
