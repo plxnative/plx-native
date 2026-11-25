@@ -799,41 +799,6 @@ pub fn local_clock_time(seconds: i64) -> Option<[i32; 2]> {
     Some([local.tm_hour, local.tm_min])
 }
 
-/// The operating system's UTC offset at a Unix timestamp, in seconds east of UTC (daylight saving
-/// included), derived from the local face and date [`local_clock_time`] and [`local_calendar_date`]
-/// read: the local hour:minute minus the UTC hour:minute, plus a day when the local date is not the
-/// UTC one. The date is what tells +13 from -11 and +14 from -10, which an hour:minute alone
-/// cannot. Whole-minute offsets only (every zone in use); `None` where either read is.
-///
-/// Like them it is the os layer's read of the zone, whose one caller is the application's clock door
-/// (`app::clock::wall`), which publishes the offset beside the time.
-pub fn local_utc_offset(seconds: i64) -> Option<i32> {
-    utc_offset_between(seconds, local_clock_time(seconds)?, local_calendar_date(seconds)?)
-}
-
-/// [`local_utc_offset`] from the reads it is made of, so the arithmetic is testable without a zone.
-/// The seconds of the minute are the same in the local and UTC faces, so they cancel. An answer
-/// beyond a day's travel east or west of UTC is a face that cannot belong to `seconds`: `None`.
-fn utc_offset_between(seconds: i64, [hour, minute]: [i32; 2], [year, month, day]: [i32; 3]) -> Option<i32> {
-    let utc_second = seconds.rem_euclid(86_400);
-    let local_day = days_from_civil(year, month, day)?;
-    let local_second = i64::from(hour) * 3_600 + i64::from(minute) * 60 + utc_second % 60;
-    let offset = (local_day - seconds.div_euclid(86_400)) * 86_400 + local_second - utc_second;
-    (offset.abs() <= 15 * 3_600).then(|| i32::try_from(offset).ok()).flatten()
-}
-
-/// Days since 1970-01-01 of a proleptic Gregorian civil date; `None` for a date that is not on the
-/// calendar. (Howard Hinnant's `days_from_civil`.)
-fn days_from_civil(year: i32, month: i32, day: i32) -> Option<i64> {
-    icu_calendar::Date::try_new_gregorian(year, u8::try_from(month).ok()?, u8::try_from(day).ok()?).ok()?;
-    let y = i64::from(year) - i64::from(month <= 2);
-    let era = y.div_euclid(400);
-    let year_of_era = y - era * 400;
-    let day_of_year = (153 * (i64::from(month) + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    Some(era * 146_097 + day_of_era - 719_468)
-}
-
 /// The civil date `stamp` falls on in the operating system's timezone, for any `time_t` (a stamp
 /// before 1970 included, which [`local_calendar_date`] refuses).
 fn civil_date_of(stamp: libc::time_t) -> Option<[i32; 3]> {
