@@ -1417,11 +1417,22 @@ mod tests {
         let render_proof = ResolvePort::new(evidence, Arc::new(Certified { dovi: None,
             subtitle: Some(source_subtitle.clone()), expired: false, mapped: true }));
         assert!(matches!(render_proof.qualify(&off, subtitle_request()), Verdict::Known(_)));
-        let mut off_request = request();
-        off_request.dolby_vision = plx_data::metadata::Dovi::NONE;
-        off_request.subtitle_choice = TrackChoice::Off;
-        assert!(matches!(render_proof.qualify(&off, off_request), Verdict::Refused(UriDecline::SubtitleOff)),
+        let off_request = || { let mut input = request(); input.dolby_vision = plx_data::metadata::Dovi::NONE;
+            input.subtitle_choice = TrackChoice::Off; input };
+        assert!(matches!(render_proof.qualify(&off, off_request()), Verdict::Refused(UriDecline::SubtitleOff)),
             "the native driver cannot disable an otherwise selectable subtitle");
+        // A driver that carries Off (its pipeline is given no subtitle, the Tizen host's) is asked, and certifies it.
+        let carries_off = Capabilities { subtitle_off: true, ..evidence.callable };
+        let off_evidence = ProductEvidence { callable: carries_off,
+            certified: Capabilities { subtitle_off: true, ..evidence.certified }, ..evidence };
+        let off_driver = ResolvePort::new(off_evidence, Arc::new(Certified { dovi: None,
+            subtitle: None, expired: false, mapped: true }));
+        assert!(matches!(off_driver.qualify(&off, off_request()), Verdict::Known(_)),
+            "Off is refused only where the driver cannot carry it");
+        // Callable is not enough: Off must also be certified.
+        let uncertified = ResolvePort::new(ProductEvidence { callable: carries_off, ..evidence },
+            Arc::new(Certified { dovi: None, subtitle: None, expired: false, mapped: true }));
+        assert!(matches!(uncertified.qualify(&off, off_request()), Verdict::Refused(UriDecline::SubtitleOff)));
     }
 
     // ---- why the Experimental engine did not take a play (`UriDecline`) ----
