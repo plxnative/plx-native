@@ -226,11 +226,17 @@ pub(crate) fn hide() {
 }
 
 /// The context and the library, at the window's end. HOST THREAD, before the window is freed.
+///
+/// The ask is forgotten and the panel hidden BEFORE the context is deleted, as the embedder does: a HIDE the
+/// module reports while the context goes is then ours, never the viewer's, and nothing is pushed for it.
 pub(crate) fn release() {
+    panel().dismissed_by_us();
     let ctx = CONTEXT.swap(std::ptr::null_mut(), Ordering::SeqCst);
-    // SAFETY: the context this module made, deleted once; the library initialised once.
+    // SAFETY: the context this module made, hidden and deleted once; the library initialised once.
     unsafe {
         if !ctx.is_null() {
+            ecore_imf_context_input_panel_hide(ctx);
+            ecore_imf_context_focus_out(ctx);
             ecore_imf_context_del(ctx);
         }
         if INITIALISED.swap(false, Ordering::SeqCst) {

@@ -65,8 +65,10 @@ pub struct WindowPlan {
 
 /// The platform's window, bus and pointer, as the application drives them: the SDL window and its
 /// surface, the opaque-region hint, the platform bus pump, and the visibility of the Magic Remote's
-/// pointer. Every call runs on the loop thread, and every hook is required: a platform with nothing
-/// to do states a no-op, as the desktop and the test-only host platform do.
+/// pointer. Every call runs on the loop thread, and every hook is required (a platform with nothing
+/// to do states a no-op, as the desktop and the test-only host platform do) except the three keyboard
+/// hooks, whose defaults are SDL's own calls: a platform whose keyboard is not SDL's (Tizen) states them,
+/// and does the work on whatever thread its toolkit needs.
 ///
 /// `init` and `open` are the two steps that bring the surface up, and they are two because the
 /// application reads the stored session between them (the window size is a setting): SDL and the GL

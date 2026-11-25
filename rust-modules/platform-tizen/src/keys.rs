@@ -6,10 +6,11 @@
 //! row with `None`: known, and dropped.
 //!
 //! **Emulator codes only; a retail remote is unmeasured.** The rows marked [`Basis::Measured`] are the
-//! emulator's, observed with a key injector and read off the diagnostics panel (`docs/platform-ports.md`,
+//! emulator's. Six were observed with a key injector and read off the diagnostics panel (`docs/platform-ports.md`,
 //! E7 and E11): Right (keycode 114), Left (113), Up (111), Down (116), Return (36) and the colour button
-//! `XF86Color` (385), and the three keys the system keyboard's panel sends ([`crate::ime`]): `BackSpace` (22, its delete key),
-//! `Select` (0, its Done) and `Cancel` (231, Back while it is up). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
+//! `XF86Color` (385). Three are the keys the system keyboard's panel sends to the window ([`crate::ime`]), read
+//! off the key log while pressing the panel itself (`docs/tizen.md`, "The system keyboard", 2026-11-25):
+//! `BackSpace` (22, its delete key), `Select` (0, its Done) and `Cancel` (231, Back while it is up). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
 //! documented as, or inferred from the Samsung remote's layout, and no run has pressed it. The first
 //! retail key dump replaces this table, and a row that turns out wrong is a wrong row here and nowhere else.
 //!
@@ -21,7 +22,8 @@ use plxnative_modules::host::{Action, Edge};
 /// How a row got into the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Basis {
-    /// Observed on the emulator (E7, E11).
+    /// Observed on the emulator: E7 and E11 with a key injector, and the system keyboard's three keys pressed on its
+    /// own panel (`docs/tizen.md`, "The system keyboard", 2026-11-25).
     Measured,
     /// Documented or inferred; not pressed on any device.
     Unverified,
