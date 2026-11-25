@@ -41,6 +41,7 @@ mod exports;
 mod host_abi;
 mod hosted;
 mod identity;
+mod ime;
 mod keys;
 mod launch;
 mod layout;

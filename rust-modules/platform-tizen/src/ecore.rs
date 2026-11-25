@@ -247,6 +247,7 @@ impl Window {
             window.destroy();
             return Err(code);
         }
+        crate::ime::bind_window(window.window);
         Ok(window)
     }
 
@@ -392,6 +393,8 @@ impl Window {
             return;
         }
         self.initialised = false;
+        // The keyboard's context goes before the window it types into.
+        crate::ime::release();
         // SAFETY: handles made by `create`, each cleared after use; the tables were live to make them.
         unsafe {
             for handler in self.handlers.drain(..) {

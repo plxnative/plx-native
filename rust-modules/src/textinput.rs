@@ -86,6 +86,7 @@
 //! text-input one, and it is not in this module's gift.
 #![allow(dead_code)]
 
+use crate::app::platform::Shell;
 use crate::app::SDL_WINDOW_INPUT_FOCUS;
 use plx_base::eventlog::log;
 use std::os::raw::c_void;
@@ -159,8 +160,10 @@ fn has_focus() -> Option<bool> {
 
 /// Does this build/firmware claim a system keyboard? Probed, never assumed — see the module doc.
 /// A `false` here means the field can still be typed into by other means but no panel will rise.
-pub(crate) fn available() -> bool {
-    plx_shell_sdl::text::has_screen_keyboard()
+/// The platform's answer (`Shell::keyboard_available`): SDL's on the television and a desktop, Ecore
+/// IMF's on Tizen.
+pub(crate) fn available(shell: &dyn Shell) -> bool {
+    shell.keyboard_available()
 }
 
 /// Raise the keyboard. Idempotent: calling it while the panel is already up is not an error, and
@@ -170,7 +173,7 @@ pub(crate) fn available() -> bool {
 /// free on this platform: it re-issues `WebOSShowScreenKeyboard` — a real `text_model` IME
 /// activation over wayland — each time. [`STARTED`] is what makes the contract true rather than
 /// merely harmless.
-pub(crate) fn start() {
+pub(crate) fn start(shell: &dyn Shell) {
     unsafe {
         if *addr_of!(STARTED) {
             return;
@@ -188,18 +191,18 @@ pub(crate) fn start() {
         // `focus=0` means SDL will enable text events and then silently skip the panel.
         log(&format!(
             "keyboard: start support={} focus={}",
-            i32::from(available()),
+            i32::from(available(shell)),
             match has_focus() {
                 Some(f) => i32::from(f).to_string(),
                 None => "?".into(), // bind() was never called — a boot-order bug, not a TV fact
             }
         ));
-        plx_shell_sdl::text::start_input();
+        shell.show_keyboard();
     }
 }
 
 /// Dismiss it. Also idempotent.
-pub(crate) fn stop() {
+pub(crate) fn stop(shell: &dyn Shell) {
     unsafe {
         // Guarded, and not only for symmetry: `screens::search::SearchScreen` requests this on
         // every BACK and every leave, including ones where the field was never edited. Unguarded, that would call
@@ -215,7 +218,7 @@ pub(crate) fn stop() {
         // panel simply never returns — which looks exactly like the driver's own reopen wedge and
         // is not it. With both transitions logged, one log answers which of the two you have.
         log("keyboard: stop");
-        plx_shell_sdl::text::stop_input();
+        shell.hide_keyboard();
     }
 }
 

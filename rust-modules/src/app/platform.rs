@@ -123,6 +123,24 @@ pub trait Shell: Sync {
     /// What this platform does around the frame's present: its pacer and its present hooks
     /// ([`FrameSeam`]). A platform with nothing to do states [`FrameSeam::NONE`].
     fn frame(&self) -> &'static FrameSeam;
+    /// Whether this platform has a system on-screen keyboard to raise (`textinput::available`). Probed, never
+    /// assumed. The SDL shells take the default, SDL's own answer (`SDL_HasScreenKeyboardSupport`); a platform
+    /// whose keyboard is not SDL's (Tizen's Ecore IMF) states its own, with [`show_keyboard`](Shell::show_keyboard)
+    /// and [`hide_keyboard`](Shell::hide_keyboard) beside it. Its commits arrive through [`EventSink::text`] (an SDL
+    /// shell's through `poll`), and a dismissal the platform made by itself through
+    /// [`EventSink::keyboard_dismissed`].
+    fn keyboard_available(&self) -> bool {
+        plx_shell_sdl::text::has_screen_keyboard()
+    }
+    /// Raise the keyboard (`textinput::start`, which keeps the "have I asked" edge, so this runs once per raise).
+    /// SDL's `SDL_StartTextInput` by default.
+    fn show_keyboard(&self) {
+        plx_shell_sdl::text::start_input()
+    }
+    /// Dismiss it (`textinput::stop`, once per dismissal). SDL's `SDL_StopTextInput` by default.
+    fn hide_keyboard(&self) {
+        plx_shell_sdl::text::stop_input()
+    }
 }
 
 /// The window the application presents to and reads events from, owned by `App` for the rest of the
@@ -201,6 +219,11 @@ pub trait EventSink {
     fn key(&mut self, action: Option<Action>, raw: Option<RawKey>, edge: Edge) -> bool;
     /// One commit from the platform's text input, possibly empty.
     fn text(&mut self, text: &str);
+    /// The platform took its on-screen keyboard down by itself (the viewer closed it on the panel), after a
+    /// [`Shell::show_keyboard`]: the application drops the field's keyboard ownership as it does when the OS
+    /// takes the screen away, so the next OK on the field raises the panel again. A platform that cannot tell
+    /// (SDL's: `textinput` records why) never calls it.
+    fn keyboard_dismissed(&mut self);
     /// One pointer event at authored 1920x1080 coordinates.
     fn pointer(&mut self, x: f32, y: f32, edge: PointerEdge);
     /// One tick of the wheel, in signed whole ticks.
@@ -696,6 +719,9 @@ mod tests {
                 true
             }
             fn text(&mut self, _: &str) {
+                self.0 += 1;
+            }
+            fn keyboard_dismissed(&mut self) {
                 self.0 += 1;
             }
             fn pointer(&mut self, _: f32, _: f32, _: PointerEdge) {
