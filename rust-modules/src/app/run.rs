@@ -7090,6 +7090,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                 markers: Vec::new(),
                 chapters: (1..=2).map(chapter).collect(),
                 hdr: false,
+                sub_choice: Default::default(),
             }))));
             super::super::bridge::nav_push(&mut app.pages, AppArg::Player);
             frame(&mut app, 16);

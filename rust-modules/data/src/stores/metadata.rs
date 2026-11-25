@@ -234,8 +234,12 @@ pub enum MetadataCmd {
     /// server: `audio_sid` / `subtitle_sid` (`0` = Off) become the `selected` streams of the loaded
     /// page's copy of `(sid, rk)`'s tracks, so the first start plans what was picked. Lands only on
     /// the page that holds that item's streams (the item's own page, or the show page whose
-    /// backfilled streams are that episode's).
-    PatchTracks { sid: ServerId, rk: String, audio_sid: i64, subtitle_sid: i64 },
+    /// backfilled streams are that episode's). `sub_choice` is the viewer's standing decision about
+    /// the subtitle (`Off` outranks the account's subtitle rule at the start; see
+    /// [`crate::metadata::SubChoice`]), carried by the picker, not derived from `subtitle_sid`: an
+    /// audio-only pick on an item whose subtitle the viewer never touched sends `subtitle_sid: 0`
+    /// and must not read as "Off chosen".
+    PatchTracks { sid: ServerId, rk: String, audio_sid: i64, subtitle_sid: i64, sub_choice: crate::metadata::SubChoice },
     MarkSkipped(crate::metadata::Marker),
     RetirePlaying,
     RetirePlayingItem,

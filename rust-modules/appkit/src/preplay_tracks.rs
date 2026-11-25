@@ -34,7 +34,7 @@
 
 use plx_data::metadata::sub_layout::{self, SubHeader, SubRow};
 use plx_data::metadata::track_names::TrackNames;
-use plx_data::metadata::Stream;
+use plx_data::metadata::{Stream, SubChoice};
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
 use plx_machine::machine::Measure;
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
@@ -243,15 +243,21 @@ pub struct Selection {
     pub audio_sid: i64,
     /// `0` is Off.
     pub subtitle_sid: i64,
+    /// Whether the viewer has chosen Off, which the plan ranks above the account's subtitle rule
+    /// ([`SubChoice`]). Not derivable from `subtitle_sid == 0`: an audio-only pick on an item whose
+    /// subtitle was never touched also sends `0`.
+    pub sub_choice: SubChoice,
     /// Only for the half the viewer changed.
     pub audio_memo: Option<AudioMemo>,
     pub subtitle_memo: Option<SubtitleMemo>,
 }
 
 /// Apply `pick` over `now`: the new choice and everything [`commit`] writes. `None` for a drill-in
-/// or an index off the list.
-pub fn select(set: TrackSet<'_>, now: Chosen, pick: Pick) -> Option<Selection> {
+/// or an index off the list. `choice` is the viewer's standing subtitle decision so far: a subtitle
+/// row (Off or a track) replaces it, an audio pick keeps it.
+pub fn select(set: TrackSet<'_>, now: Chosen, choice: SubChoice, pick: Pick) -> Option<Selection> {
     let mut next = now;
+    let mut sub_choice = choice;
     let (mut audio_memo, mut subtitle_memo) = (None, None);
     match pick {
         Pick::Open(_) => return None,
@@ -267,6 +273,7 @@ pub fn select(set: TrackSet<'_>, now: Chosen, pick: Pick) -> Option<Selection> {
                 set.subs.get(i)?;
             }
             next.sub = sub;
+            sub_choice = if sub.is_none() { SubChoice::Off } else { SubChoice::Server };
             if sub != now.sub {
                 subtitle_memo = Some(sub.map_or(SubtitleMemo::Off, |i| plx_media::route::memo_of_subtitle(&set.subs[i])));
             }
@@ -276,6 +283,7 @@ pub fn select(set: TrackSet<'_>, now: Chosen, pick: Pick) -> Option<Selection> {
         chosen: next,
         audio_sid: set.audio.get(next.audio).map_or(0, |s| s.id),
         subtitle_sid: next.sub.map_or(0, |i| set.subs[i].id),
+        sub_choice,
         audio_memo,
         subtitle_memo,
     })
@@ -318,6 +326,9 @@ pub struct PickerState {
     /// What the panel reads as chosen: the server's selection at open, then each pick's
     /// [`Selection::chosen`] (the host contract in the module doc).
     now: Chosen,
+    /// The viewer's Off, once chosen ([`SubChoice`]); the panel's own record, since `now.sub: None`
+    /// reads "Off" for an item whose subtitle the viewer never touched too.
+    sub_choice: SubChoice,
     pages: PageStack<PickPage, PickRow>,
     pub form: FormTable<PickRow, (), PickPage>,
     pub motion: PanelMotion,
@@ -330,6 +341,7 @@ impl PickerState {
         let mut s = Self {
             now: chosen(TrackSet { audio: &tracks.audio, subs: &tracks.subs }),
             tracks,
+            sub_choice: SubChoice::Server,
             pages: PageStack::new(),
             form: FormTable::new(plx_ui::table_screen::BAND_BASE),
             motion: PanelMotion::new(),
@@ -399,9 +411,10 @@ impl PickerState {
                 self.push(page, id);
                 Outcome::Pushed
             }
-            pick => match select(self.set(), self.now, pick) {
+            pick => match select(self.set(), self.now, self.sub_choice, pick) {
                 Some(sel) => {
                     self.now = sel.chosen;
+                    self.sub_choice = sel.sub_choice;
                     let form = self.page_form(self.page());
                     self.form.set_sliding(form, Some(&id));
                     Outcome::Picked(sel)
@@ -491,6 +504,7 @@ pub fn patch_command(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection
         rk: tracks.rk.clone(),
         audio_sid: sel.audio_sid,
         subtitle_sid: sel.subtitle_sid,
+        sub_choice: sel.sub_choice,
     }
 }
 
@@ -546,12 +560,17 @@ mod tests {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
         let now = chosen(set);
-        let on = select(set, now, Pick::Subtitle(Some(1))).unwrap();
+        let on = select(set, now, SubChoice::Server, Pick::Subtitle(Some(1))).unwrap();
         assert_eq!((on.audio_sid, on.subtitle_sid), (102, 202), "the audio half is kept, not erased");
         assert!(on.audio_memo.is_none() && on.subtitle_memo.is_some());
-        let off = select(set, on.chosen, Pick::Subtitle(None)).unwrap();
+        let off = select(set, on.chosen, on.sub_choice, Pick::Subtitle(None)).unwrap();
         assert_eq!((off.audio_sid, off.subtitle_sid), (102, 0));
         assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off));
+        assert_eq!((on.sub_choice, off.sub_choice), (SubChoice::Server, SubChoice::Off));
+        // Off sticks across an audio pick; a never-touched subtitle is not "Off chosen" by one.
+        let audio = select(set, off.chosen, off.sub_choice, Pick::Audio(0)).unwrap();
+        assert_eq!(audio.sub_choice, SubChoice::Off);
+        assert_eq!(select(set, now, SubChoice::Server, Pick::Audio(0)).unwrap().sub_choice, SubChoice::Server);
     }
 
     #[test]
@@ -559,11 +578,11 @@ mod tests {
         let (audio, subs) = item();
         let set = TrackSet { audio: &audio, subs: &subs };
         let now = chosen(set);
-        let sel = select(set, now, Pick::Audio(0)).unwrap();
+        let sel = select(set, now, SubChoice::Server, Pick::Audio(0)).unwrap();
         assert_eq!((sel.audio_sid, sel.subtitle_sid), (101, 0));
         assert!(sel.audio_memo.is_some() && sel.subtitle_memo.is_none());
-        assert!(select(set, now, pick_of(PickRow::OpenAudio)).is_none());
-        assert!(select(set, now, Pick::Audio(9)).is_none());
+        assert!(select(set, now, SubChoice::Server, pick_of(PickRow::OpenAudio)).is_none());
+        assert!(select(set, now, SubChoice::Server, Pick::Audio(9)).is_none());
     }
 
     fn picker() -> PickerState {

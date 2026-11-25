@@ -1737,6 +1737,10 @@ pub struct Detail {
     pub crew: Vec<Cast>,
     pub audio: Vec<Stream>,
     pub subs: Vec<Stream>,
+    /// The viewer's Off for this item's subtitle, chosen before playback ([`SubChoice`]). Session
+    /// state, never persisted; it describes `audio`/`subs` above, so [`parse_streams`] resets it.
+    #[serde(skip)]
+    pub sub_choice: SubChoice,
     pub seasons: Vec<Season>,   // shows only
     pub episodes: EpisodeList, // the currently-selected season
     /// SHOWS: the episode the SERVER says is next to watch (`OnDeck`, one request, no extra round
@@ -2438,6 +2442,7 @@ fn fetch_detail(client: &'static plx_plex::plex::Client, sid: plx_plex::plex::Se
         crew: crew_credits(&it),
         audio: Vec::new(),
         subs: Vec::new(),
+        sub_choice: SubChoice::Server,
         seasons: Vec::new(),
         episodes: EpisodeList::default(),
         on_deck: it
@@ -2746,6 +2751,7 @@ fn parse_streams(it: &plx_plex::plex::Metadata, d: &mut Detail) {
         let s = convert_streams(&p.stream);
         d.audio = s.audio;
         d.subs = s.subs;
+        d.sub_choice = SubChoice::Server;
         d.video = s.video;
         d.hdr = s.hdr;
         d.dovi = s.dovi;
@@ -2765,6 +2771,24 @@ fn parse_streams(it: &plx_plex::plex::Metadata, d: &mut Detail) {
 // third instance of it: the Chapters tab and strip used to read `current()`, so an episode played
 // from a SHOW page found a show container (which carries no Chapter[]) and the tab silently
 // vanished — while a `current()` holding some OTHER leaf would have seeked with its offsets.
+
+/// **Whether the viewer has decided the item's subtitle before playback** (#1532): the one typed
+/// answer to "is the Off on this item the server's / the account's rule, or the viewer's own?".
+///
+/// A track the viewer picks needs no variant: it is the `selected` flag [`MetadataCmd::PatchTracks`]
+/// sets, which the plan already ranks above every account and show rule. Off is the case no flag can
+/// say (nothing selected is also what an untouched item with no server selection looks like, and the
+/// account's "always show" rule then turns a track on), so it is a value of its own and the plan's
+/// ladder ranks it with the viewer's own pick (`route::pick_subtitle`). It lives on the page that
+/// holds the item's streams and is reset wherever those streams are parsed afresh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SubChoice {
+    /// The viewer has not chosen Off: the selection flags and then the rules decide.
+    #[default]
+    Server,
+    /// The viewer chose no subtitle for this item.
+    Off,
+}
 
 #[derive(Clone)]
 pub struct PlayingItem {
@@ -2811,6 +2835,9 @@ pub struct PlayingItem {
     /// (`convert_streams`' `hdr`). The SOURCE's fact, not the picture's: a server re-encode to SDR
     /// keeps it true, so the HDR overlay dim also asks the route (`route::overlay_gain`).
     pub hdr: bool,
+    /// The viewer's Off chosen before playback ([`SubChoice`]); `Server` for an item fetched at
+    /// play time.
+    pub sub_choice: SubChoice,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2835,6 +2862,7 @@ impl PlayingItem {
             markers: Vec::new(),
             chapters: Vec::new(),
             hdr: false,
+            sub_choice: SubChoice::Server,
         }
     }
 }
@@ -2885,6 +2913,7 @@ fn cached_playing(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
             markers: d.markers.clone(),
             chapters: d.chapters.clone(),
             hdr: d.hdr,
+            sub_choice: d.sub_choice,
         })
 }
 
@@ -2949,13 +2978,18 @@ fn preplay_tracks(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
 /// ([`cached_playing`]) reads the pick through the same `selected` flags it reads for a server's own
 /// selection. Lands on the page that holds the item's streams ([`preplay_tracks`]'s two shapes) and
 /// nowhere else. Returns whether a flag moved.
-fn patch_tracks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, audio_sid: i64, subtitle_sid: i64) -> bool {
+fn patch_tracks(
+    state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, audio_sid: i64, subtitle_sid: i64,
+    sub_choice: SubChoice,
+) -> bool {
     let holds = current(state).is_some_and(|d| {
         d.sid == sid
             && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || hero_episode(d, rk).is_some())
     });
     let Some(d) = state.current.as_mut().filter(|_| holds) else { return false };
-    let mut moved = false;
+    // Off and a selected subtitle cannot both hold: the choice wins.
+    let subtitle_sid = if sub_choice == SubChoice::Off { 0 } else { subtitle_sid };
+    let mut moved = std::mem::replace(&mut d.sub_choice, sub_choice) != sub_choice;
     for (list, want) in [(&mut d.audio, audio_sid), (&mut d.subs, subtitle_sid)] {
         for s in list.iter_mut() {
             let on = s.id == want;
@@ -3103,6 +3137,7 @@ fn playing_item_of(
         markers,
         chapters,
         hdr,
+        sub_choice: SubChoice::Server,
     }
 }
 
@@ -4441,7 +4476,9 @@ pub fn run_with_keys(state: &mut MetadataState, adapter: &std::sync::Arc<Metadat
             true
         }
         MetadataCmd::AppendPlayingSub { sid, rk, stream } => append_playing_sub(state, sid, &rk, stream),
-        MetadataCmd::PatchTracks { sid, rk, audio_sid, subtitle_sid } => patch_tracks(state, sid, &rk, audio_sid, subtitle_sid),
+        MetadataCmd::PatchTracks { sid, rk, audio_sid, subtitle_sid, sub_choice } => {
+            patch_tracks(state, sid, &rk, audio_sid, subtitle_sid, sub_choice)
+        }
         MetadataCmd::MarkSkipped(m) => {
             mark_skipped(state, m);
             true

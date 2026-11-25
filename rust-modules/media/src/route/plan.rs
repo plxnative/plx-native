@@ -1925,6 +1925,12 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             };
             let reselected = env.with_selection_for_part(plan.part_id);
             let env = reselected.as_ref().unwrap_or(env);
+            // The Off the viewer chose before playback (`PlayingItem::sub_choice`) leaves no subtitle
+            // selected for any later reader of the flags (the server-selected sidecar, the log, the
+            // write-back) to restore; `pick_subtitle` ranks the choice itself.
+            if let Some(item) = plan.playing.as_mut().filter(|item| item.sub_choice == plx_data::metadata::SubChoice::Off) {
+                for sub in &mut item.subs { sub.selected = false; }
+            }
             if let (Some(id), Some(item)) = (env.subtitle_override, plan.playing.as_mut()) {
                 // The retry's explicit selection owns both embedded and sidecar restoration; a stale
                 // server-side selection must not turn subtitles back on after the viewer chose Off.
@@ -4317,7 +4323,8 @@ fn pick_dp_subtitle_account(
 /// Which rung of the subtitle ladder decided what is on screen ([`pick_subtitle`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SubPickSource {
-    /// Rung 1: this playback's own pick (a known retry).
+    /// Rung 1: this playback's own pick: a known retry's, or the Off the viewer chose before
+    /// playback (`PlayingItem::sub_choice`).
     Override,
     /// Rung 3: what the profile remembered for the show (a track, Off, or Forced only).
     Memory,
@@ -4346,7 +4353,9 @@ pub(super) struct SubDecision {
 /// otherwise falls through to the next. Never to Off, except a remembered Off and Forced only (the
 /// forced track or nothing): those two never fall through themselves, but they are memory like a
 /// remembered track, so rungs 1 and 2 outrank all three alike.
-///   1. this playback's own pick (`override_id`, a known retry);
+///   1. this playback's own pick: `override_id` (a known retry), or the Off the viewer chose before
+///      playback (`PlayingItem::sub_choice`), which outranks memory, the server's selection, the
+///      show's settings and the account's rule alike, and consults no memory;
 ///   2. a subtitle the SERVER has selected and the app draws itself
 ///      (`metadata::server_selected_sidecar`): memory is not consulted, and the server's pick stands;
 ///   3. what the profile remembered for the show: a track (`track_memory::match_subtitle`; a
@@ -4369,6 +4378,9 @@ pub(super) fn pick_subtitle(
             .position(|s| s.id == id && !s.external && embedded_subtitle_renderable(&s.codec))
             .and_then(|i| (id > 0).then_some((id, plx_data::metadata::sub_render_ordinal(subs, i))));
         return SubDecision { pick, source: SubPickSource::Override, miss: None };
+    }
+    if item.sub_choice == plx_data::metadata::SubChoice::Off {
+        return SubDecision { pick: None, source: SubPickSource::Override, miss: None };
     }
     let mut miss = None;
     if let Some(memo) = consulted_memory(item, override_id, memory) {
