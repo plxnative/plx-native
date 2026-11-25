@@ -3079,7 +3079,9 @@ impl Session {
 
     /// Record one profile's library order, replacing its previous one and leaving every other
     /// profile's alone. A library with no machine id cannot be named across a restart, so it is not
-    /// recorded ([`LastLibrary::set`]'s rule); a list left empty forgets the record.
+    /// recorded ([`LastLibrary::set`]'s rule); a list left empty forgets the record. WHAT to store (an
+    /// offline server's entries carried, a record that says nothing dropped) is
+    /// `library_order::merged`'s decision, made before this is called.
     pub fn set_order_for(&mut self, user: &str, libs: &[(String, i64)]) {
         self.prefs.library_order.retain(|order| order.user != user);
         let libs: Vec<OrderedLib> = libs.iter().filter(|(machine, _)| !machine.is_empty())

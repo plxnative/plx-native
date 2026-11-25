@@ -338,9 +338,10 @@ pub struct Preferences {
     /// Keyed like [`Preferences::last_library`] and for its reasons: by profile, and by (machine id,
     /// section key), never a section INDEX. **An absent record is the server order**, and a library the
     /// record does not name (a new one, a share that arrived later) falls at its default position
-    /// relative to the ones it does ([`crate::plex::library_order`]). Choosing an order that equals
-    /// the server order deletes the record rather than recording it, so the list holds only profiles
-    /// that really reordered.
+    /// relative to the ones it does ([`crate::plex::library_order`]). Choosing an order that says
+    /// nothing the server order does not (and leaves no offline server's entries behind) deletes the
+    /// record rather than recording it, so the list holds only profiles that really reordered; the one
+    /// rule is `library_order::merged`.
     ///
     /// Cleared with the credentials at sign-out (`storage::state::ACCOUNT_BOUND_PREFERENCES`) and,
     /// like [`Preferences::last_library`], not stamped. Soft-parsed for the reason every list in this

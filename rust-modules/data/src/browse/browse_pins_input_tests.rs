@@ -57,7 +57,7 @@ fn a_commit_handed_a_signed_out_session_writes_nothing() {
     let mut browse = TestBrowse::default();
     seed_two_servers(&mut browse);
     browse.apply_pins_with(&[(2, true)], &Session::default());
-    assert!(browse.state.pending_pins.is_none(), "no write was queued");
+    assert!(browse.state.writes.get(super::WriteKind::Pins).is_none(), "no write was queued");
     plx_base::storage_worker::drain_for_test();
     assert!(peek().pins_for("u-owner").is_none(), "nothing reached the registry");
     assert!(browse.pinned(2), "the visible selection stands for this run");
@@ -111,7 +111,7 @@ fn a_receipt_landing_after_the_snapshot_is_never_paired_with_it() {
 }
 
 fn pending_write_saved(browse: &TestBrowse) -> Option<bool> {
-    browse.state.pending_pins.as_ref()
+    browse.state.writes.get(super::WriteKind::Pins)
         .map(|(_, write)| write.lock().unwrap_or_else(|e| e.into_inner()).saved())
 }
 

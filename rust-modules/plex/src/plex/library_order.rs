@@ -15,9 +15,14 @@
 //!   library whose server has not told us its machine id) falls at its default position relative to
 //!   the recorded ones: right after the library that precedes it in the default order.
 //! * **A recorded library that is not here** (its server is absent for now, or it was deleted) costs
-//!   nothing and keeps its record, so it returns to its place with its server.
-//! * **Only a real reorder is recorded**: [`is_server_order`] says whether an order is the default,
-//!   and the writer deletes the record instead of storing one that says nothing.
+//!   nothing in what is shown, and what the writer does with its record is [`merged`]'s rule: the
+//!   grain is the MACHINE, as in [`pins::carry_forward`](super::pins::carry_forward). A server that is
+//!   present has just been answered about in full; one that is not keeps its entries, each right
+//!   after the entry that preceded it, so it returns to its place with its server.
+//! * **ONE definition of "the record says nothing"**: [`state`] (what is shown and what Settings
+//!   offers) and [`merged`] (what the writer stores) both decide it from the record against the
+//!   libraries present, so a record is either deleted or [`OrderState::Saved`], whatever surface
+//!   asks. [`OrderState::Saved`]'s `in_effect` says whether it moves anything among them NOW.
 //!
 //! [`hub_library`] is the other half of Home's use of this: which library a `/hubs` shelf belongs to,
 //! from its `hubIdentifier` alone, so the answer does not depend on whether the shelf still holds
@@ -33,21 +38,48 @@ pub struct Lib<'a> {
     pub key: i64,
 }
 
+/// **What a profile's record is, against the libraries present now.** The one state every surface
+/// reads: the writer ([`merged`] deletes a record that would be `Server`), Home, the Library header
+/// and Settings' Reset row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OrderState {
+    /// No record: the server order. Reset has nothing to delete.
+    #[default]
+    Server,
+    /// A record exists. `in_effect` is whether it moves any library present now: with a friend's
+    /// server offline a record that only ranks that friend's libraries is saved yet shows nothing,
+    /// and Reset still has something to delete.
+    Saved { in_effect: bool },
+}
+
+impl OrderState {
+    /// Is a record there to delete (Settings' Reset)?
+    pub fn is_saved(self) -> bool { matches!(self, Self::Saved { .. }) }
+    /// Does the record move anything present now (what Home and the header project)?
+    pub fn in_effect(self) -> bool { matches!(self, Self::Saved { in_effect: true }) }
+}
+
+/// The record's state against `default` (the libraries present, in the server's own order).
+pub fn state(default: &[Lib<'_>], record: Option<&LibraryOrder>) -> OrderState {
+    let Some(record) = record.filter(|record| !record.libs.is_empty()) else { return OrderState::Server };
+    let order = effective(default, Some(record));
+    OrderState::Saved { in_effect: order.iter().enumerate().any(|(at, index)| at != *index) }
+}
+
 /// The effective order of `default` (libraries in the server's own order) under `record`: a
 /// permutation, each entry an index into `default`, first shown first.
 pub fn effective(default: &[Lib<'_>], record: Option<&LibraryOrder>) -> Vec<usize> {
+    place(default, record.map(|record| record.libs.iter().map(|lib| (lib.machine_id.as_str(), lib.key))).into_iter().flatten())
+}
+
+fn place<'a>(default: &[Lib<'_>], named: impl Iterator<Item = (&'a str, i64)>) -> Vec<usize> {
     let mut placed: Vec<usize> = Vec::with_capacity(default.len());
     let mut is_placed = vec![false; default.len()];
-    if let Some(record) = record {
-        for named in &record.libs {
-            if named.machine_id.is_empty() {
-                continue;
-            }
-            let found = default.iter().position(|lib| lib.machine_id == named.machine_id && lib.key == named.key);
-            if let Some(index) = found.filter(|index| !is_placed[*index]) {
-                is_placed[index] = true;
-                placed.push(index);
-            }
+    for (machine_id, key) in named.filter(|(machine_id, _)| !machine_id.is_empty()) {
+        let found = default.iter().position(|lib| lib.machine_id == machine_id && lib.key == key);
+        if let Some(index) = found.filter(|index| !is_placed[*index]) {
+            is_placed[index] = true;
+            placed.push(index);
         }
     }
     // In default order, so a run of unnamed libraries chains behind the nearest named one: each
@@ -66,9 +98,41 @@ pub fn effective(default: &[Lib<'_>], record: Option<&LibraryOrder>) -> Vec<usiz
     placed
 }
 
-/// Is `order` (from [`effective`]) the default order itself?
-pub fn is_server_order(order: &[usize]) -> bool {
-    order.iter().enumerate().all(|(at, index)| at == *index)
+/// **What the writer stores** when the profile chose `arrangement` (the favourites as the page showed
+/// them, `(machine id, key)` first shown first) over `previous` (the record the write meets) while
+/// `present` (every library the table holds, in the server's own order) is what it can see.
+///
+/// `None` is "no record": the merged record says nothing, so it is deleted. Otherwise the new list:
+///
+/// * the arrangement, minus libraries no record can name (no machine id) and duplicates;
+/// * plus every entry of `previous` whose MACHINE is not in `present` — silence is not an answer —
+///   each placed right after the entry that preceded it in `previous` (and at the front when none
+///   did), so an offline server's libraries return to where they were.
+///
+/// The decision is on that MERGED list: a record that still carries an absent server's entries says
+/// something even when the present libraries are in the server order, so only a list with nothing
+/// carried and no effect among `present` is `None`.
+pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], present: &[(String, i64)])
+    -> Option<Vec<(String, i64)>> {
+    let mut list: Vec<(String, i64)> = Vec::with_capacity(arrangement.len());
+    for (machine_id, key) in arrangement.iter().filter(|(machine_id, _)| !machine_id.is_empty()) {
+        if !list.iter().any(|(m, k)| m == machine_id && k == key) { list.push((machine_id.clone(), *key)); }
+    }
+    let fresh = list.len();
+    if let Some(previous) = previous {
+        let absent = |machine_id: &str| !machine_id.is_empty() && !present.iter().any(|(m, _)| m == machine_id);
+        for (at, entry) in previous.libs.iter().enumerate().filter(|(_, lib)| absent(&lib.machine_id)) {
+            if list.iter().any(|(m, k)| *m == entry.machine_id && *k == entry.key) { continue; }
+            let after = previous.libs[..at].iter().rev()
+                .find_map(|before| list.iter().position(|(m, k)| *m == before.machine_id && *k == before.key));
+            list.insert(after.map_or(0, |after| after + 1), (entry.machine_id.clone(), entry.key));
+        }
+    }
+    let carried = list.len() > fresh;
+    let default: Vec<Lib<'_>> = present.iter().map(|(machine_id, key)| Lib { machine_id, key: *key }).collect();
+    let moves = place(&default, list.iter().map(|(machine_id, key)| (machine_id.as_str(), *key)))
+        .iter().enumerate().any(|(at, index)| at != *index);
+    (carried || moves).then_some(list)
 }
 
 /// Which library a `/hubs` shelf belongs to, from its `hubIdentifier`: the per-library Recently
@@ -110,8 +174,9 @@ mod tests {
     fn no_record_is_the_server_order() {
         let order = effective(&libs(), None);
         assert_eq!(order, vec![0, 1, 2, 3, 4]);
-        assert!(is_server_order(&order));
-        assert!(is_server_order(&effective(&libs(), Some(&record(&[])))), "an empty record says nothing");
+        assert_eq!(state(&libs(), None), OrderState::Server);
+        assert_eq!(state(&libs(), Some(&record(&[]))), OrderState::Server, "an empty record says nothing");
+        assert_eq!(effective(&libs(), Some(&record(&[]))), order);
     }
 
     #[test]
@@ -119,7 +184,7 @@ mod tests {
         // a friend's share sits between the owner's own libraries
         let order = effective(&libs(), Some(&record(&[("A", 1), ("B", 2), ("A", 4), ("A", 5), ("B", 9)])));
         assert_eq!(order, vec![1, 3, 0, 2, 4]);
-        assert!(!is_server_order(&order));
+        assert_eq!(state(&libs(), Some(&record(&[("A", 1), ("B", 2), ("A", 4), ("A", 5), ("B", 9)]))), OrderState::Saved { in_effect: true });
     }
 
     #[test]
@@ -158,6 +223,60 @@ mod tests {
         let mut sorted = order.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1, 2, 3, 4], "a permutation");
+    }
+
+    /// One predicate: a record that names every library in the server order exists (Reset has
+    /// something to delete) but moves nothing; with the friend offline, so does one that only ranks
+    /// the friend's libraries.
+    #[test]
+    fn a_saved_record_that_moves_nothing_present_is_saved_not_in_effect() {
+        let in_server_order = record(&[("A", 4), ("A", 1), ("A", 5), ("B", 2), ("B", 9)]);
+        assert_eq!(state(&libs(), Some(&in_server_order)), OrderState::Saved { in_effect: false });
+        let friend_only = record(&[("B", 9), ("B", 2)]);
+        assert_eq!(state(&libs()[..3], Some(&friend_only)), OrderState::Saved { in_effect: false }, "B is offline");
+        assert!(state(&libs()[..3], Some(&friend_only)).is_saved());
+        assert!(!state(&libs()[..3], Some(&friend_only)).in_effect());
+        let anonymous = [Lib { machine_id: "", key: 1 }];
+        assert_eq!(state(&anonymous, Some(&record(&[("", 1)]))), OrderState::Saved { in_effect: false },
+            "an entry no library can match moves nothing, on every surface");
+    }
+
+    fn pairs(list: &[(&str, i64)]) -> Vec<(String, i64)> {
+        list.iter().map(|(machine, key)| ((*machine).to_owned(), *key)).collect()
+    }
+    fn present() -> Vec<(String, i64)> { pairs(&[("A", 4), ("A", 1), ("A", 5), ("B", 2), ("B", 9)]) }
+
+    #[test]
+    fn the_writer_deletes_a_record_that_says_nothing() {
+        assert_eq!(merged(None, &present(), &present()), None, "the server order, nothing recorded before");
+        let previous = record(&[("B", 9), ("B", 2)]);
+        assert_eq!(merged(Some(&previous), &present(), &present()), None, "B is present: its old answer is replaced");
+        assert_eq!(merged(None, &pairs(&[("", 1)]), &present()), None, "a library no record can name is not recorded");
+    }
+
+    #[test]
+    fn the_writer_keeps_an_offline_servers_entries_in_their_places() {
+        // B is offline: only A's libraries are present
+        let here = pairs(&[("A", 4), ("A", 1), ("A", 5)]);
+        let previous = record(&[("A", 5), ("B", 2), ("A", 4), ("B", 9), ("A", 1)]);
+        let list = merged(Some(&previous), &pairs(&[("A", 1), ("A", 5), ("A", 4)]), &here).unwrap();
+        // B/2 followed A/5 and B/9 followed A/4: each stays behind its predecessor
+        assert_eq!(list, pairs(&[("A", 1), ("A", 5), ("B", 2), ("A", 4), ("B", 9)]));
+        // choosing the server order of what is present still keeps B's entries: the record says
+        // something about B, and deleting it would lose it
+        let kept = merged(Some(&previous), &here, &here).unwrap();
+        assert_eq!(kept, pairs(&[("A", 4), ("B", 9), ("A", 1), ("A", 5), ("B", 2)]), "each still behind the entry that preceded it");
+
+    }
+
+    #[test]
+    fn an_entry_with_no_surviving_predecessor_leads() {
+        let here = pairs(&[("A", 4)]);
+        let previous = record(&[("B", 2), ("A", 4)]);
+        assert_eq!(merged(Some(&previous), &here, &here).unwrap(), pairs(&[("B", 2), ("A", 4)]));
+        // its predecessor was a present library the profile unfavoured: it follows the one before that
+        let previous = record(&[("A", 4), ("A", 9), ("B", 2)]);
+        assert_eq!(merged(Some(&previous), &here, &here).unwrap(), pairs(&[("A", 4), ("B", 2)]));
     }
 
     #[test]

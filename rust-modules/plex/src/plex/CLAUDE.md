@@ -378,9 +378,13 @@ The whole shared-source feature rests on keeping these apart:
   (`Preferences::library_order`, rules in `library_order.rs`, per profile, naming libraries by
   `(machineIdentifier, section key)`) ranks the FAVOURITE libraries across servers and governs
   exactly two surfaces, the order of Home's shelves (`pms::published_order`) and of the Library
-  header's pills (`DirectoryView::rows_for`). It never changes which libraries are favourites, the
-  tab strip, `section_of_kind`, Search or the Sources picker, and an absent record is the server order
-  (own servers first, then shares, each server's directory order).
+  header's pills (`DirectoryView::rows_for`), and it decides where a tab press lands when nothing was
+  visited or remembered (`section_of_kind`'s fallback and `repoint_cur` take the first-ordered favourite
+  of the type). It never changes which libraries are favourites, the tab strip's membership, Search or
+  the Sources picker, and an absent record is the server order (own servers first, then shares, each
+  server's directory order). One state, `library_order::OrderState`, says what the record is (none /
+  saved / saved and in effect); the writer's `merged` keeps an offline server's entries (the grain is
+  the machine, like `pins::carry_forward`) and deletes a record only when it says nothing.
 - **reachable** — a fact about NOW: something answered at one of its addresses, *as the right
   machine*. It changes while nobody touches anything, and it is never a reason to forget the grant
   or the pin.

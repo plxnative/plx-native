@@ -14,8 +14,11 @@ pub(super) enum Edit {
     Library { kind: String, machine: String, key: i64 },
     View { machine: String, key: i64, snapshot: ViewSnapshot, field: ViewField },
     Pins { libraries: Vec<(String, i64, bool, bool)>, on: Vec<bool>, touched: Vec<bool>, asked: bool },
-    /// The profile's Library order, whole: `(machine id, section key)` first shown first.
-    Order { libs: Vec<(String, i64)> },
+    /// The profile's Library order: `libs` is the favourites `(machine id, section key)` as the page
+    /// showed them, first shown first, and `present` is every library the table held then, in the
+    /// server's own order. `plex::library_order::merged` is the one place that turns them, with the
+    /// record the write meets, into what is stored (or into no record).
+    Order { libs: Vec<(String, i64)>, present: Vec<(String, i64)> },
     /// Back to the server order: the profile's record is deleted.
     OrderReset,
 }
@@ -43,8 +46,11 @@ impl Edit {
                 let fresh = plx_plex::plex::pins::record(user, *asked, &libraries, &answers);
                 next.set_pins_for(user, plx_plex::plex::pins::carry_forward(fresh, previous, &libraries));
             }
-            Self::Order { libs } => {
-                next.set_order_for(user, libs);
+            Self::Order { libs, present } => {
+                match plx_plex::plex::library_order::merged(current.order_for(user), libs, present) {
+                    Some(list) => next.set_order_for(user, &list),
+                    None => next.clear_order_for(user),
+                }
                 if next.prefs.library_order == current.prefs.library_order { return None; }
             }
             Self::OrderReset => {
@@ -75,11 +81,34 @@ impl BrowsePreferencesReq {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteOutcome { NotStarted, Finished(bool) }
+/// **Where a tracked preference write stands** (pins and Library order share it): what Settings reads
+/// to tell a saved choice from one that only stands for this run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WriteState {
+    /// No write of this kind has been made this run.
+    #[default]
+    Idle,
+    /// Queued or running; the choice shows, the disk does not have it yet.
+    InFlight,
+    /// The session holds it.
+    Saved,
+    /// The write was refused or did not persist: the choice still shows (the overlay keeps it), but
+    /// only for this run.
+    Failed,
+}
 #[derive(Default)]
 pub(super) struct Receipt { result: Option<WriteOutcome>, observed: Option<WriteOutcome> }
 impl Receipt {
     pub(super) fn observe(&mut self) { self.observed = self.result; }
     pub(super) fn saved(&self) -> bool { self.observed == Some(WriteOutcome::Finished(true)) }
+    /// The write's standing as of the last [`Self::observe`].
+    pub(super) fn state(&self) -> WriteState {
+        match self.observed {
+            None => WriteState::InFlight,
+            Some(WriteOutcome::Finished(true)) => WriteState::Saved,
+            Some(WriteOutcome::Finished(false) | WriteOutcome::NotStarted) => WriteState::Failed,
+        }
+    }
 }
 #[derive(Clone)]
 pub struct BrowsePreferencesPort { addr: Addr, receipt: Arc<Mutex<Receipt>> }
@@ -292,7 +321,7 @@ mod tests {
         assert_eq!(jobs.len(), 3, "library, query and pin persistence all leave as jobs");
         assert!(other_jobs.is_empty());
         assert!(state.states[0].unwatched, "the UI applies its edit before persistence");
-        assert!(state.pending_pins.is_some());
+        assert!(state.writes.state(crate::browse::WriteKind::Pins) != WriteState::Idle);
         for job in jobs {
             let crate::stores::StoreJob::BrowsePreferences(job, port) = job else { panic!("preference job") };
             assert_eq!(job.req.user, "captured-profile");

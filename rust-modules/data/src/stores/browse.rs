@@ -15,7 +15,7 @@ use super::StoreId;
 
 #[allow(unused_imports)] // Shared owner vocabulary; some members are feature/test specific.
 pub use crate::browse::{
-    Cursor, CursorAt, GenreEntry, LibraryOrderRow, LibraryType, PinCommit, SecFetch, SecKind, SortEntry, SourceState, SrcGroup, SrcRow,
+    Cursor, CursorAt, GenreEntry, LibraryOrderRow, LibraryType, OrderState, PinCommit, WriteState, SecFetch, SecKind, SortEntry, SourceState, SrcGroup, SrcRow,
 };
 #[allow(unused_imports)] // Shared owner vocabulary; some members are feature/test specific.
 pub use crate::browse::section_hubs::{HubsId, HubsSnapshot, HubsView, Publication};
@@ -89,9 +89,10 @@ pub enum BrowseCmd {
     /// question was put and every default was left alone.
     ApplyPins(Vec<(usize, bool)>),
     /// Settings' Library order: the profile's WHOLE order of its favourite libraries as the page
-    /// showed them, `(machine id, section key)` first shown first. An order equal to the server
-    /// order deletes the profile's record instead of recording it. Needs the session, like
-    /// [`Self::ApplyPins`], and is refused without one.
+    /// showed them, `(machine id, section key)` first shown first. An order that says nothing the
+    /// server order does not deletes the profile's record instead of recording it
+    /// (`plex::library_order::merged`); one that names no library is refused, Reset being the one
+    /// command that deletes. Needs the session, like [`Self::ApplyPins`], and is refused without one.
     SetLibraryOrder(Vec<(String, i64)>),
     /// Settings' Reset to server order: delete the profile's Library order record.
     ResetLibraryOrder,

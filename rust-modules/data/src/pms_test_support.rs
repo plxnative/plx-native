@@ -139,7 +139,7 @@ fn plain_row(slot: u16, rk: &str) -> PmsMovie {
 }
 
 pub(super) fn shelf(slot: u16, title: &str, hub_id: &str, rks: &[&str]) -> Shelf {
-    Shelf { library: 0, epoch: 0,
+    Shelf { library: ShelfLibrary::Unknown, epoch: 0,
         title: title.into(),
         hub_id: hub_id.into(),
         key: String::new(),
@@ -156,6 +156,7 @@ pub(super) fn shelf_in(slot: u16, sec: i64, title: &str, hub_id: &str, rks: &[&s
     for m in &mut sh.items {
         Arc::make_mut(m).sec = sec;
     }
+    sh.library = ShelfLibrary::projected(&sh.hub_id, &sh.items);
     sh
 }
 
