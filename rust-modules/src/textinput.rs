@@ -2,7 +2,17 @@
 //!
 //! Four calls wide: [`available`] asks whether this set has a panel, [`start`]/[`stop`] raise and
 //! dismiss it, and [`drain`] takes what has been typed. The app draws no keyboard of its own — the
-//! television draws it, over our surface, and hands the text back as ordinary SDL events.
+//! television draws it, over our surface, and hands the text back (as ordinary SDL events on webOS).
+//!
+//! ## The platform raises the panel, and on Tizen it is not SDL's
+//!
+//! [`available`], [`start`] and [`stop`] reach the panel through the platform's `Shell`
+//! (`keyboard_available`, `show_keyboard`, `hide_keyboard`). An SDL shell takes the trait's defaults,
+//! which are the SDL calls this note describes, so the television and a desktop are unchanged. Tizen
+//! states its own: Ecore IMF on the host's main thread (`plx_platform_tizen`'s `ime`), whose commits
+//! arrive through `EventSink::text` like an SDL `SDL_TEXTINPUT`, and whose panel says when the viewer
+//! closed it (`EventSink::keyboard_dismissed`, the keyboard drop a background edge also asks for).
+//! The SDL traps below are SDL's; there the focus read logs `focus=?` (no SDL window).
 //!
 //! ## Why this is plain SDL and not a webOS call
 //!
