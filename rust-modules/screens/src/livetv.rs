@@ -1,6 +1,13 @@
-//! Live TV reads its own retained store and composes two adjacent shared card shelves.
-//! Channel cards and current programmes both ask the content owner to play that channel.
-use plx_data::livetv::{LiveTvStatus, LiveTvView};
+//! The What's on page (Live TV's landing page, the handoff's `SPEC-1` / `SPEC-2`): the profile's Recent
+//! channels on top, the programmes airing now below, two adjacent shared card shelves over the store's one
+//! lineup. A Recent tile and a programme poster both ask the content owner to play their channel.
+//!
+//! **On now has one fixed order**: the most recent start first, a tie in lineup order. **Recent never
+//! reorders** (the store keeps it, newest first) and is hidden while it is empty, except that a page with
+//! neither a Recent channel nor a programme shows the first lineup channels in its place, so a guide that
+//! answered nothing is not a dead end. The page reads the frame's wall time ([`LiveTvLike::wall`]) for its
+//! captions and progress bars, and asks for a frame when the words of any airing change.
+use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView, MAX_RECENT};
 use plx_data::stores::{StoreCmd, StoreId};
 use plx_data::stores::livetv::LiveTvCmd;
 use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, Enter, EntryId, FocusKey, FocusTarget,
@@ -13,7 +20,9 @@ use plx_ui::page_regions::{Arrival, BackStep, PageRegions};
 use plx_ui::screen::{AxisMask, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind,
     GroupSpec, HitSource, Link, RenderStrategy, Screen, ScreenEvent, Seat};
 use plx_ui::theme;
-use plx_ui::widgets::{Art, PageGround, StatusKind, StatusOverlay};
+use plx_ui::fmt::{self, Airing, AiringPhase, Wall};
+use plx_ui::tile::Resume;
+use plx_ui::widgets::{AmbientWash, Art, PageGround, StatusKind, StatusOverlay};
 use plx_ui::{Env, Rect};
 use crate::registry::{captions, tile_facts, AppFx, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
 
@@ -22,24 +31,46 @@ pub(crate) mod cards_harness;
 
 const FIRST_CARD_ELEM: u32 = 0x1000;
 const RETRY_ELEM: u32 = 1;
-const CHANNELS_GROUP: GroupId = GroupId(0);
+const RECENT_GROUP: GroupId = GroupId(0);
 const NOW_GROUP: GroupId = GroupId(1);
 const HEAD_GROUP: GroupId = GroupId(2);
 const STATUS_GROUP: GroupId = GroupId(3);
-const SHELF_HEADING: f32 = TITLE_DY + CARD_DY;
-const HEAD_H: f32 = plx_ui::page_header::GRID_TOP;
-const STYLE: RowStyle = RowStyle::HOME;
-const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: HEAD_H, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - HEAD_H - MARGIN_Y };
+/// The handoff sets a heading in a 40 px line box whose top is the y it names (Recent at 244, On now at
+/// 488) and centres the 32 px type in it, which puts the cap-top this much below that y; a shelf here
+/// draws its heading at the cap-top, so every section starts this much lower and gives its heading
+/// this much less (the tiles stay where the board has them).
+const HEAD_INK_DROP: f32 = 8.0;
+/// A shelf's heading to its tiles: the handoff's 56 less [`HEAD_INK_DROP`] (a Home shelf keeps
+/// `TITLE_DY + CARD_DY`, 60).
+const SHELF_HEADING: f32 = 56.0 - HEAD_INK_DROP;
+const HEAD_H: f32 = plx_ui::page_header::GRID_TOP + HEAD_INK_DROP;
+/// Recent's tiles: a logo plate, 250 x 140 on the poster pitch, so a poster stands under each tile.
+const RECENT_STYLE: RowStyle = RowStyle::CHANNEL;
+const NOW_STYLE: RowStyle = RowStyle::HOME;
+/// The air from the bottom of Recent's tiles to the heading under them at rest (the handoff's 48): the
+/// collapsed label band plus [`RECENT_FOOT_REST`]. With a tile focused the band opens and the foot runs
+/// down to [`UNDER_LABEL_AIR`], which is the 552 the handoff gives the heading then.
+const RECENT_GAP_AT_REST: f32 = 48.0 + HEAD_INK_DROP;
+const RECENT_FOOT_REST: f32 = RECENT_GAP_AT_REST - plx_ui::cards::LABEL_BAND_COLLAPSED;
+const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: plx_ui::page_header::GRID_TOP, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - plx_ui::page_header::GRID_TOP - MARGIN_Y };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Sec { Head, Channels, Now, Status }
+enum Sec { Head, Recent, Now, Status }
 
 struct Page {
     entry: EntryId,
+    /// The lineup, one `(server, key)` per channel in the store's order (the cards' stable identities).
     channels: Vec<(plx_plex::plex::ServerId, String)>,
+    /// The channels with a programme on, as indexes into the lineup, in On now's one order: the most recent
+    /// start first, a tie in lineup order.
     airings: Vec<usize>,
+    /// Recent's channels, as indexes into the lineup, in the store's order (newest first).
+    recent: Vec<usize>,
     status: LiveTvStatus,
     synced: Option<u32>,
+    /// What the airings' words and bars were last drawn from ([`Page::clock_stamp`]); not state, a
+    /// frame's reason.
+    clock: u64,
     header_capsules: plx_ui::widgets::TabStrip,
     header_pop: plx_ui::widgets::CtlPop<1>,
     handoff: plx_ui::scroll_chrome::Handoff,
@@ -52,12 +83,31 @@ impl Page {
         self.synced = Some(view.revision());
         self.status = view.status;
         self.channels = view.tiles.iter().map(|m| (m.sid, m.rk.clone())).collect();
-        self.airings = view.channels.iter().enumerate().filter_map(|(i, c)| (!c.now.is_empty()).then_some(i)).collect();
+        self.airings = on_now_order(view.channels);
+        self.recent = view.recent.iter().filter_map(|r| lineup_index(view.channels, r)).collect();
+        if self.recent.is_empty() && self.airings.is_empty() {
+            self.recent = (0..view.channels.len().min(MAX_RECENT)).collect();
+        }
+    }
+
+    /// One number that moves exactly when the words or the bar of any airing the page shows does
+    /// ([`AiringPhase::stamp`]): what the page asks a frame for. `0` without a wall time.
+    fn clock_stamp(&self, view: LiveTvView<'_>, wall: Option<Wall>) -> u64 {
+        let Some(wall) = wall else { return 0 };
+        self.recent.iter().chain(&self.airings).filter_map(|&i| view.channels.get(i))
+            .fold(0xcbf2_9ce4_8422_2325_u64, |acc, c| {
+                (acc ^ fmt::phase(c.begins_at, c.ends_at, wall.unix_s()).stamp()).wrapping_mul(0x0100_0000_01b3)
+            })
     }
 
     fn regions(&self) -> PageRegions<'static> {
         PageRegions { header: None, content: if self.status == LiveTvStatus::Ready && !self.channels.is_empty() {
-            if self.airings.is_empty() { &[CHANNELS_GROUP] } else { &[CHANNELS_GROUP, NOW_GROUP] }
+            match (self.recent.is_empty(), self.airings.is_empty()) {
+                (false, false) => &[RECENT_GROUP, NOW_GROUP],
+                (false, true) => &[RECENT_GROUP],
+                (true, false) => &[NOW_GROUP],
+                (true, true) => &[],
+            }
         } else if self.status == LiveTvStatus::Failed { &[STATUS_GROUP] } else { &[] },
             rail: None, back_walks_header: false, arrival: Arrival::Content, pending: None }
     }
@@ -65,7 +115,7 @@ impl Page {
     fn header_row(&self, measure: &dyn plx_machine::machine::Measure) -> std::rc::Rc<HeaderRow> {
         let key = std::ptr::from_ref(plx_os::i18n::current()) as usize as u64;
         self.header_rows.get(key, || {
-            let left = vec![HeaderItem { label: plx_os::i18n::msg::browse_home_live_tv().to_owned(), title: true, ..Default::default() }];
+            let left = vec![HeaderItem { label: plx_os::i18n::msg::browse_livetv_whats_on().to_owned(), title: true, ..Default::default() }];
             let page = PageHeader::new(PageHeaderSpec { left, ..Default::default() }, &[], measure);
             let layout = page.layout(SCR_W, measure);
             HeaderRow::new(page, layout, Vec::new())
@@ -84,51 +134,93 @@ impl Page {
     }
 }
 
-struct Cards<'a> { view: LiveTvView<'a>, airings: &'a [usize], now: bool }
+/// On now's one order, as indexes into `channels` (the lineup, in number order): the channels with a
+/// programme, the most recent start first; a tie keeps the lineup's order (the sort is stable).
+fn on_now_order(channels: &[Channel]) -> Vec<usize> {
+    let mut order: Vec<usize> = channels.iter().enumerate().filter_map(|(i, c)| (!c.now.is_empty()).then_some(i)).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(channels[i].begins_at));
+    order
+}
+
+/// Where a Recent channel stands in the lineup: a channel is its server, DVR and key, never its number.
+fn lineup_index(channels: &[Channel], of: &Channel) -> Option<usize> {
+    channels.iter().position(|c| c.sid == of.sid && c.dvr == of.dvr && c.channel == of.channel)
+}
+
+/// Which shelf a [`Cards`] serves: it decides the cards' art, words and element ids.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Row { Recent, Now }
+
+struct Cards<'a> { view: LiveTvView<'a>, order: &'a [usize], row: Row, wall: Option<Wall> }
 impl Cards<'_> {
-    fn channel_index(&self, i: usize) -> Option<usize> {
-        if self.now { self.airings.get(i).copied() } else { (i < self.view.channels.len()).then_some(i) }
+    fn channel(&self, i: usize) -> Option<(usize, &Channel)> {
+        let index = *self.order.get(i)?;
+        Some((index, self.view.channels.get(index)?))
+    }
+    /// The amber bar: how much of the programme has aired. `Resume`'s own rule (present exactly while
+    /// in progress) is the airing's phase.
+    fn resume(&self, channel: &Channel) -> Option<Resume> {
+        let w = self.wall?;
+        matches!(fmt::phase(channel.begins_at, channel.ends_at, w.unix_s()), AiringPhase::JustStarted { .. } | AiringPhase::Running { .. })
+            .then(|| Some(Resume { frac: fmt::frac(channel.begins_at, channel.ends_at, w)?, left_ms: (channel.ends_at - w.unix_s()).max(0) * 1_000 }))
+            .flatten()
     }
 }
 impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
-    fn len(&self) -> usize { if self.now { self.airings.len() } else { self.view.channels.len() } }
-    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.channel_index(i).unwrap_or(0) as u32 * 2 + u32::from(self.now) }
+    fn len(&self) -> usize { self.order.len() }
+    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.order.get(i).copied().unwrap_or(0) as u32 * 2 + u32::from(self.row == Row::Now) }
     fn index_of(&self, e: &u32) -> Option<usize> {
         let offset = e.checked_sub(FIRST_CARD_ELEM)?;
-        if offset % 2 != u32::from(self.now) { return None; }
+        if offset % 2 != u32::from(self.row == Row::Now) { return None; }
         let i = offset as usize / 2;
-        if self.now { self.airings.iter().position(|&n| n == i) } else { (i < self.view.channels.len()).then_some(i) }
+        self.order.iter().position(|&n| n == i)
     }
     fn art(&self, i: usize) -> Art<'_> {
-        let facts = self.channel_index(i).and_then(|i| {
-            let mut facts = tile_facts::of(self.view.tiles.get(i)?);
-            if self.now {
-                let channel = self.view.channels.get(i)?;
-                facts.owner = channel as *const _ as usize;
-                facts.title = &channel.now;
-                facts.show_title = "";
-                facts.thumb = &channel.now_thumb;
-                facts.still = "";
-                facts.art = "";
-            }
-            Some(facts)
-        });
-        Art::Poster(facts)
+        let Some((index, channel)) = self.channel(i) else { return Art::Poster(None) };
+        if self.row == Row::Recent {
+            return Art::Channel { sid: channel.sid.raw(), logo: &channel.thumb, number: &channel.vcn, name: &channel.name };
+        }
+        Art::Poster(self.view.tiles.get(index).map(|tile| {
+            let mut facts = tile_facts::of(tile);
+            facts.owner = channel as *const _ as usize;
+            facts.title = &channel.now;
+            facts.show_title = "";
+            facts.thumb = &channel.now_thumb;
+            facts.still = "";
+            facts.art = "";
+            facts.resume = self.resume(channel);
+            facts
+        }))
+    }
+    /// The poster's bar; a channel tile has none.
+    fn progress(&self, i: usize) -> Option<f32> {
+        if self.row == Row::Recent { return None; }
+        self.channel(i).and_then(|(_, c)| self.resume(c)).map(|r| r.frac)
     }
     fn label(&self, i: usize) -> TileLabel {
-        let Some(index) = self.channel_index(i) else { return TileLabel::default() };
-        let Some(item) = self.view.tiles.get(index) else { return TileLabel::default() };
-        if !self.now { return captions::shelf_label(&captions::live_tv_policy(), item, false); }
-        let channel = &self.view.channels[index];
-        let mut facts = tile_facts::caption_facts(item);
-        facts.title = Some(channel.now.clone());
-        captions::label(&captions::live_tv_policy(), &facts,
-            Some(plx_os::i18n::msg::browse_livetv_channel(&channel.name, &channel.vcn)))
+        let Some((_, channel)) = self.channel(i) else { return TileLabel::default() };
+        use plx_os::i18n::msg;
+        match self.row {
+            // "On now: <programme>" over when it started and how long is left; a channel with no
+            // programme is its name alone.
+            Row::Recent if channel.now.is_empty() => captions::live_label(channel.name.clone(), None),
+            Row::Recent => captions::live_label(msg::browse_livetv_recent_on_now(&channel.now),
+                self.wall.and_then(|w| fmt::airing_line(Airing::Tile, channel.begins_at, channel.ends_at, w))),
+            // The programme over its channel, number first ("Ch 2009 · Station · 42m left").
+            Row::Now => {
+                let identity = if channel.vcn.is_empty() { channel.name.clone() } else { msg::browse_livetv_channel(&channel.name, &channel.vcn) };
+                let line = match self.wall.and_then(|w| fmt::left(channel.begins_at, channel.ends_at, w)) {
+                    Some(left) => msg::core_airing_pair(&identity, &left),
+                    None => identity,
+                };
+                captions::live_label(channel.now.clone(), Some(line))
+            }
+        }
     }
 
     fn subject(&self, i: usize) -> Option<std::borrow::Cow<'_, str>> {
         use std::fmt::Write as _;
-        let tile = self.view.tiles.get(self.channel_index(i)?)?;
+        let tile = self.view.tiles.get(self.channel(i)?.0)?;
         // Two servers may advertise the same DVR and channel. A press names the exact source.
         // Hex preserves that key without punctuation the remote subject grammar rejects.
         let mut subject = format!("live-{}-", tile.sid.raw());
@@ -145,21 +237,28 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn revision(&self, cx: &Cx<'_, H>) -> u64 { u64::from(H::livetv(cx).revision()) }
     fn sections(&self, cx: &Cx<'_, H>, out: &mut Vec<SectionSpec<Sec>>) {
         out.push(SectionSpec::new(Sec::Head, Kind::Custom { height: HEAD_H, focusable: false }, HEAD_GROUP));
-        out.push(SectionSpec::new(Sec::Channels, Kind::Shelf { style: &STYLE, heading: SHELF_HEADING }, CHANNELS_GROUP)
-            .seated(plx_ui::page_regions::CONTENT_HEAD_SEAT).named("channels"));
-        out.push(SectionSpec::new(Sec::Now, Kind::Shelf { style: &STYLE, heading: SHELF_HEADING }, NOW_GROUP).named("on_now"));
+        // The head of the content is seated by its own rule (`CONTENT_HEAD_SEAT`): the first row there is.
+        let recent = SectionSpec::new(Sec::Recent, Kind::Shelf { style: &RECENT_STYLE, heading: SHELF_HEADING }, RECENT_GROUP).named("recent");
+        let now = SectionSpec::new(Sec::Now, Kind::Shelf { style: &NOW_STYLE, heading: SHELF_HEADING }, NOW_GROUP).named("on_now");
+        let head_is_recent = !self.recent.is_empty();
+        out.push(if head_is_recent { recent.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) } else { recent });
+        out.push(if head_is_recent { now } else { now.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) });
         let retry = (self.status == LiveTvStatus::Failed).then(|| self.status_overlay(cx.tick.ms).action_frame_measured(cx.measure)).flatten();
         out.push(SectionSpec::new(Sec::Status, Kind::Overlay { rect: retry.unwrap_or(STATUS_FRAME), focusable: retry.is_some() }, STATUS_GROUP).named("status"));
     }
-    fn shelf_foot(&self, _cx: &Cx<'_, H>, k: Sec) -> f32 { if k == Sec::Channels && !self.airings.is_empty() { UNDER_LABEL_AIR } else { 0.0 } }
-    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Channels, Sec::Now, Sec::Status, Sec::Head]); }
+    /// Recent keeps the handoff's 48 from its tiles to On now's heading at rest and the label band's own
+    /// room (the 552) with a tile focused: [`RECENT_FOOT_REST`] opening to [`UNDER_LABEL_AIR`].
+    fn shelf_foot(&self, _cx: &Cx<'_, H>, k: Sec) -> f32 { if k == Sec::Recent && !self.airings.is_empty() { RECENT_FOOT_REST } else { 0.0 } }
+    fn shelf_foot_open(&self, _cx: &Cx<'_, H>, k: Sec) -> f32 { if k == Sec::Recent && !self.airings.is_empty() { UNDER_LABEL_AIR + HEAD_INK_DROP } else { 0.0 } }
+    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Recent, Sec::Now, Sec::Status, Sec::Head]); }
     fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
         let view = H::livetv(cx);
-        (view.status == LiveTvStatus::Ready && matches!(k, Sec::Channels | Sec::Now)).then_some(Cards { view, airings: &self.airings, now: k == Sec::Now })
+        let (order, row) = match k { Sec::Recent => (&self.recent, Row::Recent), Sec::Now => (&self.airings, Row::Now), _ => return None };
+        (view.status == LiveTvStatus::Ready).then_some(Cards { view, order, row, wall: H::wall(cx) })
     }
     fn card_has_menu(&self, _cx: &Cx<'_, H>, _k: Sec, _elem: &u32) -> bool { false }
     fn caption_policy(&self, _cx: &Cx<'_, H>, k: Sec) -> Option<plx_ui::caption_policy::CaptionPolicy> {
-        matches!(k, Sec::Channels | Sec::Now).then(captions::live_tv_policy)
+        matches!(k, Sec::Recent | Sec::Now).then(captions::live_tv_policy)
     }
     fn elem_of(&self, k: Sec) -> Option<u32> { (k == Sec::Status).then_some(RETRY_ELEM) }
     fn plain_name(&self, k: Sec, i: usize) -> Option<&'static str> { (k == Sec::Status && i == 0).then_some("retry") }
@@ -168,7 +267,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
             edge: [EdgeRule::Geometric, EdgeRule::Geometric, EdgeRule::Stop, EdgeRule::Stop], extent, len: 1, elem: ElemKind::Bare }
     }
     fn draw_heading(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, lift: f32) {
-        let title = match k { Sec::Channels => plx_os::i18n::msg::browse_livetv_channels_c(), Sec::Now => plx_os::i18n::msg::browse_livetv_on_now_c(), _ => return };
+        let title = match k { Sec::Recent => plx_os::i18n::msg::browse_livetv_recent_c(), Sec::Now => plx_os::i18n::msg::browse_livetv_on_now_c(), _ => return };
         plx_ui::cards::draw_heading_c(f.painter.alpha(f.page_alpha).translate(0.0, r.y), title, c"", c"", MARGIN_X, -lift, 1.0, f.measure);
     }
     fn custom_draw(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, _scroll: f32) {
@@ -200,7 +299,7 @@ impl LiveTvScreen {
     /// The heartbeat word, byte-identical to the route word.
     pub const WORD: &'static str = "livetv";
 
-    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,channels:[{sid:u32,rk:str}],airings:[u32],stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32}}";
+    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32}}";
 
     pub fn new(entry: EntryId) -> Self {
         Self {
@@ -208,8 +307,10 @@ impl LiveTvScreen {
                 entry,
                 channels: Vec::new(),
                 airings: Vec::new(),
+                recent: Vec::new(),
                 status: LiveTvStatus::Loading,
                 synced: None,
+                clock: 0,
                 header_capsules: plx_ui::widgets::TabStrip::new(),
                 header_pop: plx_ui::widgets::CtlPop::new(),
                 handoff: plx_ui::scroll_chrome::Handoff::new(),
@@ -224,7 +325,8 @@ impl LiveTvScreen {
         }
     }
 
-    /// Both shelves name the channel that supplies their card.
+    /// Both shelves name the channel that supplies their card (Recent's tile on the even elements, On now's
+    /// poster on the odd ones).
     fn press<H: LiveTvLike>(&self, elem: u32, cx: &Cx<'_, H>) -> Option<ContentReq> {
         let index = elem.checked_sub(FIRST_CARD_ELEM)? as usize / 2;
         let view = H::livetv(cx);
@@ -235,15 +337,22 @@ impl LiveTvScreen {
         }, resume_ns: 0 })
     }
 
-    fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>) {
+    fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         self.page.header_row(cx.measure).step(self.page.entry, cx.focus.current, &mut self.page.header_capsules, &mut self.page.header_pop, t.dt());
-        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), plx_ui::cards::RowStyle::HOME.pitch_fixed(), false);
-        let flat = [theme::SURFACE_APP; 4];
+        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), NOW_STYLE.pitch_fixed(), false);
+        // The page's own haze, fixed: it does not follow the focused tile.
+        let haze = AmbientWash::target(theme::WASH_LIVE_TV, [theme::WASH_LIVE_TV_W; 4]);
         if self.ground_seeded {
-            self.ground.key_target(flat, t.dt());
+            self.ground.key_target(haze, t.dt());
         } else {
-            self.ground.jump_target(flat);
+            self.ground.jump_target(haze);
             self.ground_seeded = true;
+        }
+        // A programme's words and bar move with the minute, with no event to say so.
+        let stamp = self.page.clock_stamp(H::livetv(cx), H::wall(cx));
+        if stamp != self.page.clock {
+            self.page.clock = stamp;
+            fx.invalidate(Provenance::Input);
         }
     }
 
@@ -258,7 +367,7 @@ impl LiveTvScreen {
         let regions = self.page.regions();
         let want = regions.first_seat();
         let target = want.map(FocusTarget::FirstInGroupAnimated).or_else(|| regions.unseat());
-        self.seat = (want != Some(CHANNELS_GROUP)).then_some(want);
+        self.seat = (want != Some(RECENT_GROUP)).then_some(want);
         if let Some(target) = target {
             self.seat_own(target, fx);
         }
@@ -277,16 +386,17 @@ impl LiveTvScreen {
     }
 
     /// BACK, decided by [`PageRegions::back`]: a scrolled page first returns to its top, on the
-    /// first channel; from there it leaves for Home.
+    /// first tile; from there it leaves for Home.
     fn back<H: LiveTvLike>(&mut self, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         let focus = cx.focus.current.filter(|key| key.entry == self.page.entry);
         let regions = self.page.regions();
+        let head = regions.first_seat().unwrap_or(RECENT_GROUP);
         let at = focus.and_then(|key| regions.region_of(key.elem, Focusable::<H>::group_of(self, &key.elem, cx)));
         match regions.back(at, self.stack.target() > 0.5) {
             BackStep::Top => {
-                self.seat_own(FocusTarget::FirstInGroupAnimated(CHANNELS_GROUP), fx);
+                self.seat_own(FocusTarget::FirstInGroupAnimated(head), fx);
             }
-            BackStep::Content | BackStep::Header => self.seat_own(FocusTarget::ContainerGroup(CHANNELS_GROUP), fx),
+            BackStep::Content | BackStep::Header => self.seat_own(FocusTarget::ContainerGroup(head), fx),
             BackStep::Nav => self.seat_own(FocusTarget::ContainerGroup(plx_ui::containers::tabs::STRIP), fx),
             BackStep::Leave => self.route(HomeReq::Tab(HomeTab::Home), fx),
         }
@@ -346,6 +456,8 @@ impl LogicalState for LiveTvScreen {
         for (sid, rk) in &self.page.channels { c.u32(u32::from(sid.raw())).str(rk); }
         c.seq(self.page.airings.len());
         for &i in &self.page.airings { c.u32(i as u32); }
+        c.seq(self.page.recent.len());
+        for &i in &self.page.recent { c.u32(i as u32); }
         self.stack.write(c);
         self.page.handoff.write(c);
     }
@@ -381,7 +493,7 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
         }
         match ev {
             ScreenEvent::Tick(t) => {
-                self.tick(*t, cx);
+                self.tick(*t, cx, fx);
                 self.follow_seat(fx);
                 Handled::Yes
             }

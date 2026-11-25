@@ -3111,6 +3111,8 @@ mod stack {
         shelf: Cards,
         revision: u64,
         foot: f32,
+        /// What `Shelf` keeps under its block while its caption band is open (`None`: the resting foot).
+        foot_open: Option<f32>,
         /// What each of the further shelves keeps under its block ([`StackPage::shelf_foot`]).
         more_foot: f32,
         /// Further shelves after `Shelf`, each at the default reveal margin.
@@ -3209,12 +3211,15 @@ mod stack {
         fn shelf_foot(&self, _cx: &Cx9<'_>, k: Msec) -> f32 {
             match k { Msec::Shelf => self.foot, Msec::More(_) => self.more_foot, _ => 0.0 }
         }
+        fn shelf_foot_open(&self, cx: &Cx9<'_>, k: Msec) -> f32 {
+            match (k, self.foot_open) { (Msec::Shelf, Some(open)) => open, _ => self.shelf_foot(cx, k) }
+        }
     }
 
     fn mrig(rows: u32, shelf: usize, build: impl FnOnce(Stack<Msec>) -> Stack<Msec>) -> Mrig {
         let mut r = PageRig {
             stack: build(Stack::new(ENTRY)),
-            page: Multi { rows, shelf: Cards::new((0..shelf as u32).map(|i| 100 + i).collect(), false), revision: 1, foot: 0.0, more_foot: 0.0, more: Vec::new(), recover_to: None, narrow: false, named: false },
+            page: Multi { rows, shelf: Cards::new((0..shelf as u32).map(|i| 100 + i).collect(), false), revision: 1, foot: 0.0, foot_open: None, more_foot: 0.0, more: Vec::new(), recover_to: None, narrow: false, named: false },
             view: FixtureView::default(),
             focus: None,
             ms: 0,
@@ -3525,6 +3530,31 @@ mod stack {
         assert_eq!(bare_target, reveal(0.0), "the reveal of the bare block");
         assert_eq!(footed_target, reveal(22.0), "the reveal of the block with its foot");
         assert!(max(0.0) > 0.0 && reveal(22.0) <= max(22.0), "setup: the page scrolls");
+    }
+
+    /// **A shelf's foot may differ at rest and with its caption band open** (`StackPage::shelf_foot_open`): the
+    /// section below stands the resting foot under a shelf nothing in it has focus in, the open foot under a
+    /// focused one, and the page's settled scroll measures the destination, not the moment.
+    #[test]
+    fn a_shelfs_open_foot_replaces_its_resting_foot_while_a_card_of_it_has_focus() {
+        let mut r = mrig(0, 6, |s| s);
+        r.page.foot = 40.0;
+        r.page.foot_open = Some(30.0);
+        r.page.more = vec![Cards::new((200..206).collect(), false)];
+        r.page.revision += 1;
+        r.go(200, By::Restore);
+        r.run(60);
+        let cx = r.cx();
+        // the flow's own y: the frame's, less the scroll it is drawn under
+        let at_rest = r.stack.shelf_frame(&r.page, &cx, Msec::More(0)).expect("frame").y + r.stack.scroll();
+        r.go(100, By::Dir);
+        r.run(60);
+        let cx = r.cx();
+        let focused = r.stack.shelf_frame(&r.page, &cx, Msec::More(0)).expect("frame").y + r.stack.scroll();
+        // the first shelf's block with the band open and the open foot, against the band shut and the resting one
+        let (shut, open) = (card_row::under_band(0.0) + 40.0, card_row::under_band(1.0) + 30.0);
+        assert!((focused - at_rest - (open - shut)).abs() < 0.05, "the section below moves by the change of the first shelf's band and foot: {}", focused - at_rest);
+        assert_ne!(open - shut, card_row::under_band(1.0) - card_row::under_band(0.0), "setup: the foot's own change shows");
     }
 
     /// **A caption line stops short of the heading DRAWN under it, past a shelf with nothing to

@@ -156,6 +156,10 @@ impl RowStyle {
         heading_rise: 0.0,
         under_tile: 0.0,
     };
+    /// **A shelf of Live TV channel plates** (the handoff's Recent channels): 250 x 140 on HOME's pitch, so a
+    /// column of plates stands over a column of posters and Down lands straight below. Motion, pop, glow and
+    /// radius are HOME's; only the height differs.
+    pub const CHANNEL: RowStyle = RowStyle { h: 140.0, ..RowStyle::HOME };
     /// **A shelf of EPISODES: landscape stills.** Same motion as HOME — the spring magnification,
     /// the scroll, the glow ring and the heading lift are all one vocabulary — and a different
     /// aspect, because an episode is not a poster.
@@ -2280,6 +2284,17 @@ pub fn resume_bar(p: Painter, r: Rect, frac: f32, rad: f32) {
 // ---------------------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    /// A channel plate shelf is HOME's in everything but the 140 px height: the same pitch, so the posters of a
+    /// shelf below it stand in the plates' columns.
+    #[test]
+    fn the_channel_row_is_homes_but_140_high() {
+        use super::RowStyle;
+        assert_eq!(RowStyle::CHANNEL.h, 140.0);
+        assert_eq!((RowStyle::CHANNEL.w, RowStyle::CHANNEL.gap), (RowStyle::HOME.w, RowStyle::HOME.gap));
+        assert_eq!(RowStyle::CHANNEL.w + RowStyle::CHANNEL.gap, 280.0, "the handoff's pitch");
+        assert_eq!(RowStyle::CHANNEL.focus_scale, RowStyle::HOME.focus_scale);
+    }
+
     /// The per-row rule is the uniform one when every row has the same pitch, and a row of its own
     /// pitch moves only the shelves below it.
     #[test]
