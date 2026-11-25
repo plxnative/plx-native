@@ -5816,6 +5816,53 @@ fn the_audio_and_subtitles_disc_follows_the_pages_tracks_and_opens_the_picker() 
     clear();
 }
 
+/// **The picker follows the file Play starts** (`taken_version`, the Select Version check mark's rule),
+/// not only the viewer's explicit choice: a two-version item whose first file the set cannot decode
+/// plays the second with no choice made, and the disc shows and the panel's rows and PUT part are
+/// that file's.
+#[test]
+fn the_picker_follows_the_file_play_starts_when_no_version_was_chosen() {
+    use plx_data::metadata::VersionPart;
+    let version = |id: i64, resolution: &str, width: i64, height: i64, vcodec: &str| plx_data::pms::MediaVersion {
+        id: plx_plex::plex::MediaId(id),
+        resolution: resolution.into(),
+        width,
+        height,
+        vcodec: vcodec.into(),
+        ..Default::default()
+    };
+    let d = Detail {
+        kind: "movie".into(),
+        part: "/library/parts/1/1/uhd.mkv".into(),
+        vcodec: "vp9".into(),
+        video_resolution: "4k".into(),
+        versions: vec![version(1, "4k", 3840, 2160, "vp9"), version(2, "1080", 1920, 1080, "h264")],
+        version_parts: vec![VersionPart {
+            id: plx_plex::plex::MediaId(2),
+            part: "/library/parts/2/1/hd.mkv".into(),
+            audio: vec![stream(7, true)],
+            subs: Vec::new(),
+        }],
+        audio: vec![stream(1, true)],
+        ..versioned("movie", 0)
+    };
+    assert_eq!(taken_version(&d), Some(plx_plex::plex::MediaId(2)), "control: Play starts the second file");
+    let _guard = install(d);
+    let screen = bare(&_guard, ServerId::UNSET, "leaf");
+    assert!(screen.hero_set(test_store().view()).tracks);
+    let arg = crate::preplay_panel::PreplayArg {
+        host: plx_machine::machine::InstanceId(1),
+        sid: ServerId::UNSET,
+        rk: "leaf".into(),
+        anchor: [0; 4],
+        source: crate::preplay_panel::Source::Page,
+    };
+    let tracks = crate::registry::preplay_tracks_of(test_store().view(), &arg);
+    assert_eq!(tracks.part, "/library/parts/2/1/hd.mkv", "the PUT addresses the file Play starts");
+    assert_eq!(tracks.audio.iter().map(|s| s.id).collect::<Vec<_>>(), [7]);
+    clear();
+}
+
 #[test]
 fn pdf_proposal_on_deck_watched_action_targets_one_episode() {
     let _guard = plx_base::testlock::serial();
