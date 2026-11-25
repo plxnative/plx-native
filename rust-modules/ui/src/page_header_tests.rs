@@ -1714,10 +1714,6 @@ fn a_header_row_names_its_stops_and_finds_them_by_id() {
 
 // ---- a row of names: the hoisted builders and `names_row` ----
 
-fn pills(titles: &[&str]) -> Vec<(String, usize)> {
-    titles.iter().enumerate().map(|(i, t)| (t.to_string(), i)).collect()
-}
-
 #[test]
 fn the_names_builders_are_the_headers_own() {
     let pill = super::item("Movies");
@@ -1726,11 +1722,19 @@ fn the_names_builders_are_the_headers_own() {
     assert!(more.glyph == Some(Icon::More) && more.value_only && more.a11y == Some("libraries"), "{more:?}");
 }
 
+/// Lay `titles` out as a names row with `current` plated: a title is the whole label, the pill's handle its index.
+fn names(titles: &[&str], current: usize, more: super::MoreOpener) -> super::NamesRow<usize> {
+    let ids: Vec<usize> = (0..titles.len()).collect();
+    let visit_slot = titles.len() > 2;
+    super::names_row(
+        super::NamesIn { pills: &ids, current: Some(&current), visit_slot, more, right: Vec::new(), widest: &[] },
+        &plx_base::fontcov::advances::ShippedMeasure, |at, _| titles[*at].to_owned(),
+    )
+}
+
 #[test]
-fn names_that_fit_show_in_order_behind_no_overflow() {
-    use plx_base::fontcov::advances::ShippedMeasure;
-    let m = ShippedMeasure;
-    let row = super::names_row(&pills(&["Movies", "TV Shows", "Kids"]), 1, Vec::new(), &[], 8, &m);
+fn names_that_fit_show_in_order_and_the_library_header_keeps_its_more_opener() {
+    let row = names(&["Movies", "TV Shows", "Kids"], 1, super::MoreOpener::Always);
     assert!(!row.overflowed());
     assert_eq!(row.slots, [super::NameSlot::Pill(0), super::NameSlot::Pill(1), super::NameSlot::Pill(2), super::NameSlot::More]);
     let plated: Vec<_> = row.page.spec().left.iter().filter(|it| it.selected_plate).map(|it| it.label.as_str()).collect();
@@ -1738,24 +1742,77 @@ fn names_that_fit_show_in_order_behind_no_overflow() {
 }
 
 #[test]
+fn a_picture_of_the_header_draws_no_more_when_nothing_folded() {
+    let row = names(&["Movies", "TV Shows", "Kids"], 1, super::MoreOpener::WhenFolded);
+    assert!(!row.overflowed());
+    assert_eq!(row.slots, [super::NameSlot::Pill(0), super::NameSlot::Pill(1), super::NameSlot::Pill(2)], "names fit: no ⋯");
+    assert_eq!(row.page.spec().left.len(), row.slots.len(), "one slot per item drawn");
+    assert!(row.page.spec().left.iter().all(|it| it.glyph.is_none()), "no ⋯ item on the row");
+    // the room the ⋯ would take is still reserved: the picture folds where the header folds
+    let long: Vec<String> = (0..4).map(|i| format!("A rather long library name number {i}")).collect();
+    let titles: Vec<&str> = long.iter().map(String::as_str).collect();
+    let (shown, header) = (names(&titles, 0, super::MoreOpener::WhenFolded), names(&titles, 0, super::MoreOpener::Always));
+    let pills = |row: &super::NamesRow<usize>| row.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count();
+    assert_eq!((pills(&shown), shown.folded.clone()), (pills(&header), header.folded.clone()));
+    assert!(shown.overflowed() && shown.slots.contains(&super::NameSlot::More), "something folded: the ⋯ is drawn");
+}
+
+#[test]
+fn a_current_name_pushed_to_the_visitor_slot_with_nothing_folded_draws_no_more() {
+    // three names fit with the visitor's slot reserved only as two shortcuts and the visitor: the
+    // third (current) stands after them, nothing is hidden, so there is nothing behind a ⋯
+    let long: Vec<String> = (0..3).map(|i| format!("The family movie library {i} here")).collect();
+    let titles: Vec<&str> = long.iter().map(String::as_str).collect();
+    let row = names(&titles, 2, super::MoreOpener::WhenFolded);
+    assert_eq!(row.slots.last(), Some(&super::NameSlot::Pill(2)), "the current name is the visitor");
+    assert!(row.folded.is_empty() && !row.slots.contains(&super::NameSlot::More), "{:?}", row.slots);
+    assert_eq!(row.page.spec().left.len(), row.slots.len());
+}
+
+#[test]
 fn names_that_do_not_fit_go_behind_the_more_item_and_report_it() {
-    use plx_base::fontcov::advances::ShippedMeasure;
-    let m = ShippedMeasure;
     let long: Vec<String> = (0..12).map(|i| format!("A rather long library name number {i}")).collect();
     let titles: Vec<&str> = long.iter().map(String::as_str).collect();
-    let row = super::names_row(&pills(&titles), 0, Vec::new(), &[], 8, &m);
-    assert!(row.overflowed(), "twelve long names cannot all show");
-    let shown = row.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count();
-    assert!(shown < 12 && shown + row.folded.len() == 12, "every name is shown or folded: {shown} + {}", row.folded.len());
-    assert!(row.slots.contains(&super::NameSlot::More));
-    // a selected name that did not fit is the visitor, plated, after the more item
-    let visiting = super::names_row(&pills(&titles), 11, Vec::new(), &[], 8, &m);
-    assert_eq!(visiting.slots.last(), Some(&super::NameSlot::Pill(11)));
-    assert!(!visiting.folded.contains(&11));
-    // and the cap holds whatever the room
-    let short: Vec<String> = (0..12).map(|i| format!("L{i}")).collect();
-    let titles: Vec<&str> = short.iter().map(String::as_str).collect();
-    let capped = super::names_row(&pills(&titles), 0, Vec::new(), &[], 8, &m);
-    assert_eq!(capped.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count(), 8);
-    assert!(capped.overflowed(), "the cap folds the rest behind the more item");
+    for more in [super::MoreOpener::Always, super::MoreOpener::WhenFolded] {
+        let row = names(&titles, 0, more);
+        assert!(row.overflowed(), "twelve long names cannot all show");
+        let shown = row.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count();
+        assert!(shown < 12 && shown + row.folded.len() == 12, "every name is shown or folded: {shown} + {}", row.folded.len());
+        assert!(row.slots.contains(&super::NameSlot::More));
+        // a current name that did not fit is the visitor, plated, after the more item
+        let visiting = names(&titles, 11, more);
+        assert_eq!(visiting.slots.last(), Some(&super::NameSlot::Pill(11)));
+        assert!(!visiting.folded.contains(&11));
+        // and the cap holds whatever the room
+        let short: Vec<String> = (0..12).map(|i| format!("L{i}")).collect();
+        let titles: Vec<&str> = short.iter().map(String::as_str).collect();
+        let capped = names(&titles, 0, more);
+        assert_eq!(capped.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count(), super::MAX_NAMES);
+        assert!(capped.overflowed(), "the cap folds the rest behind the more item");
+    }
+}
+
+#[test]
+fn a_visitor_that_is_not_among_the_pills_is_plated_after_them() {
+    let ids = [0usize, 1];
+    let row = super::names_row(
+        super::NamesIn { pills: &ids, current: Some(&7), visit_slot: true, more: super::MoreOpener::Always, right: Vec::new(), widest: &[] },
+        &plx_base::fontcov::advances::ShippedMeasure, |at, _| format!("Library {at}"),
+    );
+    assert_eq!(row.slots, [super::NameSlot::Pill(0), super::NameSlot::Pill(1), super::NameSlot::More, super::NameSlot::Pill(7)]);
+    assert!(row.folded.is_empty());
+    assert_eq!(row.page.spec().left.iter().filter(|it| it.selected_plate).map(|it| it.label.as_str()).collect::<Vec<_>>(), ["Library 7"]);
+}
+
+#[test]
+fn an_owner_credit_is_atomic_and_the_join_is_one_place() {
+    let m = plx_base::fontcov::advances::ShippedMeasure;
+    assert_eq!(super::joined_name("LDN Films", ""), "LDN Films");
+    let full = super::joined_name("LDN Films", "by a friend");
+    assert_eq!(full, "LDN Films by a friend");
+    let width = |s: &str| m.width_str(s, crate::theme::size::BODY, false);
+    assert_eq!(super::fit_name("LDN Films", "by a friend", width(&full), &m), full);
+    assert_eq!(super::fit_name("LDN Films", "by a friend", width("LDN Films b…"), &m), "LDN Films");
+    let short = super::fit_name("LDN Films", "by a friend", width("LDN Fi…"), &m);
+    assert!(short.ends_with('…') && "LDN Films".starts_with(short.trim_end_matches('…')));
 }

@@ -137,7 +137,7 @@ arguments, and its time is the `dt` it is handed.
      `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
      A row that is present but not a stop (`FormSection::inert`, `Row::selectable`) is drawn at .45 and skipped by focus.
    - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
-     plan_names, names_row}`; never re-pack names by hand.
+     plan_names, names_row}` (`names_row` is the ONE assembly: labels at room, visit slot, right cluster, ⋯ per `MoreOpener`; `joined_name` and `fit_name` are the shared name fit); never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
      `K_SCROLL`, `K_SNAP`; `popover::K_APPEAR`), not a new constant or a hand-made easing.
 

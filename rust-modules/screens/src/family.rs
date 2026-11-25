@@ -370,13 +370,18 @@ pub fn inner_cx<'o, 'a: 'o, H: DirectoryLike>(cx: &Cx<'a, H>) -> Cx<'o, InnerHos
 /// Seat a form-backed page's table on the engine's focus: a row key parks the selection on that row
 /// and lights the list; the elem is a row's [`RowKey`] number, not its index. A key the form does
 /// not know (the band, the alert, a row that left) dims the list. Every page answers `FocusMoved`
-/// with this, so the drawn selection and the engine never disagree.
+/// with this, so the drawn selection and the engine never disagree. A key the form binds but whose
+/// row is no stop right now (a row that waits while another is held, `Row::selectable`) is not a
+/// place focus lands: the selection stays where it is.
 pub fn form_focus<Id, A, Dest>(form: &mut FormTable<Id, A, Dest>, elem: u32)
 where
     Id: PartialEq + Clone,
     A: Clone,
     Dest: Clone,
 {
+    if form.index_of_key(RowKey(elem)).is_some() && !form.lands_on(RowKey(elem)) {
+        return;
+    }
     let on_table = form.index_of_key(RowKey(elem)).filter(|_| elem < super::registry::BAND);
     form.note_engine_key(on_table.map(|_| RowKey(elem)));
     match on_table {

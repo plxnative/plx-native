@@ -41,6 +41,13 @@
       "title": "str"
     }
   },
+  "library_order.state_unnamed": {
+    "value": "{title} can't be moved yet: its server hasn't finished connecting.",
+    "description": "Sentence on the Library order page while a library whose server has not finished connecting has focus: it cannot be moved yet, because the saved order names a library by its server. {title} is the library's name.",
+    "args": {
+      "title": "str"
+    }
+  },
   "library_order.state_dropped": {
     "value": "{title} is now {home} on Home and {header} in the {kind} header.",
     "description": "Sentence on the Library order page right after a library was put down. {home} and {header} are ordinals from the ordinal.* words (first, second, ... or number 11); {kind} is the plural kind word (Movies or TV Shows).",

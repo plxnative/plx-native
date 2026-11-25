@@ -84,7 +84,8 @@ const MOVE_MARK: f32 = 24.0;
 ///   focus shadow, wearing its own pill and full chevrons, and drawn last, over the rows it passes.
 ///   The grow, rise and shadow follow ONE spring (`TableView::lift`, 0 to 1 on pickup and back on
 ///   drop, at [`K_ROW`]), so the row eases up and settles down rather than cutting.
-/// * `Waiting` - every other row while one is lifted: read in secondary ink.
+/// * `Waiting` - every other row while one is lifted: read in secondary ink, and no stop of focus
+///   ([`Row::selectable`]), so neither a key nor a pointer can leave the row being moved.
 ///
 /// [`Icon::ChevronUp`]: crate::icons::Icon::ChevronUp
 /// [`Icon::ChevronDown`]: crate::icons::Icon::ChevronDown
@@ -221,12 +222,13 @@ impl Row {
     pub fn is_note(&self) -> bool {
         self.sep && !self.label.is_empty()
     }
-    /// **Can focus land on this row?** The ONE answer: not a hairline or note ([`Self::sep`]) and
-    /// not [`Self::inert`]. Every selection, hit and element walk of the table (and `ui::geom`'s) asks
+    /// **Can focus land on this row?** The ONE answer: not a hairline or note ([`Self::sep`]),
+    /// not [`Self::inert`], and not [`RowMove::Waiting`] (while one row is held, the others are no
+    /// stop for a key or a pointer, drawn at their own weight rather than dimmed). Every selection, hit and element walk of the table (and `ui::geom`'s) asks
     /// this; only the FIT report, which measures what is drawn rather than what can be focused,
     /// still reads `sep` itself.
     pub fn selectable(&self) -> bool {
-        !self.sep && !self.inert
+        !self.sep && !self.inert && self.moving != RowMove::Waiting
     }
     /// The grouping hairline — a row that draws a rule and cannot be focused.
     pub fn separator() -> Self {
@@ -746,6 +748,13 @@ fn next_rev() -> u32 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The lift of one row: its global index and the spring that grows, raises and shadows it.
+#[derive(Clone, Copy)]
+struct Lift {
+    row: i32,
+    spring: Spring,
+}
+
 pub struct TableView {
     pub sections: Vec<Section>,
     /// Optional empty-state copy; an empty string leaves it to the surrounding narrative.
@@ -790,13 +799,13 @@ pub struct TableView {
     /// reinstall reorders rows, so a row slides to its new slot instead of cutting. Empty at rest
     /// (and for every table that never reorders), so a table pays nothing for it.
     glide: Vec<Spring>,
-    /// **The lift**: 0 at rest, 1 under a [`RowMove::Lifted`] selection. ONE spring at [`K_ROW`] for
-    /// the whole table (a table lifts at most one row), so the zoom, the rise and the shadow of
-    /// [`RowMove::Lifted`] all ease in on pickup and out on drop together, instead of cutting. It
-    /// belongs to the row `lift_row` (the selection while lifted; kept after the drop until the
-    /// spring has landed, so the dropped row settles instead of snapping), `-1` at rest.
-    lift: Spring,
-    lift_row: i32,
+    /// **The lift**, `None` at rest: ONE spring at [`K_ROW`] for the whole table (a table lifts at
+    /// most one row), 0 to 1 under a [`RowMove::Lifted`] row, so the zoom, the rise and the shadow
+    /// all ease in on pickup and out on drop together, instead of cutting. It belongs to ONE row
+    /// ([`Lift`]), kept after the drop until the spring has landed, so the dropped row settles
+    /// instead of snapping. A caller that replaces the sections and knows the rows' identities
+    /// follows the row ([`TableView::carry_lift`]; `FormTable` does, by key).
+    lift: Option<Lift>,
     /// A drill-in page's title band, see [`TableView::set_title`].
     title: Option<String>,
     /// Re-stamped by every mutation that can change the table's measured size (new sections, a new
@@ -821,13 +830,15 @@ impl TableView {
     /// The owner records its row data separately. These fields determine layout, the selected
     /// face and subsequent motion; no text/texture cache or renderer pointer is traversed.
     pub fn write_motion(&self, c: &mut plx_machine::machine::Canon) {
-        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, lift, lift_row, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
+        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, lift, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
         c.u32(*sel as u32).bool(*list_focused).bool(*compact).bool(*tall);
         for component in header_ink { c.f32(*component); }
         for spring in [hl_top, hl_bot, scroll] { c.f32(spring.pos).f32(spring.vel); }
         c.seq(glide.len());
         for spring in glide { c.f32(spring.pos).f32(spring.vel); }
-        c.f32(lift.pos).f32(lift.vel).u32(*lift_row as u32);
+        // the same bytes as ever: a table at rest writes a settled spring and no row (-1)
+        let (spring, row) = lift.map_or((Spring::at(0.0), -1), |lift| (lift.spring, lift.row));
+        c.f32(spring.pos).f32(spring.vel).u32(row as u32);
     }
 
     /// **Two-line rows at the CATALOG measure (98) rather than the settings one (92).**
@@ -915,8 +926,7 @@ impl TableView {
             hl_bot: Spring::at(0.0),
             scroll: Spring::at(0.0),
             glide: Vec::new(),
-            lift: Spring::at(0.0),
-            lift_row: -1,
+            lift: None,
             title: None,
             rev: 0,
         }
@@ -1701,30 +1711,61 @@ impl TableView {
         self.step_lift(dt);
     }
 
-    /// Step the lift toward 1 while the selection is [`RowMove::Lifted`], else toward 0, and park it
-    /// (`lift_row` back to -1) once it has landed, so a table that never lifts writes the same motion
-    /// as ever.
+    /// The global index of the row asking to be lifted ([`RowMove::Lifted`]), if one does.
+    fn lifted_row(&self) -> Option<i32> {
+        let mut gi = 0;
+        for section in &self.sections {
+            for row in &section.rows {
+                if row.moving.is_lifted() { return Some(gi); }
+                gi += 1;
+            }
+        }
+        None
+    }
+
+    /// Step the lift toward 1 while a row is [`RowMove::Lifted`], else toward 0, and drop it once it
+    /// has landed, so a table that never lifts writes the same motion as ever.
     fn step_lift(&mut self, dt: f32) {
-        let lifted = self.n_rows() > 0 && self.rows_at(self.sel).moving.is_lifted();
-        if lifted {
-            self.lift_row = self.sel;
+        match (self.lifted_row(), self.lift.as_mut()) {
+            (Some(row), Some(lift)) => { lift.row = row; lift.spring.step(1.0, K_ROW, dt); }
+            (Some(row), None) => {
+                let mut lift = Lift { row, spring: Spring::at(0.0) };
+                lift.spring.step(1.0, K_ROW, dt);
+                self.lift = Some(lift);
+            }
+            (None, Some(lift)) => {
+                lift.spring.step(0.0, K_ROW, dt);
+                if plx_machine::motion::report::settled(lift.spring.pos, 0.0, lift.spring.vel) { self.lift = None; }
+            }
+            (None, None) => {}
         }
-        self.lift.step(if lifted { 1.0 } else { 0.0 }, K_ROW, dt);
-        if !lifted && plx_machine::motion::report::settled(self.lift.pos, 0.0, self.lift.vel) {
-            self.lift.jump(0.0);
-            self.lift_row = -1;
+    }
+
+    /// **Follow the lifted row to where the sections just replaced put it**: `to` is its global index
+    /// in the new sections, `None` when it left them (the lift is dropped; it is never handed to
+    /// whichever row now stands in its old slot). A table has no identity for its rows, so the owner
+    /// that does ([`crate::form::FormTable`], by key) calls this after it installs sections.
+    pub fn carry_lift(&mut self, to: Option<i32>) {
+        match (to, self.lift.as_mut()) {
+            (Some(to), Some(lift)) => lift.row = to,
+            _ => self.lift = None,
         }
+    }
+
+    /// The global index of the row the lift belongs to, held or landing; `None` at rest.
+    pub fn lift_owner(&self) -> Option<i32> {
+        self.lift.map(|lift| lift.row)
     }
 
     /// How far row `gi` is lifted, 0..1: the lift spring for the row it belongs to (the row being
     /// moved, or the one just dropped while the spring lands), 0 for every other.
     fn lift_at(&self, gi: i32, row: &Row) -> f32 {
-        if row.moving.is_lifted() || gi == self.lift_row { self.lift.pos.max(0.0) } else { 0.0 }
+        self.lift.filter(|lift| row.moving.is_lifted() || lift.row == gi).map_or(0.0, |lift| lift.spring.pos.max(0.0))
     }
 
     /// Is row `gi` drawn in the lifted pass (over its neighbours, under its own pill)?
     fn lifted_now(&self, gi: i32, row: &Row) -> bool {
-        row.moving.is_lifted() || (gi == self.lift_row && self.lift.pos > 0.0)
+        row.moving.is_lifted() || self.lift.is_some_and(|lift| lift.row == gi && lift.spring.pos > 0.0)
     }
 
     /// Step every row's glide toward 0 and drop the lot once all have landed, so a settled table
@@ -1771,6 +1812,21 @@ impl TableView {
         let now = self.rest_tops();
         let offsets: Vec<f32> = (0..now.len()).map(|gi| from.get(gi).copied().flatten().map_or(0.0, |y| y - now[gi])).collect();
         self.glide = if offsets.iter().any(|o| *o != 0.0) { offsets.into_iter().map(Spring::at).collect() } else { Vec::new() };
+    }
+
+    /// The global indices of the rows drawn LIFTED right now (the row held, or the one just dropped
+    /// while its lift lands). Test-only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn drawn_lifted(&self) -> Vec<i32> {
+        let mut out = Vec::new();
+        let mut gi = 0;
+        for section in &self.sections {
+            for row in &section.rows {
+                if self.lifted_now(gi, row) { out.push(gi); }
+                gi += 1;
+            }
+        }
+        out
     }
 
     /// Is any row still gliding? Test-only: a settled table drops its glide entirely.
@@ -2278,7 +2334,7 @@ impl TableView {
         };
         self.walk(|cy, gi, si| paint(cy, gi, si, false));
         // the second pass: the lifted row (at most one, but the table does not say so), over the rest
-        if self.lift.pos > 0.0 || self.sections.iter().flat_map(|s| &s.rows).any(|r| r.moving.is_lifted()) {
+        if self.lift.is_some_and(|lift| lift.spring.pos > 0.0) || self.sections.iter().flat_map(|s| &s.rows).any(|r| r.moving.is_lifted()) {
             self.walk(|cy, gi, si| {
                 if gi >= 0 {
                     paint(cy, gi, si, true);
@@ -2444,8 +2500,8 @@ mod tests {
                 5 => table.compact = !table.compact,
                 6 => table.tall = !table.tall,
                 7 => table.glide = vec![Spring::at(3.0)],
-                8 => table.lift = Spring::at(0.5),
-                9 => table.lift_row = 2,
+                8 => table.lift = Some(super::Lift { row: 0, spring: Spring::at(0.5) }),
+                9 => table.lift = Some(super::Lift { row: 2, spring: Spring::at(0.0) }),
                 _ => unreachable!(),
             }
             assert_ne!(hash(&table), baseline, "field {field}");

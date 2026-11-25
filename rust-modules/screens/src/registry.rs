@@ -248,10 +248,10 @@ pub use crate::item_menu::has_actions as item_has_menu;
 pub use crate::item_menu::Action as ItemMenuAction;
 /// Re-exported so a screen's test host names its init through the registry.
 pub use crate::family::NoInit;
-/// **The Library header's pieces a sibling page previews** (the `sibling` gate admits only `crate::registry`):
-/// Settings > Library order draws the header's names row from the same controls, pill budget and
-/// joined name the real Library header uses, so the preview folds exactly where the header does.
-pub(crate) use crate::library::{header_controls_at_rest, joined_name, MAX_LIBRARY_PILLS};
+/// **The Library header's names row as a picture** (the `sibling` gate admits only `crate::registry`):
+/// Settings > Library order draws it through the one assembly the real Library header runs, with the
+/// same controls, visit slot and name fit, so the preview folds where the header does.
+pub(crate) use crate::library::{names_preview, visit_slot};
 /// The panels a sibling screen's host test reads through the shared vocabulary (the `sibling` gate
 /// admits only `crate::registry`): the Detail page's tests drive the real About panel and compare
 /// the audio summary against the tracks panel's full list.

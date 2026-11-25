@@ -277,3 +277,73 @@ fn a_landed_drop_leaves_the_motion_as_a_table_that_never_lifted() {
     settle_lift(&mut t);
     assert_eq!(hash(&t), base, "once landed it is gone");
 }
+
+// ---- the lift belongs to a row, not to a slot ----
+
+/// A, B, C, D in `order`: every row Pickable with nothing held, or with `held` lifted and the rest Waiting.
+fn move_form(order: &[Id], held: Option<Id>) -> F {
+    let mut s = S::new("Libraries");
+    for id in order {
+        let state = match &held {
+            Some(h) if h == id => RowMove::Lifted { can_up: true, can_down: true },
+            Some(_) => RowMove::Waiting,
+            None => RowMove::Pickable { can_up: true, can_down: true },
+        };
+        s = s.item(id.clone(), RowKind::Button, (), row(&format!("{id:?}")).moving(state));
+    }
+    F::new().section(s)
+}
+
+fn at_of(t: &T, id: &Id) -> i32 {
+    t.index_of(id).expect("present") as i32
+}
+
+#[test]
+fn a_lift_that_is_landing_stays_with_the_row_that_was_held_through_a_reorder() {
+    // pick B up, carry it down twice, then put it back (Back): the order returns to A B C D
+    let (abcd, acdb) = ([Id::A, Id::B, Id::C, Id::D], [Id::A, Id::C, Id::D, Id::B]);
+    let mut t = T::new(100);
+    t.open(move_form(&abcd, None), Some(&Id::B));
+    t.set_sliding(move_form(&abcd, Some(Id::B)), Some(&Id::B));
+    settle_lift(&mut t.table);
+    t.set_sliding(move_form(&acdb, Some(Id::B)), Some(&Id::B));
+    t.table.update(DT, 600.0);
+    assert_eq!(t.table.drawn_lifted(), [at_of(&t, &Id::B)], "B is the one lifted, wherever it stands");
+    t.set_sliding(move_form(&abcd, None), Some(&Id::B));
+    t.table.update(DT, 600.0);
+    assert_eq!(t.table.drawn_lifted(), [at_of(&t, &Id::B)], "the landing lift is B's, not whoever slid into B's old slot (D)");
+    settle_lift(&mut t.table);
+    assert!(t.table.drawn_lifted().is_empty(), "and it lands");
+}
+
+#[test]
+fn a_lift_whose_row_left_the_form_is_dropped() {
+    let mut t = T::new(100);
+    t.open(move_form(&[Id::A, Id::B, Id::C], None), Some(&Id::B));
+    t.set_sliding(move_form(&[Id::A, Id::B, Id::C], Some(Id::B)), Some(&Id::B));
+    settle_lift(&mut t.table);
+    t.set_sliding(move_form(&[Id::A, Id::C], None), Some(&Id::A));
+    t.table.update(DT, 600.0);
+    assert!(t.table.drawn_lifted().is_empty(), "the held row is gone: nothing else is drawn lifted");
+}
+
+// ---- the rows that wait are no stop ----
+
+#[test]
+fn while_one_row_is_held_the_others_are_no_stop_for_a_key_a_pointer_or_an_element_walk() {
+    let mut t = T::new(100);
+    t.open(move_form(&[Id::A, Id::B, Id::C, Id::D], None), Some(&Id::B));
+    assert_eq!(crate::geom::table_elems(&t.table, Some(&t)).count(), 4, "idle: every row is an element");
+    t.set_sliding(move_form(&[Id::A, Id::B, Id::C, Id::D], Some(Id::B)), Some(&Id::B));
+    assert_eq!(crate::geom::table_elems(&t.table, Some(&t)).collect::<Vec<_>>(), [1], "only the held row is");
+    assert_eq!(t.table.next_selectable(1, 1), None, "a key has nowhere to go");
+    assert_eq!(t.table.next_selectable(1, -1), None);
+    let hits: std::collections::BTreeSet<i32> = (0..FRAME.h as i32).step_by(3).filter_map(|y| t.table.hit_row(FRAME, FRAME.x + 30.0, y as f32)).collect();
+    assert_eq!(hits, [1].into(), "a pointer anywhere on the table lands on the held row or nothing");
+    // drawn at its own weight, not dimmed as an inert row is
+    let runs = draw_census::capture_runs(|| t.table.draw(Painter::recording(), FRAME, &LegacyMeasure));
+    let alpha = |label: &str| runs.iter().find(|r| r.text == label).map(|r| r.ink[3]).unwrap();
+    assert!(alpha("A") > 0.5 * alpha("B"), "a waiting row is not drawn at the inert weight: {} vs {}", alpha("A"), alpha("B"));
+    t.set_sliding(move_form(&[Id::A, Id::B, Id::C, Id::D], None), Some(&Id::B));
+    assert_eq!(crate::geom::table_elems(&t.table, Some(&t)).count(), 4, "put down: every row is a stop again");
+}

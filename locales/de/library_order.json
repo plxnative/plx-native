@@ -7,6 +7,7 @@
   "library_order.state_idle": "Drücke OK, um {title} nach oben oder unten zu verschieben. „Start“ und die Kopfzeile für {kind} zeigen deine Lieblingsmediatheken in dieser Reihenfolge.",
   "library_order.state_reset": "Setzt deine Lieblingsmediatheken auf die Reihenfolge zurück, in der deine Server sie auflisten.",
   "library_order.state_moving": "{title} wird verschoben. Hoch und Runter ändern die Position, OK bestätigt sie und Zurück bricht ab.",
+  "library_order.state_unnamed": "{title} kann noch nicht verschoben werden: Der Server hat die Verbindung noch nicht abgeschlossen.",
   "library_order.state_dropped": "{title} steht jetzt {home} auf „Start“ und {header} in der Kopfzeile für {kind}.",
   "library_order.state_confirm": "Drücke erneut OK, um deine Lieblingsmediatheken auf die Reihenfolge deiner Server zurückzusetzen. Jede andere Taste behält deine Reihenfolge bei.",
   "library_order.state_reset_done": "Deine Lieblingsmediatheken stehen wieder in der Reihenfolge, in der deine Server sie auflisten.",

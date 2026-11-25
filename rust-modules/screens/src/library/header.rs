@@ -16,19 +16,7 @@
 //! row: a library switch replaces the whole row, and the pill must travel across it.
 use super::*;
 use plx_machine::machine::Measure;
-use plx_ui::page_header::{self, item, HeaderFocus, HeaderItem, HeaderRow, PageHeader, PageHeaderSpec, Slot};
-use plx_ui::theme;
-
-/// A shared library's owner credit is atomic. An oversized credit gives its room back to the
-/// title, which uses the ordinary single-line fit.
-pub(super) fn fit_name(title: &str, owner: &str, room: f32, measure: &dyn Measure) -> String {
-    let size = theme::size::BODY;
-    let full = super::toolbar::joined_name(title, owner);
-    if measure.width_str(&full, size, false) <= room {
-        return full;
-    }
-    measure.fit_line(title, room, size, false).to_string_lossy().into_owned()
-}
+use plx_ui::page_header::{self, item, HeaderFocus, HeaderItem, HeaderRow, MoreOpener, NameSlot, NamesIn, PageHeader, PageHeaderSpec, Slot};
 
 /// What the read-out's filtered count was taken under: the library listing (the key `unfiltered`
 /// carries) and the filter terms in force. A count is only ever shown for the key it was counted under.
@@ -54,8 +42,8 @@ fn divider() -> HeaderItem {
 /// **The header's right cluster** as the screen's state says it, and in its widest case (every value
 /// at its longest), as pure data: the ONE builder of both, so a page that must show what the Library
 /// header would do (Settings' Library order preview) builds them through it and cannot drift from
-/// the real header. `sorts` are the labels of every sort the library offers (the widest sizes the
-/// sort control's slot), `sort` the one in force.
+/// the real header. `sorts` are the labels of every sort the library offers and `sort` the one in
+/// force (the widest sizes the sort control's slot for the longest of them).
 pub(super) fn header_controls(
     readout: Option<String>, collections: CollectionsControl, listing: Listing, sort: &str, sorts: &[&str], measure: &dyn Measure,
 ) -> (Vec<HeaderItem>, Vec<HeaderItem>) {
@@ -108,14 +96,33 @@ pub(super) fn header_controls(
     (right, widest)
 }
 
-/// **The header's right cluster for a library at rest** (no filter, the Collections answer not in,
-/// the grid on Title, every sort the shared table knows as a candidate for the widest): what a page
-/// that previews the header (Settings' Library order) lays its names out against. A real library
-/// offers a subset of those sorts plus the server's own, so its row can differ by a sort's width.
-pub(crate) fn header_controls_at_rest(measure: &dyn Measure) -> (Vec<HeaderItem>, Vec<HeaderItem>) {
-    use plx_data::sortfacts::SortFact;
-    let sorts: Vec<&str> = SortFact::ALL.iter().map(|fact| fact.label()).collect();
-    header_controls(None, CollectionsControl::Unknown, Listing::All, SortFact::Title.label(), &sorts, measure)
+/// **Does a library header of `kind` reserve a slot for a visiting name?** Whenever the roster can
+/// need one: more than two favourites, or a library of the kind that is not a favourite (one visit
+/// to it must never shift or displace the shortcuts). The ONE decision, read from the directory by
+/// the real header and by every picture of it.
+pub(crate) fn visit_slot(directory: plx_data::stores::browse::DirectoryView<'_>, kind: SecKind, favourites: usize) -> bool {
+    favourites > 2 || directory.sections().iter().any(|section| section.kind == kind && !section.row.pinned)
+}
+
+/// **A picture of the Library header's names row for a library of `kind`** (Settings' Library order
+/// preview): the same assembly the real header runs ([`page_header::names_row`]) against the same
+/// controls at rest (no filter, the Collections answer not in, the grid on Title; the right cluster
+/// of a real library differs only by a read-out or a server sort longer than the shared table's),
+/// the same visit-slot decision ([`visit_slot`], from `directory`) and the same name fit
+/// ([`page_header::fit_name`], which the caller's `label_at` reads), differing only in what the
+/// picture is for: the ⋯ is drawn when it holds folded names ([`MoreOpener::WhenFolded`]).
+pub(crate) fn names_preview<K: Clone + PartialEq>(
+    pills: &[K], current: &K, kind: SecKind, directory: plx_data::stores::browse::DirectoryView<'_>, measure: &dyn Measure,
+    label_at: impl Fn(&K, f32) -> String,
+) -> page_header::NamesRow<K> {
+    // a page that cannot know the listing's sorts takes every sort the shared table knows as the
+    // candidates for the widest (a real library offers a subset plus the server's own)
+    let sorts: Vec<&str> = plx_data::sortfacts::SortFact::ALL.iter().map(|fact| fact.label()).collect();
+    let (right, widest) = header_controls(None, CollectionsControl::Unknown, Listing::All, plx_data::sortfacts::SortFact::Title.label(), &sorts, measure);
+    let names = NamesIn {
+        pills, current: Some(current), visit_slot: visit_slot(directory, kind, pills.len()), more: MoreOpener::WhenFolded, right, widest: &widest,
+    };
+    page_header::names_row(names, measure, label_at)
 }
 
 impl LibraryScreen {
@@ -302,59 +309,53 @@ impl LibraryScreen {
     fn names_header<H: LibraryLike>(&mut self, cx: &Cx<'_, H>) -> HeaderRow {
         let (right, widest) = self.header_right(cx);
         let measure = cx.measure;
-        let budget = PageHeader::new(PageHeaderSpec { right: right.clone(), ..Default::default() }, &widest, measure)
-            .layout(SCR_W, measure).left_budget;
 
         self.libraries.clear();
         self.folded.clear();
-        let current = self.view_section(cx);
-        let mut left = Vec::new();
-        if let Some(current) = current {
-            let directory = H::directory(cx);
-            let mut all: Vec<(u32, usize)> = Vec::new();
-            for (index, section) in directory.favorite_sections_for(current).filter(|(_, section)| section.row.pinned) {
-                let Some(sid) = section.sid else { continue };
-                let elem = self.keys.register(
-                    LibraryIdentity::Library(LibrarySectionIdentity { sid, key: section.key }),
-                    LIBRARY_GROUP, all.len());
-                all.push((elem, index));
-            }
-            // Reserve a current-library slot whenever the roster can require one (the shared packing,
-            // `page_header::plan_names`, says why): a visit never shifts or displaces the favorites.
-            let visit_slot = all.len() > 2 || directory.sections().iter().any(|section|
-                section.kind == directory.sections()[current].kind && !section.row.pinned);
-            let label = |section, room| {
-                let (title, owner) = self.library_name(section, cx);
-                fit_name(title, owner, room, measure)
-            };
-            let plan = page_header::plan_names(budget, visit_slot, layout::MAX_LIBRARY_PILLS, measure, |room|
-                all.iter().map(|(_, section)| label(*section, room)).collect());
-            let page_header::NamesPlan { labels, picks, more, current_room } = plan;
-            let current_label = label(current, current_room);
-            self.folded = all.iter().enumerate().filter(|(i, (_, section))|
-                !picks.contains(i) && *section != current)
-                .filter_map(|(_, (_, section))| u32::try_from(*section).ok()).collect();
-            for &pick in &picks {
-                left.push(HeaderItem { selected_plate: all[pick].1 == current, ..item(labels[pick].as_str()) });
-                self.libraries.push(all[pick]);
-            }
-            // The menu belongs to the fixed shortcuts. Keep its opener in that same slot while
-            // the active visit comes and goes beside it.
-            left.push(more);
-            self.libraries.push((MORE, usize::MAX));
-            if !self.libraries.iter().any(|(_, index)| *index == current) {
-                if let Some(sid) = directory.sections()[current].sid {
-                    let elem = self.keys.register(LibraryIdentity::Library(LibrarySectionIdentity {
-                        sid, key: directory.sections()[current].key,
-                    }), LIBRARY_GROUP, self.libraries.len());
-                    left.push(HeaderItem { selected_plate: true, ..item(current_label) });
-                    self.libraries.push((elem, current));
+        let Some(current) = self.view_section(cx) else {
+            let page = PageHeader::new(PageHeaderSpec { right, ..Default::default() }, &widest, measure);
+            let layout = page.layout(SCR_W, measure);
+            return self.header_row(page, layout);
+        };
+        let directory = H::directory(cx);
+        let mut all: Vec<(u32, usize)> = Vec::new();
+        for (index, section) in directory.favorite_sections_for(current).filter(|(_, section)| section.row.pinned) {
+            let Some(sid) = section.sid else { continue };
+            let elem = self.keys.register(
+                LibraryIdentity::Library(LibrarySectionIdentity { sid, key: section.key }),
+                LIBRARY_GROUP, all.len());
+            all.push((elem, index));
+        }
+        let sections: Vec<usize> = all.iter().map(|(_, section)| *section).collect();
+        let on_view = directory.sections()[current].sid.map(|_| &current);
+        let names = NamesIn {
+            pills: &sections, current: on_view, visit_slot: visit_slot(directory, directory.sections()[current].kind, all.len()),
+            more: MoreOpener::Always, right, widest: &widest,
+        };
+        let row = page_header::names_row(names, measure, |section, room| {
+            let (title, owner) = self.library_name(*section, cx);
+            page_header::fit_name(title, owner, room, measure)
+        });
+        self.folded = row.folded.iter().filter_map(|section| u32::try_from(*section).ok()).collect();
+        for slot in &row.slots {
+            match slot {
+                // The menu belongs to the fixed shortcuts. Keep its opener in that same slot while
+                // the active visit comes and goes beside it.
+                NameSlot::More => self.libraries.push((MORE, usize::MAX)),
+                NameSlot::Pill(section) => {
+                    let elem = match all.iter().find(|(_, shortcut)| shortcut == section) {
+                        Some((elem, _)) => *elem,
+                        None => {
+                            let (sid, key) = (directory.sections()[*section].sid, directory.sections()[*section].key);
+                            let Some(sid) = sid else { continue };
+                            self.keys.register(LibraryIdentity::Library(LibrarySectionIdentity { sid, key }), LIBRARY_GROUP, self.libraries.len())
+                        }
+                    };
+                    self.libraries.push((elem, *section));
                 }
             }
         }
-        let page = PageHeader::new(PageHeaderSpec { left, right, ..Default::default() }, &widest, measure);
-        let layout = page.layout(SCR_W, measure);
-        self.header_row(page, layout)
+        self.header_row(row.page, row.layout)
     }
 
     /// The built row: which element each focusable item of `layout` is. The names and options are

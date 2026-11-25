@@ -7,6 +7,7 @@
   "library_order.state_idle": "Premi OK per spostare {title} in su o in giù. Home e l’intestazione {kind} mostrano le tue librerie preferite in quest’ordine.",
   "library_order.state_reset": "Riporta le tue librerie preferite nell’ordine in cui le elencano i tuoi server.",
   "library_order.state_moving": "Spostamento di {title}. Su e Giù cambiano la posizione, OK la conferma e Indietro annulla.",
+  "library_order.state_unnamed": "{title} non può ancora essere spostata: il suo server non ha ancora finito di connettersi.",
   "library_order.state_dropped": "{title} ora è {home} in Home e {header} nell’intestazione {kind}.",
   "library_order.state_confirm": "Premi di nuovo OK per riportare le tue librerie preferite nell’ordine dei tuoi server. Qualsiasi altro pulsante mantiene il tuo ordine.",
   "library_order.state_reset_done": "Le tue librerie preferite sono tornate nell’ordine in cui le elencano i tuoi server.",

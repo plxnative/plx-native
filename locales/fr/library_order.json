@@ -7,6 +7,7 @@
   "library_order.state_idle": "Appuyez sur OK pour déplacer {title} vers le haut ou vers le bas. L’Accueil et l’en-tête {kind} affichent vos bibliothèques favorites dans cet ordre.",
   "library_order.state_reset": "Remet vos bibliothèques favorites dans l’ordre indiqué par vos serveurs.",
   "library_order.state_moving": "Déplacement de {title}. Haut et Bas changent sa position, OK la confirme et Retour annule.",
+  "library_order.state_unnamed": "{title} ne peut pas encore être déplacée : son serveur n’a pas fini de se connecter.",
   "library_order.state_dropped": "{title} est maintenant {home} sur l’Accueil et {header} dans l’en-tête {kind}.",
   "library_order.state_confirm": "Appuyez de nouveau sur OK pour remettre vos bibliothèques favorites dans l’ordre indiqué par vos serveurs. Tout autre bouton conserve votre ordre.",
   "library_order.state_reset_done": "Vos bibliothèques favorites sont revenues dans l’ordre indiqué par vos serveurs.",

@@ -73,6 +73,22 @@ fn focus_on(page: &mut LibraryOrderPage, snap: &DirectorySnapshot, elem: u32) {
     step_page(page, snap, ScreenEvent::FocusMoved { from: None, to, by: plx_ui::screen::By::Dir });
 }
 
+/// OK on the row of the library that opens table index `section`.
+fn ok_lib(page: &mut LibraryOrderPage, snap: &DirectorySnapshot, section: usize) -> Vec<Stamped<InnerHost>> {
+    let elem = page.elem_of(section);
+    ok_on(page, snap, elem)
+}
+
+fn focus_lib(page: &mut LibraryOrderPage, snap: &DirectorySnapshot, section: usize) {
+    let elem = page.elem_of(section);
+    focus_on(page, snap, elem);
+}
+
+/// The identity of the library that opens table index `section`, as the page shows it now.
+fn lib(page: &LibraryOrderPage, section: usize) -> LibraryRef {
+    LibraryRef::of(page.state.shown.iter().find(|row| row.section == section).expect("shown")).expect("a named library")
+}
+
 fn order(page: &LibraryOrderPage) -> Vec<usize> {
     page.state.shown.iter().map(|r| r.section).collect()
 }
@@ -82,8 +98,8 @@ fn page_of(snap: &DirectorySnapshot) -> LibraryOrderPage {
 }
 
 fn pick_up(page: &mut LibraryOrderPage, snap: &DirectorySnapshot, section: usize) {
-    focus_on(page, snap, lib_elem_for_test(section));
-    assert!(sent(&ok_on(page, snap, lib_elem_for_test(section))).is_empty(), "picking up writes nothing");
+    focus_lib(page, snap, section);
+    assert!(sent(&ok_lib(page, snap, section)).is_empty(), "picking up writes nothing");
 }
 
 // ---- the lifecycle ----------------------------------------------------------------------------
@@ -93,7 +109,7 @@ fn pickup_move_and_drop_sends_exactly_one_set_with_the_whole_shown_order() {
     let s = snap(six(), OrderState::Server, WriteState::Idle);
     let mut page = page_of(&s);
     pick_up(&mut page, &s, 4);
-    assert!(matches!(page.state.mode, Mode::Moving { lifted: 4, .. }));
+    assert!(matches!(&page.state.mode, Mode::Moving { lifted, .. } if *lifted == lib(&page, 4)));
     for _ in 0..3 {
         let (handled, out) = press(&mut page, &s, Key::Up);
         assert_eq!(handled, Handled::Yes, "the page takes Up while a library is held");
@@ -101,11 +117,11 @@ fn pickup_move_and_drop_sends_exactly_one_set_with_the_whole_shown_order() {
     }
     press(&mut page, &s, Key::Down);
     assert_eq!(order(&page), [0, 1, 4, 2, 3, 5], "Anime went up three and down one");
-    let out = ok_on(&mut page, &s, lib_elem_for_test(4));
+    let out = ok_lib(&mut page, &s, 4);
     assert_eq!(sent(&out), [Sent::Set(vec![
         ("m0".into(), 1), ("m0".into(), 2), ("m1".into(), 5), ("m0".into(), 3), ("m0".into(), 4), ("m0".into(), 6),
     ])], "one command, the whole shown order, by (machine, section key)");
-    assert_eq!(page.state.mode, Mode::Dropped(4));
+    assert_eq!(page.state.mode, Mode::Dropped(lib(&page, 4)));
 }
 
 #[test]
@@ -115,8 +131,9 @@ fn a_drop_that_moved_nothing_writes_nothing() {
     pick_up(&mut page, &s, 2);
     press(&mut page, &s, Key::Up);
     press(&mut page, &s, Key::Down);
-    assert!(sent(&ok_on(&mut page, &s, lib_elem_for_test(2))).is_empty());
-    assert_eq!(page.state.mode, Mode::Dropped(2));
+    assert!(sent(&ok_lib(&mut page, &s, 2)).is_empty());
+    assert_eq!(page.state.mode, Mode::Idle, "nothing was sent, so no place is claimed");
+    assert!(page.state.description().starts_with("Press OK to move 4K Movies"), "{}", page.state.description());
 }
 
 #[test]
@@ -127,7 +144,7 @@ fn a_library_whose_server_has_no_machine_id_yet_is_left_out_of_the_command() {
     let mut page = page_of(&s);
     pick_up(&mut page, &s, 3);
     press(&mut page, &s, Key::Up);
-    let Some(Sent::Set(libs)) = sent(&ok_on(&mut page, &s, lib_elem_for_test(3))).pop() else { panic!("a set") };
+    let Some(Sent::Set(libs)) = sent(&ok_lib(&mut page, &s, 3)).pop() else { panic!("a set") };
     assert_eq!(libs.len(), 5);
     assert!(libs.iter().all(|(machine, _)| !machine.is_empty()), "never an empty machine id: {libs:?}");
 }
@@ -139,7 +156,7 @@ fn the_ends_are_walls_for_the_held_library() {
     pick_up(&mut page, &s, 0);
     press(&mut page, &s, Key::Up);
     assert_eq!(order(&page), [0, 1, 2, 3, 4, 5]);
-    ok_on(&mut page, &s, lib_elem_for_test(0));
+    ok_lib(&mut page, &s, 0);
     pick_up(&mut page, &s, 5);
     press(&mut page, &s, Key::Down);
     assert_eq!(order(&page), [0, 1, 2, 3, 4, 5]);
@@ -196,7 +213,7 @@ fn the_back_key_through_the_surface_restores_while_moving_and_pops_when_idle() {
     assert_eq!(surface.inner.depth(), 2, "the page is on the root");
     assert_eq!(name(&surface), crate::registry::word::LIBRARY_ORDER);
     drive(&mut surface, ScreenEvent::Mount);
-    let elem = lib_elem_for_test(0);
+    let elem = LIB_KEY_BASE;
     drive(&mut surface, ScreenEvent::Activate(elem));
     drive(&mut surface, key_ev(Key::Down));
     let (handled, out) = drive(&mut surface, back_key());
@@ -210,11 +227,7 @@ fn the_back_key_through_the_surface_restores_while_moving_and_pops_when_idle() {
 // ---- Reset ------------------------------------------------------------------------------------
 
 fn reset_stops(page: &LibraryOrderPage) -> bool {
-    page.form.step_key(lib_key(5), 1) == Some(LibId::Reset.key())
-}
-
-fn lib_key(section: usize) -> RowKey {
-    LibId::Lib(section).key()
+    page.form.step_key(page.state.keys.key_of(&LibId::of(page.state.shown.last().expect("rows"))), 1) == Some(LibId::Reset.key())
 }
 
 #[test]
@@ -266,7 +279,7 @@ fn after_a_reset_the_publication_takes_reset_away_and_focus_lands_on_the_last_li
     let done = snap(six(), OrderState::Server, WriteState::Saved);
     step_page(&mut page, &done, ScreenEvent::Tick(plx_machine::machine::Tick { ms: 16, dt_us: 16_000 }));
     assert!(!reset_stops(&page), "the store has no record now: Reset is inert");
-    assert_eq!(page.form.selected_key(), Some(lib_key(5)), "focus is on the last library");
+    assert_eq!(page.form.selected_key(), Some(page.state.keys.key_of(&LibId::of(page.state.shown.last().unwrap()))), "focus is on the last library");
 }
 
 // ---- what the page shows until the store says otherwise ---------------------------------------
@@ -277,7 +290,7 @@ fn the_page_keeps_its_shown_order_until_the_store_publishes_something_new() {
     let mut page = page_of(&s);
     pick_up(&mut page, &s, 2);
     press(&mut page, &s, Key::Up);
-    ok_on(&mut page, &s, lib_elem_for_test(2));
+    ok_lib(&mut page, &s, 2);
     let tick = || ScreenEvent::Tick(plx_machine::machine::Tick { ms: 16, dt_us: 16_000 });
     step_page(&mut page, &s, tick());
     assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "the stale publication does not snap it back");
@@ -308,9 +321,9 @@ fn every_mode_says_its_sentence() {
     let s = snap(six(), RECORDED, WriteState::Saved);
     let mut page = page_of(&s);
     let say = |page: &LibraryOrderPage| page.state.description();
-    focus_on(&mut page, &s, lib_elem_for_test(0));
+    focus_lib(&mut page, &s, 0);
     assert_eq!(say(&page), msg::library_order_state_idle(msg::browse_kind_movies(), "Movies"), "idle, on a library");
-    focus_on(&mut page, &s, lib_elem_for_test(4));
+    focus_lib(&mut page, &s, 4);
     assert_eq!(say(&page), msg::library_order_state_idle(msg::browse_kind_tv_shows(), "Anime"));
     assert!(say(&page).starts_with("Press OK to move Anime"), "the title is the focused library's: {}", say(&page));
     focus_on(&mut page, &s, reset_elem_for_test());
@@ -324,7 +337,7 @@ fn every_mode_says_its_sentence() {
     for _ in 0..3 {
         press(&mut page, &s, Key::Up);
     }
-    ok_on(&mut page, &s, lib_elem_for_test(4));
+    ok_lib(&mut page, &s, 4);
     // Anime now stands second of all six on Home and first among the TV shows in the header
     assert_eq!(order(&page), [0, 4, 1, 2, 3, 5]);
     assert_eq!(say(&page), msg::library_order_state_dropped("first", "second", msg::browse_kind_tv_shows(), "Anime"));
@@ -364,36 +377,34 @@ fn tick_ev() -> ScreenEvent<InnerHost> {
 }
 
 #[test]
-fn the_preview_overflow_is_what_names_row_says_for_the_same_pills() {
-    for count in [1, 3, 5, 12] {
+fn the_preview_draws_a_more_only_when_names_are_folded_and_the_note_follows_the_same_answer() {
+    for count in [1, 2, 3, 5, 12] {
         let s = snap(movies(count), OrderState::Server, WriteState::Idle);
         let mut page = page_of(&s);
         step_page(&mut page, &s, tick_ev());
-        let pills: Vec<(String, usize)> = page.state.shown.iter().map(|r| (r.title.clone(), r.section)).collect();
-        let (right, widest) = crate::registry::header_controls_at_rest(&MEASURE);
-        let expect = plx_ui::page_header::names_row(&pills, 0, right, &widest, crate::registry::MAX_LIBRARY_PILLS, &MEASURE);
-        assert_eq!(page.preview.overflowed(), expect.overflowed(), "{count} libraries");
-        assert_eq!(page.preview.slot().is_some(), true);
+        assert_eq!(page.preview.draws_more(), page.preview.overflowed(), "{count} libraries: the ⋯ and the note are one answer");
+        assert!(page.preview.slot().is_some());
     }
-    let few = snap(movies(1), OrderState::Server, WriteState::Idle);
-    let mut one = page_of(&few);
-    step_page(&mut one, &few, tick_ev());
-    assert!(!one.preview.overflowed(), "one library never folds");
+    let few = snap(movies(2), OrderState::Server, WriteState::Idle);
+    let mut two = page_of(&few);
+    step_page(&mut two, &few, tick_ev());
+    assert!(!two.preview.overflowed() && !two.preview.draws_more(), "names that fit draw no ⋯");
+    assert_eq!(two.preview.shown_names().len(), 2);
     let many = snap(movies(12), OrderState::Server, WriteState::Idle);
     let mut twelve = page_of(&many);
     step_page(&mut twelve, &many, tick_ev());
-    assert!(twelve.preview.overflowed(), "twelve past the cap of eight always fold");
+    assert!(twelve.preview.overflowed() && twelve.preview.draws_more(), "twelve past the cap of eight always fold");
 }
 
 #[test]
 fn the_preview_shows_the_kind_of_the_library_in_view_and_the_last_ones_with_reset_in_focus() {
     let s = snap(six(), RECORDED, WriteState::Saved);
     let mut page = page_of(&s);
-    focus_on(&mut page, &s, lib_elem_for_test(2));
+    focus_lib(&mut page, &s, 2);
     step_page(&mut page, &s, tick_ev());
     assert_eq!(page.preview.shown_names().len(), 2, "the two Movies libraries");
     assert_eq!(page.preview.plated().as_deref(), Some("4K Movies"));
-    focus_on(&mut page, &s, lib_elem_for_test(4));
+    focus_lib(&mut page, &s, 4);
     step_page(&mut page, &s, tick_ev());
     assert!(page.preview.shown_names().iter().any(|n| n == "Anime anna"), "the plated name is on the row: {:?}", page.preview.shown_names());
     assert!(page.preview.shown_names().iter().all(|n| n != "Movies"), "and no Movies library is in a TV shows header");
@@ -401,12 +412,261 @@ fn the_preview_shows_the_kind_of_the_library_in_view_and_the_last_ones_with_rese
     focus_on(&mut page, &s, reset_elem_for_test());
     step_page(&mut page, &s, tick_ev());
     assert_eq!(page.preview.plated().as_deref(), Some("Documentaries"), "Reset: the last library's kind");
-    focus_on(&mut page, &s, lib_elem_for_test(0));
+    focus_lib(&mut page, &s, 0);
     pick_up(&mut page, &s, 0);
     press(&mut page, &s, Key::Down);
     press(&mut page, &s, Key::Down);
     step_page(&mut page, &s, tick_ev());
     assert_eq!(page.preview.shown_names(), ["4K Movies", "Movies"], "the held library moves in the preview with it");
+}
+
+// ---- a library no order can name yet --------------------------------------------------------------
+
+fn unnamed(rows: &mut [LibraryOrderRow], at: &[usize]) {
+    for &i in at { rows[i].machine_id.clear(); }
+}
+
+fn description_of(page: &LibraryOrderPage) -> String { page.state.description() }
+
+#[test]
+fn an_unnamed_library_is_not_pickable_says_why_and_sends_nothing() {
+    use plx_os::i18n::msg;
+    let mut rows = six();
+    unnamed(&mut rows, &[1]);
+    let s = snap(rows, RECORDED, WriteState::Saved);
+    let mut page = page_of(&s);
+    focus_lib(&mut page, &s, 1);
+    assert_eq!(description_of(&page), msg::library_order_state_unnamed("TV Shows"), "the sentence says why, not 'Press OK to move'");
+    assert!(sent(&ok_lib(&mut page, &s, 1)).is_empty());
+    assert_eq!(page.state.mode, Mode::Idle, "OK on it picks nothing up");
+    let row = &page.form.table.sections[0].rows[1];
+    assert!(row.disabled && row.moving == RowMove::Off, "a disabled row that offers no move");
+    // a named neighbour still moves, and the unnamed one is never the one held
+    pick_up(&mut page, &s, 0);
+    assert!(matches!(&page.state.mode, Mode::Moving { lifted, .. } if *lifted == lib(&page, 0)));
+}
+
+#[test]
+fn a_page_of_only_unnamed_libraries_moves_nothing_sends_nothing_and_still_has_a_stop() {
+    let mut rows = six();
+    unnamed(&mut rows, &[0, 1, 2, 3, 4, 5]);
+    assert!(order_command(&rows).is_none(), "no command names no library");
+    let s = snap(rows, OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    assert_eq!(page.form.focusable_len(), 6, "every library row is a stop (to read why); Reset is inert");
+    for section in 0..6 {
+        focus_lib(&mut page, &s, section);
+        assert!(sent(&ok_lib(&mut page, &s, section)).is_empty());
+        assert_eq!(page.state.mode, Mode::Idle, "section {section}");
+    }
+    assert!(!matches!(page.state.mode, Mode::Moving { .. }));
+    assert!(page.form.selected_id().is_some(), "focus has a row to be on");
+}
+
+#[test]
+fn a_drop_never_sends_an_empty_command_and_says_a_place_only_when_it_sent_one() {
+    use plx_os::i18n::msg;
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 1);
+    press(&mut page, &s, Key::Down);
+    // the shown rows go unnamed under the hand (a publication cannot land while held, so force the state)
+    for row in &mut page.state.shown { row.machine_id.clear(); }
+    assert!(sent(&ok_lib(&mut page, &s, 1)).is_empty(), "no library an order can name: nothing sent");
+    assert_eq!(page.state.mode, Mode::Idle, "and no place is claimed");
+    assert_ne!(page.state.description(), msg::library_order_state_reset_done());
+}
+
+// ---- a library is its machine id and key, not its table index -------------------------------------
+
+/// The same publication after the section table was rebuilt: every `section` index moved.
+fn renumbered(rows: &[LibraryOrderRow], by: usize) -> Vec<LibraryOrderRow> {
+    rows.iter().cloned().map(|mut row| { row.section += by; row }).collect()
+}
+
+#[test]
+fn a_table_rebuild_after_a_drop_keeps_the_sentence_and_the_focus_on_the_right_library() {
+    use plx_os::i18n::msg;
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 4);
+    for _ in 0..3 { press(&mut page, &s, Key::Up); }
+    ok_lib(&mut page, &s, 4);
+    let said = msg::library_order_state_dropped("first", "second", msg::browse_kind_tv_shows(), "Anime");
+    assert_eq!(page.state.description(), said);
+    // the store echoes the order, from a table rebuilt under new indices
+    let mut echoed = six();
+    let anime = echoed.remove(4);
+    echoed.insert(1, anime);
+    let rebuilt = snap(renumbered(&echoed, 10), RECORDED, WriteState::InFlight);
+    step_page(&mut page, &rebuilt, tick_ev());
+    assert_eq!(page.state.basis, Shown::Published, "the echo ended the wait");
+    assert_eq!(page.state.description(), said, "still Anime, still second: the mode follows the library, not index 4");
+    assert!(matches!(&page.state.mode, Mode::Dropped(lib) if lib.key == 5));
+    assert_eq!(page.state.previewed().map(|row| row.title.as_str()), Some("Anime"));
+    // focus on a library survives a rebuild by identity too
+    let mut page = page_of(&s);
+    focus_lib(&mut page, &s, 3);
+    let moved = snap(renumbered(&six(), 7), RECORDED, WriteState::Saved);
+    step_page(&mut page, &moved, tick_ev());
+    assert_eq!(page.form.selected_id().map(|id| matches!(id, LibId::Lib(lib) if lib.key == 4)), Some(true), "Kids is still focused");
+    assert_eq!(page.state.sel, LibId::Lib(LibraryRef { machine_id: "m0".into(), key: 4 }));
+}
+
+#[test]
+fn a_held_library_keeps_its_row_key_through_every_move() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    let key = page.elem_of(3);
+    pick_up(&mut page, &s, 3);
+    for _ in 0..2 {
+        press(&mut page, &s, Key::Up);
+        assert_eq!(page.form.selected_key(), Some(RowKey(key)), "the engine's key still names the held row");
+        assert_eq!(page.elem_of(3), key);
+    }
+}
+
+// ---- pointer focus and the page's invariants ----------------------------------------------------------
+
+fn focus_key(page: &mut LibraryOrderPage, snap: &DirectorySnapshot, elem: u32) {
+    focus_on(page, snap, elem);
+}
+
+#[test]
+fn a_pointer_over_another_row_while_a_library_is_held_changes_nothing() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    let held = page.elem_of(2);
+    let other = page.elem_of(4);
+    assert!(!page.form.lands_on(RowKey(other)), "the table says no row but the held one is a stop");
+    assert_eq!(plx_ui::geom::table_elems(&page.form.table, Some(&page.form)).count(), 1);
+    focus_key(&mut page, &s, other);
+    assert!(matches!(page.state.mode, Mode::Moving { .. }), "still holding");
+    assert_eq!(page.form.selected_key(), Some(RowKey(held)), "the selection did not leave the held row");
+    assert_eq!(page.state.sel, LibId::of(&page.state.shown[2]));
+    // the band is not a row: a pointer there puts the library back, as Back does, and writes nothing
+    let entry = page.entry;
+    let (_, out) = step_page(&mut page, &s, ScreenEvent::FocusMoved {
+        from: None, to: FocusKey { entry, elem: crate::registry::BAND }, by: plx_ui::screen::By::Dir,
+    });
+    assert_eq!(page.state.mode, Mode::Idle);
+    assert!(sent(&out).is_empty());
+    assert_eq!(order(&page), [0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn a_pointer_over_a_library_while_a_reset_is_asked_withdraws_the_question() {
+    use plx_os::i18n::msg;
+    let s = snap(six(), RECORDED, WriteState::Saved);
+    let mut page = page_of(&s);
+    focus_on(&mut page, &s, reset_elem_for_test());
+    ok_on(&mut page, &s, reset_elem_for_test());
+    assert_eq!(page.state.mode, Mode::ConfirmReset);
+    focus_on(&mut page, &s, reset_elem_for_test());
+    assert_eq!(page.state.mode, Mode::ConfirmReset, "focus staying on Reset keeps the question");
+    let elem = page.elem_of(1);
+    focus_on(&mut page, &s, elem);
+    assert_eq!(page.state.mode, Mode::Idle, "focus left Reset: the question is withdrawn");
+    assert_ne!(page.state.description(), msg::library_order_state_confirm());
+    // and a click that follows is a pick-up, not the confirmation
+    assert!(sent(&ok_on(&mut page, &s, elem)).is_empty());
+    assert!(matches!(page.state.mode, Mode::Moving { .. }));
+}
+
+#[test]
+fn a_reset_that_turns_inert_under_a_question_withdraws_it() {
+    let recorded = snap(six(), RECORDED, WriteState::Saved);
+    let mut page = page_of(&recorded);
+    focus_on(&mut page, &recorded, reset_elem_for_test());
+    ok_on(&mut page, &recorded, reset_elem_for_test());
+    assert_eq!(page.state.mode, Mode::ConfirmReset);
+    // the record went away elsewhere (a sign-out re-read, another reset): Reset is inert now
+    let gone = snap(six(), OrderState::Server, WriteState::Saved);
+    step_page(&mut page, &gone, tick_ev());
+    assert_eq!(page.state.mode, Mode::Idle, "no question about an action that is gone");
+    assert!(sent(&ok_on(&mut page, &gone, reset_elem_for_test())).is_empty(), "and OK on the inert row does nothing");
+}
+
+// ---- awaiting the store's echo -------------------------------------------------------------------------
+
+#[test]
+fn a_second_quick_drop_does_not_snap_back_to_the_first_echo() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    // drop 1: 4K Movies (2) up one
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    assert_eq!(sent(&ok_lib(&mut page, &s, 2)).len(), 1);
+    assert!(matches!(page.state.basis, Shown::AwaitingEcho { .. }));
+    // pick up again at once: Kids (3) up one
+    pick_up(&mut page, &s, 3);
+    press(&mut page, &s, Key::Up);
+    // drop 1's save lands while Kids is held (the page does not take it in)
+    let mut first = six();
+    first.swap(1, 2);
+    let echo1 = snap(first, RECORDED, WriteState::InFlight);
+    step_page(&mut page, &echo1, tick_ev());
+    assert_eq!(order(&page), [0, 2, 3, 1, 4, 5], "held: untouched");
+    // drop 2
+    assert_eq!(sent(&ok_lib(&mut page, &echo1, 3)).len(), 1);
+    // a stale tick before the store steps: the publication still says drop 1's order
+    step_page(&mut page, &echo1, tick_ev());
+    assert_eq!(order(&page), [0, 2, 3, 1, 4, 5], "no snap back to drop 1's order");
+    assert!(!page.form.table.gliding(), "and nothing glided back and forth");
+    // the store's echo of drop 2
+    let mut second = six();
+    second.swap(1, 2);
+    second.swap(2, 3);
+    let echo2 = snap(second, RECORDED, WriteState::InFlight);
+    step_page(&mut page, &echo2, tick_ev());
+    assert_eq!(order(&page), [0, 2, 3, 1, 4, 5]);
+    assert_eq!(page.state.basis, Shown::Published, "the wait ended on the echo of the order that was sent");
+}
+
+#[test]
+fn while_an_order_waits_for_its_echo_the_record_and_write_state_still_follow_the_store() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    ok_lib(&mut page, &s, 2);
+    assert!(!reset_stops(&page), "no record yet");
+    // the record state landed before the rows did (the order is the stale one)
+    let partly = snap(six(), RECORDED, WriteState::Failed);
+    step_page(&mut page, &partly, tick_ev());
+    assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "rows hold");
+    assert!(reset_stops(&page), "Reset is offered the moment the store says there is a record");
+    assert!(page.state.seen.write_failed());
+}
+
+#[test]
+fn a_command_the_store_never_echoes_ends_its_wait_and_the_page_shows_what_the_store_says() {
+    let s = snap(six(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    ok_lib(&mut page, &s, 2);
+    let tick = |dt_us| ScreenEvent::Tick(plx_machine::machine::Tick { ms: 16, dt_us });
+    step_page(&mut page, &s, tick(1_000_000));
+    assert_eq!(order(&page), [0, 2, 1, 3, 4, 5], "still waiting after a second");
+    step_page(&mut page, &s, tick(2_500_000));
+    assert_eq!(order(&page), [0, 1, 2, 3, 4, 5], "the store never said it: the page tells the truth");
+    assert_eq!(page.state.basis, Shown::Published);
+}
+
+#[test]
+fn a_reset_supersedes_an_order_waiting_for_its_echo() {
+    let s = snap(six(), RECORDED, WriteState::Saved);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 2);
+    press(&mut page, &s, Key::Up);
+    ok_lib(&mut page, &s, 2);
+    press(&mut page, &s, Key::Down);
+    focus_on(&mut page, &s, reset_elem_for_test());
+    ok_on(&mut page, &s, reset_elem_for_test());
+    assert_eq!(sent(&ok_on(&mut page, &s, reset_elem_for_test())), [Sent::Reset]);
+    assert_eq!(page.state.basis, Shown::Published);
 }
 
 // ---- the root row -----------------------------------------------------------------------------
@@ -454,9 +714,11 @@ fn every_library_order_string_fits_in_every_language() {
         }
         let value = root_value(snap(long(), RECORDED, WriteState::Saved).view());
         assert!(!value.is_empty(), "{tag}");
+        let unnamed = plx_os::i18n::msg::library_order_state_unnamed("Documentaries and concerts");
         for text in [
             plx_os::i18n::msg::library_order_state_confirm(), plx_os::i18n::msg::library_order_state_reset_done(),
             plx_os::i18n::msg::library_order_preview_more(), plx_os::i18n::msg::library_order_state_unsaved(),
+            unnamed.as_str(),
         ] {
             assert!(!text.contains('\u{22ef}'), "{tag}: the ⋯ glyph is not in the shipped faces: {text}");
         }

@@ -1726,7 +1726,7 @@ impl Machine<InnerHost> for RootPage {
                 }
                 if self.form.selected_id() == Some(&RootId::LibraryOrder) {
                     let rows = library_order::rows_of(cx.views.directory);
-                    self.order_preview.sync(rows, rows.first(), cx.measure);
+                    self.order_preview.sync(rows, rows.first(), cx.views.directory, cx.measure);
                     self.order_preview.step(t.dt());
                 }
                 let key = self.inputs.session_key();

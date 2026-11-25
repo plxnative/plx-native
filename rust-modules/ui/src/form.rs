@@ -440,6 +440,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         let (sections, bindings, names) = self.check(form);
         let landing = keep.and_then(|k| self.landing_for(k, &bindings, neighbour));
         let before = self.drawn_keys();
+        let lift = self.lift_key();
         self.bindings = bindings;
         self.names = names;
         match landing {
@@ -447,7 +448,23 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
             None => self.table.open_sections(sections),
         }
         self.glide_reordered(&before);
+        self.follow_lift(lift);
         self.reseat_after_install();
+    }
+
+    /// The key of the row the table's lift belongs to (held, or landing after a drop): the identity a
+    /// reinstall follows it by ([`Self::follow_lift`]).
+    fn lift_key(&self) -> Option<RowKey> {
+        let at = usize::try_from(self.table.lift_owner()?).ok()?;
+        self.bindings.get(at)?.as_ref().map(|b| b.key)
+    }
+
+    /// **Hand the lift to the row that was lifted**, by key, wherever the install put it; with no such
+    /// row (it left the form, or the page was opened afresh) the lift is dropped, never left on the
+    /// row that stands in its old slot.
+    fn follow_lift(&mut self, key: Option<RowKey>) {
+        let to = key.and_then(|key| self.index_of_key(key)).map(|i| i as i32);
+        self.table.carry_lift(to);
     }
 
     /// Each keyed row's key and where the table DRAWS it now, by global row index (`None` at an
@@ -497,6 +514,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
             Some(i) => self.table.set_sections(sections, i as i32, false),
             None => self.table.open_sections(sections),
         }
+        self.follow_lift(None);
         self.reseat_after_install();
     }
 
@@ -517,6 +535,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         let (sections, bindings, names) = self.check(form);
         let find = |id: &Id| Self::position_of(&bindings, id);
         let before = self.drawn_keys();
+        let lift = self.lift_key();
         let keep = self.selected_id().cloned();
         let landing = prefer
             .and_then(find)
@@ -527,6 +546,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.names = names;
         self.table.set_sections_or_open(sections, landing.map(|i| i as i32), true);
         self.glide_reordered(&before);
+        self.follow_lift(lift);
         self.reseat_after_install();
     }
 
@@ -539,6 +559,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.bindings = bindings;
         self.names = names;
         self.table.restore_sections(sections, at.map(|i| i as i32), scroll);
+        self.follow_lift(None);
         self.reseat_after_install();
     }
 
@@ -617,6 +638,12 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.bindings
             .iter()
             .position(|b| b.as_ref().is_some_and(|b| b.key == key))
+    }
+    /// Can focus land on the row `key` names right now? It is bound AND a stop of the table
+    /// ([`Row::selectable`](crate::table::Row::selectable): a row that waits while another is held is
+    /// bound but no stop). `false` for a key the form does not know.
+    pub fn lands_on(&self, key: RowKey) -> bool {
+        self.index_of_key(key).and_then(|i| crate::geom::table_row(&self.table, i)).is_some_and(|row| row.selectable())
     }
     /// The id under the table's current selection.
     pub fn selected_id(&self) -> Option<&Id> {
