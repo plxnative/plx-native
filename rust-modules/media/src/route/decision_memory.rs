@@ -664,6 +664,14 @@ pub struct PreplayItem<'a> {
     pub part_id: i64,
 }
 
+impl<'a> PreplayItem<'a> {
+    /// The picker's item as the loaded page names it ([`plx_data::metadata::PreplayTracks`]); the part
+    /// id is the number in the part key (`/library/parts/{id}/..`), `0` when it names none.
+    pub fn of(tracks: &'a plx_data::metadata::PreplayTracks) -> Self {
+        Self { sid: tracks.sid, kind: &tracks.kind, show_rk: &tracks.show_rk, part_id: part_id_of(&tracks.part) }
+    }
+}
+
 /// **A viewer's track pick made BEFORE playback starts: the in-player menu's user-pick door, with
 /// no session.** It writes what the in-player pick writes, and for the same reasons:
 /// * the selection PUT (`PUT /library/parts/{id}?audioStreamID=..&subtitleStreamID=..`, queued off

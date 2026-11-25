@@ -1059,3 +1059,28 @@ fn a_parked_write_is_dropped_while_the_memory_note_is_up() {
     assert!(!w.parked(), "the value is spent");
     assert!(w.log().contains("write-back dropped (the remembered pick is not shown)"), "{}", w.log());
 }
+
+/// An episode's pick before playback goes out as the same PUT, and the memo it carries (`Off`) is the
+/// show's memory rung, which outranks PMS's still-selected track: the first start draws nothing.
+/// (Where the memo is stored is `remember_show_pick`'s, graded with the in-player picks.)
+#[test]
+fn a_preplay_subtitles_off_on_an_episode_puts_off_and_its_memory_rung_draws_none() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "episode", show_rk: SHOW, part_id: PART };
+    assert!(commit_preplay_pick(&item, 36014, 0, None, Some(SubtitleMemo::Off)));
+    wait_idle();
+    assert_eq!(w.pms.selection(PART), (36014, 0), "the server holds Off");
+    let subs = vec![
+        plx_data::metadata::Stream { id: 55001, index: 0, codec: "srt".into(), lang_code: "eng".into(), ..Default::default() },
+        plx_data::metadata::Stream { id: 55002, index: 1, codec: "srt".into(), lang_code: "fra".into(), selected: true, ..Default::default() },
+    ];
+    let playing = plx_data::metadata::PlayingItem {
+        kind: "episode".into(),
+        show_rk: SHOW.into(),
+        ..plx_data::metadata::PlayingItem::with_subs(subs)
+    };
+    let decision = crate::route::plan::pick_subtitle(
+        &playing, &plx_plex::plex::ShowLangPrefs::default(), crate::route::plan::SubtitleLangPrefs::default(), "jpn", None, Some(&SubtitleMemo::Off),
+    );
+    assert_eq!(decision.pick, None, "the viewer's Off outranks PMS's still-selected track");
+}

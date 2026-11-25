@@ -230,6 +230,12 @@ pub enum MetadataCmd {
     /// leaf — and lands only on the same `(sid, rk)`. A stream that is the SAME subtitle as one
     /// already listed (`Stream::same_subtitle`, under a new id) replaces it rather than joining it.
     AppendPlayingSub { sid: ServerId, rk: String, stream: crate::metadata::Stream },
+    /// A track pick made BEFORE playback (the Audio & Subtitles panel, #1532) was taken by the
+    /// server: `audio_sid` / `subtitle_sid` (`0` = Off) become the `selected` streams of the loaded
+    /// page's copy of `(sid, rk)`'s tracks, so the first start plans what was picked. Lands only on
+    /// the page that holds that item's streams (the item's own page, or the show page whose
+    /// backfilled streams are that episode's).
+    PatchTracks { sid: ServerId, rk: String, audio_sid: i64, subtitle_sid: i64 },
     MarkSkipped(crate::metadata::Marker),
     RetirePlaying,
     RetirePlayingItem,

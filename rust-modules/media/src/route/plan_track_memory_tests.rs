@@ -459,3 +459,72 @@ fn the_route_says_when_a_remembered_subtitle_is_not_shown() {
         "nothing was picked, so there is nothing the route could fail to show",
     );
 }
+
+// ---- a pick made before playback (#1532) ---------------------------------------------------------
+
+/// A MOVIE has no show memory, so the pick reaches the first start only through the loaded page's
+/// `selected` flags (`MetadataCmd::PatchTracks`): after Off the plan reads no selected subtitle.
+#[test]
+fn a_preplay_subtitles_off_on_a_movie_plans_no_subtitle_at_the_first_start() {
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![text_sub(21, "eng", ""), server_selected(text_sub(22, "spa", ""))],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let start = |store: &MetadataStore| {
+        let item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        pick_subtitle(&item, &NO_SHOW_RULES(), SubtitleLangPrefs::default(), "eng", None, None).pick
+    };
+    assert_eq!(start(&store), Some((22, 1)), "control: PMS's selection plays");
+    let tracks = store.view().preplay_tracks(sid, "m1").expect("a movie page names its tracks and part");
+    assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 9001);
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), audio_sid: 11, subtitle_sid: 0 }));
+    assert_eq!(start(&store), None, "Off: nothing selected, no subtitle");
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), audio_sid: 11, subtitle_sid: 21 }));
+    assert_eq!(start(&store), Some((21, 0)), "a picked track plays");
+}
+
+/// A show page's streams are its hero episode's (`backfill_episode`): the picker reads that
+/// episode's tracks and part, names the show as the memory's key, and a pick patches the same copy.
+/// Any other episode, and a movie's key, find nothing there.
+#[test]
+fn a_show_page_offers_its_hero_episodes_tracks_and_part() {
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "show-1".into(),
+        kind: "show".into(),
+        is_show: true,
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![server_selected(text_sub(22, "spa", ""))],
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "ep-7".into(),
+            part: "/library/parts/777/1/file.mkv".into(),
+            ..Default::default()
+        }),
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("ep-7".into()),
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let view = store.view();
+    let tracks = view.preplay_tracks(sid, "ep-7").expect("the on-deck episode's streams are the page's");
+    assert_eq!((tracks.kind.as_str(), tracks.show_rk.as_str(), tracks.subs.len()), ("episode", "show-1", 1));
+    assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 777);
+    assert!(view.preplay_tracks(sid, "ep-8").is_none(), "another episode's streams are not loaded");
+    assert!(view.preplay_tracks(sid, "show-1").is_none(), "a show has no file of its own");
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), audio_sid: 11, subtitle_sid: 0 }));
+    assert!(!store.run(MetadataCmd::PatchTracks { sid, rk: "ep-8".into(), audio_sid: 11, subtitle_sid: 22 }), "not this page's item");
+    assert!(store.view().current().unwrap().subs.iter().all(|s| !s.selected));
+}
