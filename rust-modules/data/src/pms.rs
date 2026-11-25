@@ -1744,7 +1744,8 @@ fn natural_order(srcs: &[Src], pins: &[(ServerId, i64, bool)]) -> Vec<(usize, us
 ///   places its libraries hold in the order, in its own natural sequence. A source whose libraries
 ///   were reordered has each block ranked by its library's place;
 /// * a source none of whose libraries is ranked (its directory has not landed yet) holds its natural
-///   place, right behind the source before it, until its libraries rank it.
+///   place, right behind EVERYTHING the source before it shows (not behind its last shelf: a
+///   reordered source's last shelf need not be its farthest), until its libraries rank it.
 fn published_order(srcs: &[Src], scope: &BrowseScope) -> Vec<(usize, usize)> {
     let mut order = natural_order(srcs, scope.pins);
     let HomeOrder::Moved { effective, default } = scope.order else { return order };
@@ -1768,14 +1769,16 @@ fn rank_keys(srcs: &[Src], effective: &[(ServerId, i64)], default: &[(ServerId, 
         slots.sort_unstable();
         let mut before = slots.first().map_or(behind, |first| first + 1);
         let mut slots = slots.into_iter();
-        let keys = places.iter().map(|place| {
+        let keys: Vec<usize> = places.iter().map(|place| {
             if let Some(place) = place {
                 let slot = if reordered { *place } else { slots.next().unwrap_or(*place) };
                 before = slot + 1;
             }
             before
         }).collect();
-        behind = before;
+        // behind EVERYTHING this source shows: a reordered source ends on the key of whichever shelf
+        // /hubs listed last, which is not its largest
+        behind = keys.iter().copied().max().map_or(before, |most| most.max(before));
         keys
     }).collect()
 }
@@ -3171,6 +3174,11 @@ fn feeds_home(sid: ServerId, pinned: &[ServerId], known: &[ServerId]) -> bool {
 struct BrowseScope<'a> {
     sections_gen: u32,
     pins: &'a [(ServerId, i64, bool)],
+    /// Browse's household verdict per source ([`browse::DirectoryView::source_households`]), which
+    /// [`roster_with_scope`] orders the sources by (the default source order, [`browse::source_rank`]).
+    /// A source it does not name is read as the household's own exactly when it names no owner, the
+    /// verdict a fixture carries.
+    households: &'a [(ServerId, bool)],
     /// The profile's Library order as Home reads it ([`HomeOrder`]); [`HomeOrder::Natural`] for the
     /// server order (and always for a fixture), which leaves Home exactly as it was.
     order: HomeOrder<&'a [(ServerId, i64)]>,
@@ -3184,13 +3192,14 @@ impl<'a> BrowseScope<'a> {
     /// code only: a production step is handed them ([`BrowseScope::retained`]).
     #[cfg(any(test, feature = "test-support"))]
     fn standalone() -> Self {
-        Self { sections_gen: 0, pins: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
+        Self { sections_gen: 0, pins: &[], households: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
     }
 
     fn retained(directory: crate::stores::browse::DirectoryView<'a>, clients: &'a ClientKeys) -> Self {
         Self {
             sections_gen: directory.sections_gen(),
             pins: directory.favorite_sections(),
+            households: directory.source_households(),
             order: directory.home_order(),
             clients: std::borrow::Cow::Borrowed(clients),
         }
@@ -3215,6 +3224,12 @@ impl<'a> BrowseScope<'a> {
             fold(&sid.raw().to_le_bytes());
             fold(&section.to_le_bytes());
             fold(&[*pinned as u8]);
+        }
+        // The roster's order follows the households (`roster_with_scope`): a source that changes sides
+        // is a moved roster, with or without a generation moving beside it.
+        for (sid, household) in self.households {
+            fold(&sid.raw().to_le_bytes());
+            fold(&[*household as u8]);
         }
         // A moved Library order is a moved Home even when no pin or generation moved with it.
         match self.order {
@@ -3284,34 +3299,32 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
     (pinned, known)
 }
 
-/// The sources Home is built from, in display order: our own servers first, then each share, each
-/// group keeping registration order. The merge appends shelves in exactly this order and adjacency
-/// is the grouping device, so "own first, then each shared server's, contiguously" is true by
-/// construction rather than by convention.
+/// The sources Home is built from, in display order: [`browse::source_rank`]'s, the ONE default source
+/// order Browse's section order reads too (the household's own servers first, then each share, each
+/// group keeping registration order). The merge appends shelves in exactly this order and adjacency is
+/// the grouping device, so the grouping is true by construction rather than by convention.
 ///
 /// The registry IS the granted roster — a server is in it only once plex.tv (or the
 /// `plxnative-servers` dev trigger) handed us a token for it — and [`feeds_home`] is what narrows
 /// the grant to a pin. The handle comes from the same place (`ServerFacts`), so nothing here has an
-/// opinion about who a server belongs to that the Sources list does not share.
+/// opinion about who a server belongs to that the Sources list does not share; the household verdict
+/// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
-    let mut own: Vec<(ServerId, String)> = Vec::new();
-    let mut shared: Vec<(ServerId, String)> = Vec::new();
-    for sid in scope.clients.slots() {
+    let mut ranked: Vec<((bool, bool, usize), ServerId, String)> = Vec::new();
+    for (slot, sid) in scope.clients.slots().enumerate() {
         if scope.clients.key(sid).is_none() || !feeds_home(sid, &pinned, &known) {
             continue;
         }
         let handle = scope.clients.facts(sid).and_then(|facts| facts.described)
             .map(|f| f.handle.clone())
             .unwrap_or_default();
-        if handle.is_empty() {
-            own.push((sid, handle));
-        } else {
-            shared.push((sid, handle));
-        }
+        let household = scope.households.iter().find(|(known, _)| *known == sid)
+            .map_or(handle.is_empty(), |(_, household)| *household);
+        ranked.push((crate::browse::source_rank(household, !handle.is_empty(), slot), sid, handle));
     }
-    own.append(&mut shared);
-    own
+    ranked.sort_by_key(|(rank, ..)| *rank);
+    ranked.into_iter().map(|(_, sid, handle)| (sid, handle)).collect()
 }
 
 /// A cheap fingerprint of what [`roster`] would return, so [`sync_roster`] can skip the rebuild on

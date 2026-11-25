@@ -66,6 +66,26 @@ fn own_servers_lead_the_default_even_when_a_share_comes_first_in_the_roster() {
     assert_eq!(titles(&state, &state.default_section_order()), vec!["Movies", "Films"]);
 }
 
+/// A Plex Home managed profile's family server is the household's though plex.tv sends it a handle: it
+/// leads the default over a friend's share that has the lower slot, in the section order, the tab
+/// fallback and (the same `source_rank`) Home's roster (`pms::library_order_tests`).
+#[test]
+fn a_managed_profiles_family_server_leads_a_friends_share_in_the_default() {
+    let mut state = BrowseState::default();
+    state.sources = vec![a_source("nas", "anna", true), a_source("family", "mum", true)];
+    state.sources[0].household = false;
+    state.sources[1].household = true;
+    let session = signed_in();
+    state.append_sections_with(0, vec![(2, "Films".into(), SecKind::Movie)], &session, "");
+    state.append_sections_with(1, vec![(4, "Movies".into(), SecKind::Movie)], &session, "");
+    for section in &mut state.sections { section.pinned = true; }
+    assert_eq!(titles(&state, &state.default_section_order()), vec!["Movies", "Films"]);
+    assert_eq!(state.section_of_kind(SecKind::Movie), Some(1), "the tab with nothing remembered opens the family's");
+    assert!(source_rank(true, true, 5) < source_rank(false, true, 0), "the household before a share, whatever the slots");
+    assert!(source_rank(false, false, 3) < source_rank(false, true, 0), "a share with no owner named before one that has");
+    assert!(source_rank(true, false, 1) < source_rank(true, true, 0), "and within the household, no owner before one");
+}
+
 /// A recorded order ranks across servers (a share between the owner's own libraries); the table
 /// itself is not reordered, so every index that names a library stays valid.
 #[test]

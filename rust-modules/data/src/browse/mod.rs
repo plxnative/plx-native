@@ -120,6 +120,17 @@ pub enum SourceState {
     InsecureOnly,
 }
 
+/// **THE default source order**, the one definition: the household's own servers first (a managed
+/// profile's family server is the household's though plex.tv sends it a handle, and a share plex.tv
+/// never named is not the household's though it carries none: #68), then servers with no owner to
+/// name before shares that have one, each group in roster (slot) order. Browse's default section order
+/// ([`BrowseState::default_section_order`]), and so the Library header, the tab fallback and Settings,
+/// read it; so does Home's roster (`pms::roster_with_scope`), so a profile's shelves and its header
+/// never disagree about which server leads.
+pub(crate) fn source_rank(household: bool, has_handle: bool, slot: usize) -> (bool, bool, usize) {
+    (!household, has_handle, slot)
+}
+
 /// One SOURCE the table is addressed by — a server this account has been granted. Comes from the
 /// [server registry](plx_plex::plex::server_ids), which is the granted roster: a server is registered
 /// only once plex.tv (or the `plxnative-servers` dev trigger) handed us a token for it.
@@ -2182,17 +2193,15 @@ impl BrowseState {
     // via `BrowseScope::order`) read that. `plex::library_order` has the rules.
 
     /// Every table index in the DEFAULT order, which is deterministic whatever order the sources'
-    /// directories landed in: own servers first, then shares (Home's own predicate, an empty
-    /// handle), each group in roster order, each source's libraries in the order its directory
-    /// listed them (the table appends a source's rows contiguously).
+    /// directories landed in: sources in [`source_rank`] order (the household's own servers first,
+    /// then shares; the SAME order Home's roster takes), each source's libraries in the order its
+    /// directory listed them (the table appends a source's rows contiguously).
     fn default_section_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.sections.len()).collect();
-        // a share plex.tv never named has no handle but is not the household's either (#68): it
-        // still sorts behind the household's own servers
         order.sort_by_key(|&index| {
             let src = self.sections[index].src;
             let source = self.sources.get(src);
-            (source.is_some_and(|source| !source.handle.is_empty()), !source.is_some_and(|source| source.household), src)
+            source_rank(source.is_some_and(|source| source.household), source.is_some_and(|source| !source.handle.is_empty()), src)
         });
         order
     }

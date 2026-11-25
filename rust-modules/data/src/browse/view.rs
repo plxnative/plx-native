@@ -454,6 +454,9 @@ pub struct SectionView {
 #[derive(Clone, Default)]
 struct DirectoryData {
     sources: Vec<(ServerId, super::SrcGroup)>,
+    /// Each source's household verdict ([`super::BrowseSource::household`]): what Home's roster
+    /// orders by, so the two surfaces rank the sources with one rule ([`super::source_rank`]).
+    households: Vec<(ServerId, bool)>,
     sections: Vec<SectionView>,
     favorites: Vec<(ServerId, i64, bool)>,
     /// Every `sections` index in the order to PRESENT (the profile's Library order over the
@@ -624,6 +627,7 @@ impl DirectorySnapshot {
             self.data = Arc::new(DirectoryData {
                 sources: state.sources().iter().map(|s| s.sid)
                     .zip(state.source_groups()).collect(),
+                households: state.sources().iter().map(|s| (s.sid, s.household)).collect(),
                 sections: state.sections().iter().zip(state.all_source_rows())
                     .map(|(section, row)| SectionView {
                         sid: state.sources().get(section.src).map(|source| source.sid),
@@ -668,6 +672,7 @@ impl DirectorySnapshot {
             stamp: Some((epoch, 0, 0, 1, sid)),
             data: Arc::new(DirectoryData {
                 sources: vec![(sid, source)],
+                households: Vec::new(),
                 sections: Vec::new(),
                 favorites: Vec::new(),
                 order: Vec::new(),
@@ -762,6 +767,7 @@ impl DirectorySnapshot {
             stamp: Some((epoch, 0, current, source_count, ServerId::UNSET)),
             data: Arc::new(DirectoryData {
                 sources,
+                households: Vec::new(),
                 sections,
                 favorites,
                 order,
@@ -881,6 +887,10 @@ impl<'a> DirectoryView<'a> {
     /// nothing else the header reads, so the header's fingerprint hashes it.
     pub fn presentation_order(self) -> &'a [usize] {
         &self.0.data.order
+    }
+    /// Browse's household verdict per source, which Home's roster is ordered by (`browse::source_rank`).
+    pub(crate) fn source_households(self) -> &'a [(ServerId, bool)] {
+        &self.0.data.households
     }
     /// What Home ranks its shelves by (see `DirectoryData::home_order`).
     pub(crate) fn home_order(self) -> crate::pms::HomeOrder<&'a [(ServerId, i64)]> {
