@@ -598,13 +598,25 @@ impl PageHeader {
     /// painted as it says (a value cross-fading in place, a control leaving or arriving), every
     /// other face as `draw` paints it.
     pub fn draw_with(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32, lifted: Option<usize>, swap: &HeaderSwap) {
+        self.draw_items(p, layout, capsules, pop, lifted, swap, |_| true);
+    }
+
+    /// **Only the left group** (the names, the `+N` / ⋯): the row as a picture of the names that
+    /// would show, without the controls that share the real row (a preview of the header, beside
+    /// a page that is not it). The layout is the real one, so the names stand where they would.
+    pub fn draw_names(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32) {
+        self.draw_items(p, layout, capsules, pop, None, &HeaderSwap::new(), |r| !matches!(r.slot, Slot::Right(_)));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_items(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32, lifted: Option<usize>, swap: &HeaderSwap, keep: impl Fn(&ItemRect) -> bool) {
         let ground = TabGround::Bare { pop, focus: lifted.is_none() };
         capsules.draw(p, layout.top(), HEIGHT, ground);
         if let Some(glyph) = layout.glyph {
             icons::draw(p, Icon::Chevron, glyph, breadcrumb::GLYPH_INK);
         }
         for (index, r) in layout.items.iter().enumerate() {
-            if lifted == Some(index) { continue; }
+            if lifted == Some(index) || !keep(r) { continue; }
             let face = self.face_in(r, swap);
             // Inked by what is under each pixel: a label a capsule's arc is crossing wears the
             // capsule's ink on its side of the arc and the resting one on the other.

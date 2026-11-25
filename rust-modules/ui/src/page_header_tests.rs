@@ -153,6 +153,20 @@ fn values_are_regular_weight_white_and_labels_are_65_percent() {
     assert!(runs.iter().all(|r| !r.bold && r.size == theme::size::BODY), "one size, one weight");
 }
 
+/// A names-only draw ([`PageHeader::draw_names`], a preview of the header) paints the left group
+/// and none of the right cluster, from the same layout the whole row uses.
+#[test]
+fn a_names_only_draw_leaves_the_right_cluster_out() {
+    let _g = plx_base::testlock::serial();
+    let h = header("Title");
+    let l = h.layout(1920.0, &Fixed);
+    let all = crate::draw_census::capture_runs(|| h.draw(Painter::recording(), &l, &TabStrip::new(), 1.0, None));
+    let names = crate::draw_census::capture_runs(|| h.draw_names(Painter::recording(), &l, &TabStrip::new(), 1.0));
+    assert!(all.iter().any(|r| r.text == "Collections") && all.iter().any(|r| r.text == "Title"), "the whole row has its controls");
+    assert!(names.iter().all(|r| r.text != "Collections" && r.text != "Title"), "the names-only draw has none of them");
+    assert!(!names.is_empty() && names.len() < all.len(), "and still draws the left group");
+}
+
 #[test]
 fn the_filtered_readout_is_half_white_and_one_gap_left_of_collections() {
     let _g = plx_base::testlock::serial();

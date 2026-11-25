@@ -309,9 +309,10 @@ fn every_mode_says_its_sentence() {
     let mut page = page_of(&s);
     let say = |page: &LibraryOrderPage| page.state.description();
     focus_on(&mut page, &s, lib_elem_for_test(0));
-    assert_eq!(say(&page), msg::library_order_state_idle("Movies", msg::browse_kind_movies()), "idle, on a library");
+    assert_eq!(say(&page), msg::library_order_state_idle(msg::browse_kind_movies(), "Movies"), "idle, on a library");
     focus_on(&mut page, &s, lib_elem_for_test(4));
-    assert_eq!(say(&page), msg::library_order_state_idle("Anime", msg::browse_kind_tv_shows()));
+    assert_eq!(say(&page), msg::library_order_state_idle(msg::browse_kind_tv_shows(), "Anime"));
+    assert!(say(&page).starts_with("Press OK to move Anime"), "the title is the focused library's: {}", say(&page));
     focus_on(&mut page, &s, reset_elem_for_test());
     assert_eq!(say(&page), msg::library_order_state_reset(), "idle, on Reset");
     ok_on(&mut page, &s, reset_elem_for_test());
@@ -326,7 +327,11 @@ fn every_mode_says_its_sentence() {
     ok_on(&mut page, &s, lib_elem_for_test(4));
     // Anime now stands second of all six on Home and first among the TV shows in the header
     assert_eq!(order(&page), [0, 4, 1, 2, 3, 5]);
-    assert_eq!(say(&page), msg::library_order_state_dropped("Anime", "second", "first", msg::browse_kind_tv_shows()));
+    assert_eq!(say(&page), msg::library_order_state_dropped("first", "second", msg::browse_kind_tv_shows(), "Anime"));
+    // the arguments land in their own places (the generated function orders them by name)
+    let said = say(&page);
+    let (title_at, home_at, header_at) = (said.find("Anime").unwrap(), said.find("second").unwrap(), said.find("first").unwrap());
+    assert!(title_at < home_at && home_at < header_at, "title, then its place on Home, then in the header: {said}");
     press(&mut page, &s, Key::Down);
     assert_eq!(page.state.mode, Mode::Idle, "the sentence lasts until the next key");
     focus_on(&mut page, &s, reset_elem_for_test());

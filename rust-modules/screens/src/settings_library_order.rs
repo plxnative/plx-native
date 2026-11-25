@@ -223,12 +223,13 @@ impl PageState {
             Mode::Dropped(section) => match (row_of(*section), self.position(*section)) {
                 (Some(row), Some(at)) => {
                     let place = self.shown[..at].iter().filter(|other| other.kind == row.kind).count();
-                    msg::library_order_state_dropped(&row.title, &ordinal(at + 1), &ordinal(place + 1), kind_word(row.kind))
+                    // the generated function takes its arguments in name order
+                    msg::library_order_state_dropped(&ordinal(place + 1), &ordinal(at + 1), kind_word(row.kind), &row.title)
                 }
                 _ => String::new(),
             },
             Mode::Idle => match self.focused() {
-                Some(row) => msg::library_order_state_idle(&row.title, kind_word(row.kind)),
+                Some(row) => msg::library_order_state_idle(kind_word(row.kind), &row.title),
                 None => msg::library_order_state_reset().to_string(),
             },
         };
@@ -372,7 +373,7 @@ impl PictureSlot for PreviewSlot<'_> {
         let Some(first) = layout.items.first() else { return };
         let row_top = slot.y + CAPTION_H + theme::space::MD;
         let moved = p.translate(slot.x - first.plate.x, row_top - layout.top());
-        self.row.page.draw(moved, layout, self.strip, 1.0, None);
+        self.row.page.draw_names(moved, layout, self.strip, 1.0);
         if self.row.overflowed() {
             let note = msg::library_order_preview_more();
             let top = row_top + plx_ui::page_header::HEIGHT + theme::space::MD;
