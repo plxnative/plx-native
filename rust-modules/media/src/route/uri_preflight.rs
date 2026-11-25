@@ -1175,7 +1175,7 @@ mod tests {
                     audio_track: TrackChoice::Selected(42),
                     subtitle_track: if request.selection.subtitle_sid > 0 {
                         TrackChoice::Selected(request.selection.subtitle_sid as u64)
-                    } else { TrackChoice::Unspecified } },
+                    } else { request.subtitle_choice } },
                 certified_dolby_vision: self.dovi,
                 certified_subtitle_source: self.subtitle.clone(),
                 expires_at: if self.expired { Instant::now() - std::time::Duration::from_secs(1) }
