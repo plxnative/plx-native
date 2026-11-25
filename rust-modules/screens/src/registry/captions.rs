@@ -168,9 +168,8 @@ pub fn live_tv_policy() -> CaptionPolicy {
 /// The label block of a Live TV tile: `title` over `line` (the airing's words, or the channel's identity),
 /// worded through [`live_tv_policy`] like every live label. A tile with no `line` is its title alone.
 pub fn live_label(title: String, line: Option<String>) -> TileLabel {
-    let facts = CaptionFacts { title: Some(title.clone()), ..Default::default() };
     match line {
-        Some(_) => label(&live_tv_policy(), &facts, line),
+        Some(_) => label(&live_tv_policy(), &CaptionFacts { title: Some(title), ..Default::default() }, line),
         None => TileLabel::from_lines([Some(title), None]),
     }
 }

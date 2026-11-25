@@ -161,17 +161,20 @@ impl Cards<'_> {
     /// in progress) is the airing's phase.
     fn resume(&self, channel: &Channel) -> Option<Resume> {
         let w = self.wall?;
-        matches!(fmt::phase(channel.begins_at, channel.ends_at, w.unix_s()), AiringPhase::JustStarted { .. } | AiringPhase::Running { .. })
-            .then(|| Some(Resume { frac: fmt::frac(channel.begins_at, channel.ends_at, w)?, left_ms: (channel.ends_at - w.unix_s()).max(0) * 1_000 }))
-            .flatten()
+        if !matches!(fmt::phase(channel.begins_at, channel.ends_at, w.unix_s()), AiringPhase::JustStarted { .. } | AiringPhase::Running { .. }) {
+            return None;
+        }
+        Some(Resume { frac: fmt::frac(channel.begins_at, channel.ends_at, w)?, left_ms: (channel.ends_at - w.unix_s()).max(0) * 1_000 })
     }
+    /// The low bit of a card's element id: Recent's tiles are even, On now's posters odd.
+    fn parity(&self) -> u32 { u32::from(self.row == Row::Now) }
 }
 impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
     fn len(&self) -> usize { self.order.len() }
-    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.order.get(i).copied().unwrap_or(0) as u32 * 2 + u32::from(self.row == Row::Now) }
+    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.order.get(i).copied().unwrap_or(0) as u32 * 2 + self.parity() }
     fn index_of(&self, e: &u32) -> Option<usize> {
         let offset = e.checked_sub(FIRST_CARD_ELEM)?;
-        if offset % 2 != u32::from(self.row == Row::Now) { return None; }
+        if offset % 2 != self.parity() { return None; }
         let i = offset as usize / 2;
         self.order.iter().position(|&n| n == i)
     }
