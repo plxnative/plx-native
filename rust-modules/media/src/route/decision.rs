@@ -11006,6 +11006,14 @@ pub fn live_request(ps: &PlaybackSession) -> Option<(ServerId, &LiveTune)> {
     Some((request.sid, request.live.as_ref()?))
 }
 
+/// The channel this playback is tuned to, once the server has ADMITTED the tune (the plan landed
+/// with a live session: all tuners busy, or a tune that failed, leaves none), unlike
+/// [`live_request`], which names a channel from the moment it is asked for.
+pub fn live_tuned(ps: &PlaybackSession) -> Option<(ServerId, &LiveTune)> {
+    ps.cur_live.as_ref()?;
+    live_request(ps)
+}
+
 /// Guide facts the app publishes for the channel this player is tuned to.
 pub struct LiveInfo {
     pub channel: plx_data::livetv::Channel,

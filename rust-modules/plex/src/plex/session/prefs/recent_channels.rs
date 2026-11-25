@@ -6,7 +6,10 @@
 //!
 //! It is a tenant of the memory door (`ProfileMemory::upsert_with`, `route::{remember, recall_all}`),
 //! so a record carries the account stamp, a write needs a seated profile, and the list is soft-parsed
-//! per element. The list is `Preferences::recent_channels`, ONE entry per channel, **oldest first**:
+//! per element. It is the ONLY list of a seated profile's Recent: the join-at-front rule and the cap
+//! below are applied here, by the write, and Live TV's store is handed the result as an input and
+//! resolves it against the roster and the lineup (`plx_data::livetv::resolve`); an entry that
+//! resolution hides (its server away, its channel off the lineup) stays here and counts toward the cap. The list is `Preferences::recent_channels`, ONE entry per channel, **oldest first**:
 //! a newly tuned channel is appended (it joins the FRONT of the row, which reads the list
 //! reversed), a channel already in the list is left exactly where it is
 //! ([`RecentChannelEntry::noted`] hands the entry back unchanged, which `upsert_with` does not

@@ -913,6 +913,23 @@ impl Drop for Pms {
 }
 
 impl Bridge<'_> {
+    /// Put the Recent channels' seat where the profile publication would: the seat the session holds
+    /// now (published by `TempSession::seated`) and the stored list the memory door holds for it.
+    pub(crate) fn seat_recent_for_test(&mut self, _user: &str) {
+        self.retained.seat_watch.restored = plx_plex::plex::session::current_snapshot().seat();
+        self.reload_recent_channels();
+    }
+    /// A live tune of `dvr`/`channel` on `sid`, noted the way the landing notes it.
+    pub(crate) fn note_recent_for_test(&mut self, sid: plx_plex::plex::ServerId, dvr: &str, channel: &str) {
+        self.note_channel(sid, dvr, channel);
+    }
+    /// The frame's wall time as the loop would have published it, so the Live TV step has a clock.
+    pub(crate) fn clock_for_test(&mut self, unix_s: i64) {
+        self.publish_wall(Some(plx_ui::fmt::Wall { unix_s, utc_offset_s: 0 }));
+    }
+}
+
+impl Bridge<'_> {
     /// Seat the plex.tv account a Watchlist rig scripts: the Bridge reads the registry for the identity
     /// it hands the stores (`Bridge::watchlist_input`), so the rig publishes a profile (with the
     /// plex.tv credential when `credential`) and, where the test holds no scratch session of its own,

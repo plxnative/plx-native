@@ -1,8 +1,7 @@
 //! The physical owner of the Live TV model. Its outbox is drained in the same call that steps it.
 use crate::livetv::{LiveTvState, LiveTvView};
-pub use crate::livetv::LiveTvCmd;
+pub use crate::livetv::{LiveTvCmd, LiveTvInput};
 use plx_machine::machine::{Cx, Effects, Handled, Host, Machine};
-use plx_plex::plex::ClientKeys;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[derive(Default)]
@@ -21,21 +20,24 @@ impl LiveTvStore {
         self.notice_dirty.swap(false, Ordering::Relaxed).then(|| self.gen())
     }
     pub fn view(&self) -> LiveTvView<'_> { self.state.view() }
-    pub fn run(&mut self, cmd: LiveTvCmd, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
-        let changed = self.state.run(cmd, gate, keys, now);
+    pub fn run(&mut self, cmd: LiveTvCmd, gate: &plx_machine::landgate::Gate, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.run(cmd, gate, input);
         if changed { self.bump(); }
         changed
     }
-    pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
-        let changed = self.state.pump(gate, keys, now);
+    pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.pump(gate, input);
+        if changed { self.bump(); }
+        changed
+    }
+    /// A tune with nobody seated, for the session's Recent ([`LiveTvState::note_unseated`]).
+    pub fn note_unseated(&mut self, key: crate::livetv::RecentKey, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.note_unseated(key, input);
         if changed { self.bump(); }
         changed
     }
     #[must_use]
     pub fn take_jobs(&mut self) -> Vec<super::StoreJob> { std::mem::take(&mut self.state.jobs) }
-    /// What a change to Recent asks the app to persist; the Bridge takes it in the call that ran the command.
-    #[must_use]
-    pub fn take_fx(&mut self) -> Vec<crate::livetv::LiveTvFx> { self.state.take_fx() }
     pub fn has_jobs(&self) -> bool { !self.state.jobs.is_empty() }
     #[cfg(any(test, feature = "test-support"))]
     pub fn install_for_test(&mut self, channels: Vec<crate::livetv::Channel>) { self.state.install_for_test(channels); self.bump(); }

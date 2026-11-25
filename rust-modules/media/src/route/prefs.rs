@@ -660,7 +660,7 @@ impl MemoryTenant for SubtitleOffsetEntry {
 /// `commit_subtitle_pick` (the track menu's pick) and by nothing else but the harness's
 /// `plxnative-trackmemory=clear` and `=fill` (`dev::scenarios::arm_track_memory`), which remove and
 /// write entries through this same door; `recent_channels` is read through [`recall_all`] and written
-/// here, by the app when a live channel is tuned (`Bridge::livetv_run`).
+/// here, by the app when a live channel's tune is admitted (`Bridge::note_live_tune`), where it is the ONE list: the Live TV store holds none of its own.
 pub fn remember<E: MemoryTenant>(
     user: &str,
     key: E::Key,

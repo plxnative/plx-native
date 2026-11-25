@@ -2,21 +2,31 @@
 //! [`MAX_RECENT`] (SPEC-1: "a newly tuned channel joins at the front; channels already there never
 //! move"; when a sixth joins, the last drops).
 //!
-//! The store owns the list in memory, keyed like the lineup by `(ServerId, dvr, channel)`, and
-//! publishes it on [`super::LiveTvView::recent`] as the lineup's own [`Channel`]s (a key the lineup
-//! does not list is skipped when the row is read, and kept in the list). It reads no preference and
-//! no registry: the app sends `Restore` when it has read the profile's stored list, and `Noted`
-//! when a live channel is tuned, and a change leaves as a [`LiveTvFx`] the app persists. What is
-//! stored is DURABLE (the server's machine identifier, [`RecentChannelEntry`]) because a `ServerId`
-//! is a registry slot, stable only for the life of the process; the two conversions below are pure
-//! functions of the [`ClientKeys`] the app already captured for this frame.
+//! **One list, one owner.** For a seated profile the list is the memory door's own
+//! ([`RecentChannelEntry`], oldest first, bound to the account, capped at [`MAX_RECENT`] by the
+//! door): the join-at-front rule and the cap are applied THERE, by the app's write
+//! (`route::remember`), and nowhere else. The store holds no second list. It is handed what the door
+//! holds as part of its captured input ([`RecentSeat::Seated`], every pump) and the row it publishes
+//! is a pure function of that, the roster and the lineup ([`resolve`]): an entry whose server is not
+//! registered, or whose channel the lineup does not list, is not shown and stays stored, where it
+//! still counts toward the door's cap (a channel pushed out by the sixth tune is gone for good, shown
+//! or not).
+//!
+//! With nobody seated nothing can be stored (the door refuses the write), so the tunes of a run with
+//! no seat are kept for the session only, in memory ([`Recent::Unseated`]), by the same rule and the
+//! same cap, and are dropped the moment a seat arrives: the seat's own list is the row from then on.
+//! What is stored names a server by its `machineIdentifier`, never by a `ServerId` (a registry slot,
+//! stable only for the life of the process); [`resolve`] joins the two through the [`ClientKeys`]
+//! the app captured for this frame.
 use super::Channel;
 use plx_plex::plex::session::prefs::RecentChannelEntry;
+use plx_plex::plex::session::Seat;
 use plx_plex::plex::{ClientKeys, ServerId};
 
 pub use plx_plex::plex::session::prefs::MAX_RECENT;
 
-/// The in-process identity of a channel: what the lineup's [`Channel`] carries.
+/// The in-process identity of a channel: what the lineup's [`Channel`] carries. It names a tune
+/// only for a run with nobody seated (a seated one is written to the door, by durable name).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentKey {
     pub sid: ServerId,
@@ -33,89 +43,87 @@ impl RecentKey {
     }
 }
 
-/// What a change to Recent asks the app to do.
+/// **Who is seated, and what the memory door holds for them**, as the app captured it for this
+/// frame: one coherent observation, borrowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecentSeat<'a> {
+    Unseated,
+    /// `stored` is the seated profile's list as the door holds it, oldest first.
+    Seated { seat: &'a Seat, stored: &'a [RecentChannelEntry] },
+}
+
+/// **The store's mode**, a type and not a flag: what the seat input last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LiveTvFx {
-    /// Add this channel to the seated profile's stored list (the app converts it to its durable
-    /// form and merges it into what is stored; an entry already there does not move).
-    RememberRecent(RecentKey),
+pub(super) enum Recent {
+    /// Nobody is seated: this run's tunes, newest first, session-only.
+    Unseated { session: Vec<RecentKey> },
+    /// A profile is seated: the door's list as of the last input, oldest first.
+    Seated { seat: Seat, stored: Vec<RecentChannelEntry> },
 }
 
-/// The list itself, newest first.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct RecentChannels {
-    keys: Vec<RecentKey>,
+impl Default for Recent {
+    fn default() -> Self {
+        Recent::Unseated { session: Vec::new() }
+    }
 }
 
-impl RecentChannels {
-    /// A tune. A channel already in the list stays where it is; a new one joins at the front and the
-    /// last drops past [`MAX_RECENT`]. Whether the list changed.
-    pub(super) fn note(&mut self, key: RecentKey) -> bool {
-        if self.keys.contains(&key) {
-            return false;
+impl Recent {
+    /// Follow the seat input. A seat arriving replaces the session's tunes (they were never anyone's),
+    /// a seat leaving starts the next session empty (the profile's tunes are the profile's), and a
+    /// seated store simply holds what the door holds now.
+    pub(super) fn drive(&mut self, input: RecentSeat<'_>) {
+        match (&mut *self, input) {
+            (Recent::Unseated { .. }, RecentSeat::Unseated) => {}
+            (Recent::Seated { seat, stored }, RecentSeat::Seated { seat: now, stored: held }) => {
+                if seat != now { seat.clone_from(now); }
+                if stored != held {
+                    stored.clear();
+                    stored.extend_from_slice(held);
+                }
+            }
+            (_, RecentSeat::Seated { seat, stored }) => {
+                *self = Recent::Seated { seat: seat.clone(), stored: stored.to_vec() };
+            }
+            (_, RecentSeat::Unseated) => *self = Recent::default(),
         }
-        self.keys.insert(0, key);
-        self.keys.truncate(MAX_RECENT);
+    }
+
+    /// A tune with nobody seated: session-only. A channel already there stays where it is, a new one
+    /// joins at the front and the last drops past [`MAX_RECENT`]. A seated tune is the door's (the app
+    /// writes it, and the next input carries it), so it is not noted here. Whether the list changed.
+    pub(super) fn note_unseated(&mut self, key: RecentKey) -> bool {
+        let Recent::Unseated { session } = self else { return false };
+        if session.contains(&key) { return false; }
+        session.insert(0, key);
+        session.truncate(MAX_RECENT);
         true
     }
 
-    /// The stored list, newest first, replacing what is held. Whether the list changed.
-    pub(super) fn restore(&mut self, mut keys: Vec<RecentKey>) -> bool {
-        let mut seen = Vec::with_capacity(MAX_RECENT);
-        keys.retain(|key| {
-            let fresh = !seen.contains(key) && seen.len() < MAX_RECENT;
-            if fresh { seen.push(key.clone()); }
-            fresh
-        });
-        if keys == self.keys { return false; }
-        self.keys = keys;
-        true
-    }
-
-    /// The row: each remembered channel the lineup lists, in order. A channel it does not list is
-    /// skipped here and kept in the list (its server may be offline, or its lineup still loading).
-    pub(super) fn resolve(&self, lineup: &[Channel]) -> Vec<Channel> {
-        self.keys.iter().filter_map(|key| lineup.iter().find(|ch| key.names(ch)).cloned()).collect()
+    /// The row: at most [`MAX_RECENT`] lineup channels, newest first.
+    pub(super) fn row(&self, keys: &ClientKeys, lineup: &[Channel]) -> Vec<Channel> {
+        match self {
+            Recent::Unseated { session } => session.iter()
+                .filter_map(|key| lineup.iter().find(|ch| key.names(ch)).cloned()).take(MAX_RECENT).collect(),
+            Recent::Seated { stored, .. } => resolve(stored, keys, lineup),
+        }
     }
 }
 
-/// The durable form of `key`: its server's machine identifier from the roster the app captured.
-/// `None` for a server the roster does not hold (or one with no machine identifier): there is
-/// nothing durable to write for it.
-pub fn entry_of(key: &RecentKey, keys: &ClientKeys) -> Option<RecentChannelEntry> {
-    let machine = &keys.facts(key.sid)?.machine_id;
-    let entry = RecentChannelEntry::new(machine, &key.dvr, &key.channel);
-    (!entry.is_blank()).then_some(entry)
-}
-
-/// The stored list (oldest first, as the memory door keeps it) as this process's keys, NEWEST first.
-/// An entry whose server is not in the roster now is left out, and stays in storage.
-pub fn keys_of(stored: &[RecentChannelEntry], keys: &ClientKeys) -> Vec<RecentKey> {
+/// **The seated row, a pure function of what is stored, the roster and the lineup.** `stored` is the
+/// door's list, oldest first; the row is newest first, at most [`MAX_RECENT`], each entry the lineup's
+/// own [`Channel`]. An entry whose server is not in the roster now (offline, signed out of, not yet
+/// registered after a start) or whose channel the lineup does not list is skipped here and stays stored.
+pub fn resolve(stored: &[RecentChannelEntry], keys: &ClientKeys, lineup: &[Channel]) -> Vec<Channel> {
     stored.iter().rev().filter_map(|entry| {
-        let sid = keys.slots().find(|&sid| keys.facts(sid).is_some_and(|f| f.machine_id == entry.machine_id))?;
-        Some(RecentKey { sid, dvr: entry.dvr.clone(), channel: entry.channel.clone() })
-    }).collect()
+        let sid = keys.sid_of_machine(&entry.machine_id)?;
+        lineup.iter().find(|ch| ch.sid == sid && ch.dvr == entry.dvr && ch.channel == entry.channel).cloned()
+    }).take(MAX_RECENT).collect()
 }
 
-/// **When the stored list is read again**: the first time, when the seated profile changes, and when
-/// the server roster moves while somebody is seated (the seat arrives BEFORE the servers register,
-/// so the first read can resolve no server and the roster moving is what completes it). With nobody
-/// seated nothing is ever stored (the memory door refuses the write), so a roster move there must
-/// not replace the row the run has built in memory with an empty read.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RecentSync {
-    seen: Option<(u32, u32)>,
-}
-
-impl RecentSync {
-    /// Whether a restore is due for profile scope `scope` under this roster; says yes once per change.
-    pub fn due(&mut self, scope: u32, keys: &ClientKeys, seated: bool) -> bool {
-        let now = (scope, keys.roster_gen());
-        let due = match self.seen {
-            None => true,
-            Some((seen_scope, seen_roster)) => seen_scope != scope || (seated && seen_roster != now.1),
-        };
-        self.seen = Some(now);
-        due
-    }
+/// The durable form of a tuned channel: its server's machine identifier from the roster the app
+/// captured. `None` for a server the roster does not hold (or one with no machine identifier):
+/// there is nothing durable to write for it.
+pub fn entry_of(sid: ServerId, dvr: &str, channel: &str, keys: &ClientKeys) -> Option<RecentChannelEntry> {
+    let entry = RecentChannelEntry::new(keys.machine_of(sid)?, dvr, channel);
+    (!entry.is_blank()).then_some(entry)
 }
