@@ -179,8 +179,8 @@ pub struct AuthContext {
 /// The next three are each profile's own browsing and playback memory, which sign-out forgets with
 /// the account whose profile it was: `subtitle_offsets` (the timing correction a profile tuned for
 /// one item, naming a `machineIdentifier` and a ratingKey), `library_sorts` (how each library was
-/// last browsed) and `last_library` (the library each top tab opened in), the last two naming a
-/// server and a section.
+/// last browsed), `last_library` (the library each top tab opened in) and `library_order` (the order
+/// of its favourite libraries), all three naming a server and a section.
 pub const ACCOUNT_BOUND_PREFERENCES: &[&str] = &[
     "server_key_pins",
     "plaintext_consent",
@@ -189,6 +189,7 @@ pub const ACCOUNT_BOUND_PREFERENCES: &[&str] = &[
     "subtitle_offsets",
     "library_sorts",
     "last_library",
+    "library_order",
 ];
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
