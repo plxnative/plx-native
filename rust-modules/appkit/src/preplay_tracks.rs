@@ -190,6 +190,8 @@ pub fn subtitle_form(set: TrackSet<'_>, now: Chosen, yours: &[String]) -> PickFo
     let mut form = Form::new();
     for sec in &model.sections {
         let head = match &sec.header {
+            // Kept on purpose: the in-player Subtitles tab draws the same `SubHeader::Subtitles` label under its
+            // own Subtitles tab, so the title band + label pair is the track menu's (parity, not a duplicate).
             SubHeader::Subtitles => Section::new(plx_os::i18n::msg::widgets_tracks_subtitles()),
             SubHeader::Language { name, tracks } => {
                 Section::new(name.clone()).accessory(plx_os::i18n::msg::widgets_tracks_count(*tracks as i64))
@@ -461,7 +463,7 @@ impl PickerState {
         self.motion.natural(self.form.table.layout_rev(), || {
             let [x, y, w, h] = self.anchor.map(f32::from_bits);
             let pw = self.form.table.menu_panel_width(measure);
-            plx_ui::popover::under_or_above(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
+            plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
         })
     }
 
@@ -734,5 +736,41 @@ mod tests {
         let Outcome::Picked(sel) = p.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
         assert!(sel.audio_memo.is_some(), "English differs from the held French");
         assert_eq!(sel.pick.audio_sid, 101);
+    }
+
+    /// The panel hangs off its opener by one rule, root and pushed page alike: never over the opener,
+    /// and the pushed page stays adjacent to the SAME opener rect (above it and growing upward when
+    /// it no longer fits below), never detached from it. The failure read-out's button is low on the
+    /// screen, the case that was placed from a fallback rect and jumped to the top on a push.
+    #[test]
+    fn a_pushed_page_stays_anchored_to_its_opener_like_the_root() {
+        let measure = plx_ui::fixture::FixtureMeasure;
+        let opener = plx_ui::Rect::new(900.0, 770.0, 220.0, 64.0);
+        let anchor = [opener.x, opener.y, opener.w, opener.h].map(f32::to_bits);
+        let (audio, _) = item();
+        let subs: Vec<Stream> = (0..5).map(|i| stream(300 + i, "English", "eng")).collect();
+        let tracks = plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0),
+            rk: "m1".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/f.mkv".into(),
+            audio,
+            subs,
+            pick: None,
+        };
+        let mut p = PickerState::new(tracks, anchor);
+        let root = p.panel_rect(&measure);
+        p.ok(PickRow::OpenSubtitles);
+        let pushed = p.panel_rect(&measure);
+        let clear_of = |r: plx_ui::Rect| r.y + r.h <= opener.y || r.y >= opener.y + opener.h;
+        assert!(clear_of(root) && clear_of(pushed), "never over the opener: {root:?} {pushed:?}");
+        let h = p.form.table.measured_height();
+        let want = plx_ui::popover::under_or_above_fit(opener, p.form.table.menu_panel_width(&measure), h);
+        assert_eq!(pushed, want, "the pushed page is placed by the one anchor rule, off the opener's real rect");
+        assert!(
+            (pushed.y + pushed.h - opener.y).abs() <= 64.0 || (pushed.y - (opener.y + opener.h)).abs() <= 64.0,
+            "the pushed page touches the opener's edge, it did not jump away: {pushed:?}"
+        );
     }
 }

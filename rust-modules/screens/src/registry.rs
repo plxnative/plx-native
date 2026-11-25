@@ -369,7 +369,8 @@ pub enum PlayerReq {
     /// **The failure read-out's *Audio & Subtitles***: present the before-playback picker over the
     /// player page, on the tracks of the item that failed (`preplay_panel::Source::Failed`). The app
     /// names the item and the attempt's part, and the style (`bridge::open_failed_tracks`).
-    OpenFailedTracks,
+    /// `anchor` is the drawn rect of the read-out's control (bits), never a fallback.
+    OpenFailedTracks { anchor: [u32; 4] },
 
     /// **A press on a control of the discs committed**, after the engine's tvOS dip has played
     /// (`PressCommit`, [`PlayerScreen`](crate::player::PlayerScreen)): perform this command. The screen resolves the command of the control the

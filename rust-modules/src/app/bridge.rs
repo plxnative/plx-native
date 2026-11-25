@@ -4418,14 +4418,14 @@ pub(crate) fn open_player_overlay(
 /// **Present the before-playback picker over the failed player** (`PlayerReq::OpenFailedTracks`): the
 /// item and the part are the failed attempt's, read off the session; the surface is a player panel that
 /// survives the failure, as the `…` popover's Quality page does.
-pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, d: &mut Dispatcher<AppHost>) {
+pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor: [u32; 4], d: &mut Dispatcher<AppHost>) {
     let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
     let Some(host) = d.nav.instance_of(entry) else { return };
     let arg = AppArg::PreplayPanel(plx_screens::preplay_panel::PreplayArg {
         host,
         sid: plx_media::route::cur_sid(ps),
         rk: plx_media::route::cur_rk(ps),
-        anchor: anchor_bits(None),
+        anchor,
         source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
     });
     let id = plx_ui::screen::ScreenArg::id(&arg);

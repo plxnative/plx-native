@@ -1062,7 +1062,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                             return Handled::Yes;
                         }
                         self.handle_key(
-                            ps, classified, *edge, *at_edge, input.at.ms,
+                            ps, cx.measure, classified, *edge, *at_edge, input.at.ms,
                             focused, self.focused_command(focused), fx, H::metadata(cx),
                             H::screen_inputs(cx).preference::<plx_plex::plex::session::InstantDpadSeekingPref>(), H::screen_inputs(cx).preference::<plx_plex::plex::session::SkipIntervalPref>(),
                         )
@@ -1073,7 +1073,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                         let hit = if self.back_motion.anchor.is_some() && self.hud.dismissed { None } else { *hit };
                         self.back_cursor(crate::registry::BackCursorChange::Wake, fx);
                         self.end_jump_gesture();
-                        self.handle_click(ps, hit, *x, plx_appkit::chapters_panel::has_chapters(H::metadata(cx)), input.at.ms, fx)
+                        self.handle_click(ps, cx.measure, hit, *x, plx_appkit::chapters_panel::has_chapters(H::metadata(cx)), input.at.ms, fx)
                     }
                     // §7.5: a drag drives its CONTROL. Only the scrubber has one here, and only
                     // once a click has seated the gesture on it — a drag that began anywhere else
@@ -1264,7 +1264,9 @@ impl PlayerScreen {
     /// Perform control `idx` of the failure read-out's row — the ONE resolution a key and a click
     /// share, through the same table the row was drawn from (`player::failure_actions`), so a
     /// press can only ever do what the focused control says.
-    fn failure_activate<H: AppLike>(&mut self, ps: &plx_media::route::PlaybackSession, idx: usize, fx: &mut Effects<'_, H>) {
+    fn failure_activate<H: AppLike>(
+        &mut self, ps: &plx_media::route::PlaybackSession, idx: usize, measure: &dyn plx_machine::machine::Measure, fx: &mut Effects<'_, H>,
+    ) {
         use plx_media::player::FailureAction as A;
         let Some(readout) = self.presentation.failure.as_ref() else { return; };
         let Some(action) = readout.actions().get(idx).copied() else { return };
@@ -1273,7 +1275,13 @@ impl PlayerScreen {
             A::PlayAutomatically => Self::ask(fx, PlayerReq::PlayAutomatically),
             A::TryAgain => Self::ask(fx, PlayerReq::RetryPlayback),
             A::ChangeQuality => Self::ask(fx, PlayerReq::OpenOverlay(overlay::OverlayKind::More { page: Some(plx_appkit::more_menu::MorePage::Quality) })),
-            A::ChangeTracks => Self::ask(fx, PlayerReq::OpenFailedTracks),
+            // The picker hangs off the control that opened it, by the drawn rect (the Detail hero's rule), not
+            // off a fallback: it opens beside its own button and keeps that anchor when a page is pushed.
+            A::ChangeTracks => {
+                let rect = readout.frames(measure).get(idx).copied().flatten();
+                let anchor = rect.map_or([0; 4], |r| [r.x, r.y, r.w, r.h].map(f32::to_bits));
+                Self::ask(fx, PlayerReq::OpenFailedTracks { anchor })
+            }
             A::Repair => {
                 if ps.repair_status == plx_os::tv::native_video::State::Idle && !self.repair_alert.visible() {
                     self.repair_scroll = 0;
@@ -1320,6 +1328,7 @@ impl PlayerScreen {
     fn handle_click<H: AppLike>(
         &mut self,
         ps: &plx_media::route::PlaybackSession,
+        measure: &dyn plx_machine::machine::Measure,
         hit: Option<u32>,
         x: f32,
         chapters: bool,
@@ -1361,7 +1370,7 @@ impl PlayerScreen {
                 // the same gate `group_drawn` registers the row behind: a row that is not drawn
                 // is not clickable
                 if player_hud::failure_row_drawn(self.busy) {
-                    self.failure_activate(ps, (e - ELEM_FAILURE_BASE) as usize, fx);
+                    self.failure_activate(ps, (e - ELEM_FAILURE_BASE) as usize, measure, fx);
                 }
                 Handled::Yes
             }
@@ -1461,6 +1470,7 @@ impl PlayerScreen {
     fn handle_key<H: AppLike>(
         &mut self,
         ps: &plx_media::route::PlaybackSession,
+        measure: &dyn plx_machine::machine::Measure,
         key: consts::Key,
         edge: Edge,
         at_edge: bool,
@@ -1507,7 +1517,7 @@ impl PlayerScreen {
                         self.failure_sel = i;
                         fx.invalidate(plx_machine::present::Provenance::Input);
                     }
-                    input::FailedKeyAction::Activate(i) => self.failure_activate(ps, i, fx),
+                    input::FailedKeyAction::Activate(i) => self.failure_activate(ps, i, measure, fx),
                     input::FailedKeyAction::Return => Self::ask(fx, PlayerReq::Exit),
                     input::FailedKeyAction::Ignore => {}
                 }
@@ -4830,10 +4840,10 @@ pub(crate) mod step_ladder_tests {
         let mut out = Vec::new();
         let mut present = plx_machine::present::Present::new();
         let mut fx = Effects::new(&mut out, MachineId::Instance(INST), &mut present);
-        page.failure_activate::<TestHost>(&ps, 2, &mut fx);
+        page.failure_activate::<TestHost>(&ps, 2, &plx_ui::fixture::FixtureMeasure, &mut fx);
         assert!(
-            out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::Player(PlayerReq::OpenFailedTracks)))),
-            "the third control is Audio & Subtitles"
+            out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::Player(PlayerReq::OpenFailedTracks { anchor })) if anchor != [0; 4])),
+            "the third control is Audio & Subtitles, anchored on its own drawn rect"
         );
         assert_eq!(page.failure_sel, 2, "the row remembers where the viewer pressed");
         assert_eq!(plx_appkit::player_hud::failure_action_word(Fail::ChangeTracks), "change_tracks");
