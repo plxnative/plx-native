@@ -1956,7 +1956,7 @@ mod tests {
             watchlist: true,
             go_show: true,
             version: true,
-            tracks: false,
+            tracks: true,
             restart: true,
             trailer: true,
             alt: true,
@@ -1989,7 +1989,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
-            tracks: false,
+            tracks: true,
             restart: true,
             trailer: true,
             alt: true,
@@ -2391,8 +2391,9 @@ mod tests {
         let measure = plx_base::fontcov::advances::ShippedMeasure;
         for restart in [false, true] {
             for version in [false, true] {
+              for tracks in [false, true] {
                 for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-                    let set = HeroSet { watchlist: false, version, tracks: false, restart, trailer: false, alt: false, mark, go_show: true };
+                    let set = HeroSet { watchlist: false, version, tracks, restart, trailer: false, alt: false, mark, go_show: true };
                     for language in SHIPPED {
                         let _guard = language_on_this_thread_for_test(language);
                         let mut unfurl = [0.0; DISCS];
@@ -2400,6 +2401,34 @@ mod tests {
                         let caps = disc_caps(&measure, set, unfurl, false);
                         assert!(caps[4] > CD, "{} {set:?}: the verb unfurls (cap {})", language.tag(), caps[4]);
                     }
+                }
+              }
+            }
+        }
+    }
+
+    /// The Audio & Subtitles disc (slot 5) is fitted like every other verb: in each shipped language its
+    /// own verb unfurls when the row is the one a movie shows (no Alt), and no unfurl of any slot
+    /// pushes the widest tracks-bearing row across the People column.
+    #[test]
+    fn audio_and_subtitles_unfurls_in_every_language_when_the_row_has_no_alt() {
+        use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
+        let measure = plx_base::fontcov::advances::ShippedMeasure;
+        for restart in [false, true] {
+            for version in [false, true] {
+                // Restart + Play Version + Audio & Subtitles + the watch toggle leave no room for a
+                // verb even in English (cap 60 = the bare circle): the designed degradation (a verb
+                // that does not fit is dropped whole), reported rather than shortened.
+                if restart && version {
+                    continue;
+                }
+                let set = HeroSet { watchlist: false, version, tracks: true, restart, trailer: false, alt: false, mark: PosterMark::None, go_show: false };
+                for language in SHIPPED {
+                    let _guard = language_on_this_thread_for_test(language);
+                    let mut unfurl = [0.0; DISCS];
+                    unfurl[5] = 1.0;
+                    let caps = disc_caps(&measure, set, unfurl, false);
+                    assert!(caps[5] > CD, "{} {set:?}: the verb unfurls (cap {})", language.tag(), caps[5]);
                 }
             }
         }

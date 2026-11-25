@@ -2350,7 +2350,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryC
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
-     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str}},\
+     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
      WatchlistMenu{host:u32,options:{type:u32,sort:u32,descending:bool,show:u32},anchor:[u32;4]}}";
 
@@ -3141,7 +3141,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // re-recorded against it; the previous pin was 0x209b_8063_1907_d7c8.
 // Preplay tracks (#1532): `AppArg` gains `PreplayPanel{host,sid,rk,anchor,source}` (canon tag 15, page id
 // 32) and `screens::preplay_panel::SHAPE` is appended. The replay fixtures are NOT re-recorded on this
-// commit (the owner's lane does it); the previous pin was 0x17bd_9205_2e59_cd6e.
+// commit (the owner's lane does it); the previous pin was 0x17bd_9205_2e59_cd6e. The same bump: the item menu's
+// kind list gains `HeroOverflow{rows:len}` (canon kind tag 6: the hero's ... menu, its row count), which the
+// Detail hero's overflow already presented.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.
@@ -3162,7 +3164,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
 // Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
-const SCREEN_SHAPES_PIN: u64 = 0x9650_4166_d614_2927;
+const SCREEN_SHAPES_PIN: u64 = 0x8e79_1d31_a441_fb57;
 
 #[cfg(test)]
 mod arg_tests {
