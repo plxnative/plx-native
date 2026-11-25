@@ -3068,6 +3068,7 @@ class LiveTvFixture:
         self.transcodes = {}  # a transcode session id (the start's `session=`) -> the uuid it serves
         self.segment = None  # `--livetv-segment`: a pathlib.Path, the MPEG-TS file every live segment answers
         self.segment_bytes = None  # that file's bytes, read on the first segment it answers
+        self.anchor = None  # the first "now" the guide was read at: the "ago" airings are measured from it
 
     def channel(self, cid):
         return next((c for c in self.CHANNELS if c["id"] == cid), None)
@@ -3095,9 +3096,19 @@ class LiveTvFixture:
             airing = c["airing"]
             if airing is None:
                 continue
-            # An airing that names `ago` and `mins` began that many minutes before `now`; the rest air the half hour.
-            begins = now - airing["ago"] * 60 if "ago" in airing else half
-            ends = begins + airing["mins"] * 60 if "mins" in airing else begins + 1800
+            # An airing that names `ago` and `mins` began that many minutes before the FIRST `now` this fixture
+            # was asked about and runs `mins` minutes, then the next programme of the same length follows, so a
+            # long session sees programmes end and move on as a real guide does; the rest air the half hour.
+            if "ago" in airing:
+                if self.anchor is None:
+                    self.anchor = now
+                length = airing["mins"] * 60
+                begins = self.anchor - airing["ago"] * 60
+                begins += max(0, (now - begins) // length) * length
+                ends = begins + length
+            else:
+                begins = half
+                ends = begins + 1800
             thumb = f"{self.ORIGIN}/art/{c['vcn']}.jpg"
             row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": airing["type"],
                    "title": airing["title"], "thumb": thumb, "onAir": True,

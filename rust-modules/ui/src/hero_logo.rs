@@ -29,8 +29,9 @@ use crate::{theme, Painter, Rect};
 use std::os::raw::c_int;
 
 /// Which presence rung a logo is drawn at. Both HEROES share one rung — the "mutual logic for logo
-/// size for all hero" directive — and the pinned compact title is the only other one. A new site
-/// picks a rung; it does not invent bounds.
+/// size for all hero" directive — and every other site has a rung of its own: the pinned compact
+/// title, a Continue Watching deck card, a Live TV channel plate; [`LogoRung::Custom`] is the
+/// interpolated one. A new site picks a rung; it does not invent bounds.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LogoRung {
     /// The full-bleed hero title band — home's sliding column and the detail page's title block.

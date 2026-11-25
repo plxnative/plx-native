@@ -136,6 +136,21 @@ class LiveTvMock(unittest.TestCase):
                 self.assertLessEqual(m["beginsAt"], NOW)
                 self.assertLessEqual(NOW, m["endsAt"])
 
+    def test_a_long_session_sees_programmes_move_on_and_not_restart(self):
+        """The `ago` airings are measured from the first read, so a later read sees the same programme still
+        running (not "started a few minutes ago" again) and, past its end, the next one of its length."""
+        live = make_live().livetv
+        first = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW)}
+        later = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW + 600)}
+        again = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW + 8 * 3600)}
+        for vcn in (str(v) for v in range(106, 117)):
+            length = first[vcn]["endsAt"] - first[vcn]["beginsAt"]
+            if NOW + 600 < first[vcn]["endsAt"]:
+                self.assertEqual(later[vcn]["beginsAt"], first[vcn]["beginsAt"], vcn)
+            self.assertLessEqual(again[vcn]["beginsAt"], NOW + 8 * 3600, vcn)
+            self.assertGreater(again[vcn]["endsAt"], NOW + 8 * 3600, vcn)
+            self.assertEqual(again[vcn]["endsAt"] - again[vcn]["beginsAt"], length, vcn)
+
     def test_grid_episode(self):
         ep = next(r for r in guide(make_live()) if r["Media"][0]["channelVcn"] == "101")
         self.assertEqual((ep["type"], ep["grandparentTitle"]), ("episode", "Family Show"))
