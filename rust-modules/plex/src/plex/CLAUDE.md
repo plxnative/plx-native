@@ -514,11 +514,11 @@ a dead source is **absent** from Home and states itself in its own library secti
   cache, not a per-call file transaction.
 - **Every preference key but `language` lives in ONE struct, `session/prefs.rs`'s `Preferences`**
   (the ten player settings' and `trailer_autoplay`'s FROZEN top-level keys, `profile_prefs` (their per-profile home, below), `auto_sign_in`, `last_hero_blur`, `hold_hint_taught`, the account-bound
-  `plaintext_consent` and `server_key_pins`, the per-profile `last_library` and `library_sorts` (cleared
+  `plaintext_consent` and `server_key_pins`, the per-profile `last_library`, `library_sorts` and `library_order` (cleared
   at sign-out like every `ACCOUNT_BOUND = true` row in `prefs::DESCRIPTORS`, but their records carry no
   account stamp, so the one login that is not a sign-out, a stored session that could not be activated
   in `app/boot.rs`, would leave them to the next account: `replace_after_reauthentication_guarded_with_outcome`
-  clears both, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the two memory-door lists `track_memory` and `subtitle_offsets`), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
+  clears all three, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the two memory-door lists `track_memory` and `subtitle_offsets`), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
   forms — the legacy file's `Session` and the canonical preference record — declared before each
   form's own `extensions`, so the flatten takes its keys first and the unknown-key map still sees
   only keys nobody models. A new key of that kind is a `Preferences` field (its serde attributes
