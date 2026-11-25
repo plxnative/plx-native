@@ -548,6 +548,7 @@ pub(super) fn activate_server_owned(
     let _ = bridge.hubs_run(plx_data::stores::hubs::HubsCmd::Reset).changed;
     bridge.person_run(plx_data::stores::person::PersonCmd::Reset);
     bridge.collection_run(plx_data::stores::collection::CollectionCmd::Reset);
+    bridge.livetv_run(plx_data::livetv::LiveTvCmd::Reset);
     // before the stores reset: a stop the previous identity left in flight must not land on this one
     plx_media::route::retire_pending_stops();
     let mut endpoints = bridge.viewstate_run(plx_data::stores::viewstate::ViewStateCmd::Reset).endpoints;
@@ -879,6 +880,8 @@ pub(crate) unsafe fn construct(
         super::adapters::poster::init();
         crate::capture::init(); // dev live UI capture stream
     }
+    #[cfg(feature = "devtriggers")]
+    super::api::init(); // command API — both transports are devtrig-only; a release build has no door at all (see api.rs's doc)
 
     // Any dev trigger under /tmp marks the boot as automated (the harness token override,
     // autoplay/detail captures, playback-path knobs): those runs need a deterministic Home,
@@ -1548,6 +1551,8 @@ pub(crate) unsafe fn construct(
         last_route_reported,
         ptr,
         menu_play_await: None,
+        #[cfg(feature = "devtriggers")]
+        api_waiting: Default::default(),
         deeplink: Default::default(),
         prev,
         refresh_hubs,
