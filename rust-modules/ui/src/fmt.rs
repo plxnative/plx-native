@@ -760,7 +760,7 @@ pub fn rating_suffix(scale: RatingScale) -> &'static str {
 
 #[cfg(test)]
 mod airing_tests {
-    use super::{airing_line_in, frac, left_in, Airing};
+    use super::{airing_line_in, footer_left_minutes_in, frac, left_in, time_left_minutes_in, Airing};
     use plx_os::i18n::{LocaleContext, Preference};
 
     /// English on a 24-hour television clock, whatever this host's own locale says.
@@ -819,18 +819,44 @@ mod airing_tests {
     }
 
     /// The "left" part sits after a middle dot, so it is the language's footer wording
-    /// (`core.footer_left_*`), not the sentence-initial caption wording ("Noch 22 min", "Осталось 22 мин").
+    /// (`core.footer_left_*`), not the sentence-initial caption wording ("Noch 22 min", "Осталось 22 мин"),
+    /// in every shipped language: the tail of the line is that locale's `footer_left` for the same minutes,
+    /// and differs from `time_left` wherever the two wordings differ.
     #[test]
     fn the_left_part_after_the_dot_is_the_footer_wording_of_each_language() {
         let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
-        for (pref, started, minutes, hours) in [
-            (Preference::De, "Vor 2 Min. gestartet \u{b7} noch 1 Std. 20 Min.", "21:00\u{2013}22:22 \u{b7} noch 22 Min.", "21:00\u{2013}22:22 \u{b7} noch 1 Std. 1 Min."),
-            (Preference::Ru, "Началось 2 мин назад \u{b7} осталось 1 ч 20 мин", "21:00\u{2013}22:22 \u{b7} осталось 22 мин", "21:00\u{2013}22:22 \u{b7} осталось 1 ч 1 мин"),
-        ] {
+        let mut differing = 0;
+        for pref in plx_os::i18n::SHIPPED {
+            let tag = pref.tag();
             let cx = LocaleContext::resolve(pref, None, None, Some("24"), None);
-            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 2 * MIN, 0).as_deref(), Some(started), "{pref:?}");
-            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 60 * MIN, 0).as_deref(), Some(minutes), "{pref:?}");
-            assert_eq!(airing_line_in(&cx, Airing::Banner, begin, end, begin + 21 * MIN, 0).as_deref(), Some(hours), "{pref:?}");
+            // (surface, minutes into the airing, minutes still left)
+            for (surface, into, left) in [(Airing::Tile, 2, 80), (Airing::Tile, 60, 22), (Airing::Banner, 21, 61)] {
+                let line = airing_line_in(&cx, surface, begin, end, begin + into * MIN, 0).expect(tag);
+                let tail = line.rsplit_once(" \u{b7} ").map(|(_, tail)| tail).unwrap_or_else(|| panic!("{tag}: no dot in {line:?}"));
+                assert_eq!(tail, footer_left_minutes_in(&cx, left), "{tag}: {surface:?} {into} min in: {line:?}");
+                let caption = time_left_minutes_in(&cx, left);
+                if caption != tail {
+                    differing += 1;
+                    assert!(!line.ends_with(&caption), "{tag}: {line:?} ends in the caption wording {caption:?}");
+                }
+            }
+        }
+        assert!(differing > 0, "no shipped language words the footer differently from the caption: the test would pin nothing");
+    }
+
+    /// The footer wording itself, pinned for the two languages whose caption form differs most from it.
+    #[test]
+    fn the_footer_wording_of_german_and_russian_is_pinned() {
+        let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
+        for (tag, started, minutes, hours) in [
+            ("de", "Vor 2 Min. gestartet \u{b7} noch 1 Std. 20 Min.", "21:00\u{2013}22:22 \u{b7} noch 22 Min.", "21:00\u{2013}22:22 \u{b7} noch 1 Std. 1 Min."),
+            ("ru", "Началось 2 мин назад \u{b7} осталось 1 ч 20 мин", "21:00\u{2013}22:22 \u{b7} осталось 22 мин", "21:00\u{2013}22:22 \u{b7} осталось 1 ч 1 мин"),
+        ] {
+            let pref = plx_os::i18n::SHIPPED.into_iter().find(|l| l.tag() == tag).expect(tag);
+            let cx = LocaleContext::resolve(pref, None, None, Some("24"), None);
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 2 * MIN, 0).as_deref(), Some(started), "{tag}");
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 60 * MIN, 0).as_deref(), Some(minutes), "{tag}");
+            assert_eq!(airing_line_in(&cx, Airing::Banner, begin, end, begin + 21 * MIN, 0).as_deref(), Some(hours), "{tag}");
         }
     }
 
