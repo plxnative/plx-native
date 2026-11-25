@@ -316,10 +316,11 @@ fn home_orders_the_roster_by_slot_number_whatever_order_the_registry_listed_them
     assert_eq!(order(&[62, 63, 61]), [61, 63, 62]);
 }
 
-/// F7: a refresh re-projects every row, and a released row's library is the one it was given when
-/// it was first projected, not whatever the fresh preview's sample says.
+/// A refresh re-projects every row, and the latest projection decides the library of a row that gave
+/// its cards up just as it does for one that holds them: the old decision is only what a row projection
+/// left undecided (a recording that predates the decision) falls back to.
 #[test]
-fn a_refresh_keeps_the_library_a_released_row_was_projected_with() {
+fn a_refresh_decides_a_released_row_from_its_fresh_first_page() {
     let mut was = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"]);
     was.library = ShelfLibrary::One(2);
     was.shown = was.items.len();
@@ -329,8 +330,12 @@ fn a_refresh_keeps_the_library_a_released_row_was_projected_with() {
     fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.key, &fresh.items);
     let mut new = built(0, &[], vec![fresh]);
     carry_descriptors(&old, &mut new);
-    assert_eq!(new.shelves[0].library, ShelfLibrary::One(2));
+    assert_eq!(new.shelves[0].library, ShelfLibrary::One(5), "the fresh first page decided it");
     assert!(new.shelves[0].released());
+    let mut undecided = built(0, &[], vec![shelf_in(0, 5, "Mixed", "mock.shelf.0", &["m2", "m3"])]);
+    undecided.shelves[0].library = ShelfLibrary::Unknown;
+    carry_descriptors(&old, &mut undecided);
+    assert_eq!(undecided.shelves[0].library, ShelfLibrary::One(2), "a row projection left undecided keeps what it held");
 }
 
 /// A refresh's preview is evidence for a row that still holds cards: a row whose cards sat in one
@@ -631,4 +636,36 @@ fn a_recorded_landing_keeps_every_rows_decided_library() {
     let mut page_read = with_window(lone_movies(&["m0"]), 40, &["m40"]);
     page_read.library = ShelfLibrary::Unknown;
     assert!(!serde_json::to_string(&page_read).unwrap().contains("library"), "an undecided row writes no decision");
+}
+
+/// A quiet read's build is admitted when it lands and again when it is published. Between the two the
+/// ring may release the row it replaces: the fresh projection said `Mixed` (cards of libraries 1 and 5),
+/// and the second admit must say the same as it would have with the row still held.
+#[test]
+fn admitting_a_build_twice_gives_the_same_library_whether_the_ring_released_the_row_between() {
+    let held_one = built(0, &[], vec![lone_movies(&["m0", "m1"]), library_tv()]);
+    assert_eq!(held_one.shelves[0].library, ShelfLibrary::One(1));
+    let mixed_page = || {
+        let mut fresh = lone_movies(&["n0", "n1"]);
+        Arc::make_mut(&mut fresh.items[1]).sec = 5;
+        fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.key, &fresh.items);
+        assert_eq!(fresh.library, ShelfLibrary::Mixed);
+        built(0, &[], vec![fresh, library_tv()])
+    };
+    let mut outcomes = Vec::new();
+    for released_between in [false, true] {
+        let mut last = held_one.clone();
+        let mut staged = mixed_page();
+        admit(Some(&last), &mut staged); // the quiet read lands: staged
+        if released_between {
+            let row = &mut last.shelves[0];
+            row.shown = row.items.len();
+            row.items = Vec::new();
+            assert!(row.released());
+        }
+        admit(Some(&last), &mut staged); // `publish_staged`
+        outcomes.push((staged.shelves[0].library, tv_then_movies(&staged)));
+    }
+    assert_eq!(outcomes[0].0, ShelfLibrary::Mixed);
+    assert_eq!(outcomes[0], outcomes[1], "a ring release between the two admits changes nothing");
 }
