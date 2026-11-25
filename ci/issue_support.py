@@ -184,7 +184,11 @@ def support_state_change(issue, comments, turn, decision, reply):
     def handoff(reason):
         return {"add": [HANDOFF_LABEL], "remove": [WAITING_LABEL], "reason": reason}
 
-    if waiting and human_owned(issue, comments):
+    # A thread the bot has worked keeps a human signal: after a handoff removed `waiting`, a maintainer
+    # who removes HANDOFF_LABEL while their comment still stands gets it back. Threads the bot never
+    # touched (no label, no marker) are left to their maintainers.
+    worked = waiting or any(bot_topic(comment) for comment in comments)
+    if worked and human_owned(issue, comments):
         return handoff("human_owned")
     if turn is None:
         return None

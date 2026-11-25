@@ -38,7 +38,8 @@ reports the failure in Actions.
   **Fix CI failures** off for the support pilot. Prefer **No code pushes** and keep mentions
   from non-collaborators off. Discussions stay with maintainers.
 - Set the GitHub repository variable `PLXNATIVE_ISSUE_SUPPORT` to `shadow` for **shadow** mode.
-  This is also the workflow default.
+  This is also the workflow default, so an unset variable runs in shadow, reporter follow-ups
+  included.
   Area labels apply normally. Support decisions, related issues and proposed replies appear in
   the Actions summary, for the report and for the reporter's follow-up comments. That summary is
   visible on the public repository. Shadow never posts a reply or a support label: the summary
@@ -59,11 +60,15 @@ reports the failure in Actions.
   nothing on a thread with `support:handoff`. To give a thread back, remove that label: the
   assistant then takes the reporter's next comment, unless another human signal remains (a
   maintainer comment, an assignee, a lock, a human label) or the thread is still past its reply
-  limits, which hands it off again. The assistant only notices a human signal when the reporter
-  next comments, because only reporter comments, new reports and edits start a run.
-- An edit to a report that is still unlabeled re-runs intake on the new text. A model result
-  for text that changed meanwhile is discarded without writing anything, so the edit's run
-  starts clean.
+  limits, which hands it off again. On a thread the assistant has worked (it asked a question, or
+  `support:waiting-reporter` is set) a remaining signal re-applies `support:handoff`, even after a
+  maintainer removed it; a thread it never touched is left alone. The assistant only notices a
+  human signal when the reporter next comments, because only reporter comments, new reports and
+  edits start a run.
+- An edit to a report that has no area label re-runs intake on the new text. Only area labels
+  count: `user-report` and `support:*` do not. A model result for text that changed meanwhile is
+  discarded without writing anything, so the edit's run starts clean; if the reporter comments
+  before that run starts, the comment's run labels the issue instead.
 
 To evaluate the pilot, record the number of **maintainer-account requests for missing diagnostics
 before investigation** per report. Compare the next ten eligible reports with ten recent reports

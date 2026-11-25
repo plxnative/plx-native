@@ -177,8 +177,22 @@ class Support(unittest.TestCase):
                               (carrying(waiting), [comment(2, "Looking", MAINTAINER, "MEMBER")]),
                               (carrying(waiting), [comment(2, "Native", NATIVE)])):
             self.assertEqual(change(owned, thread, None, {}, "")["add"], [handoff])
-        # Ownership is only a transition for a thread the bot was waiting on.
+        # Ownership is only a transition for a thread the bot has worked.
         self.assertIsNone(change(dict(REPORT, assignees=[MAINTAINER]), [], None, {}, ""))
+        self.assertIsNone(change(REPORT, [comment(2, "Looking", MAINTAINER, "MEMBER")], None, {}, ""))
+
+    def test_a_maintainer_signal_sticks_on_a_thread_the_bot_has_worked(self):
+        change = issue_support.support_state_change
+        handoff = issue_support.HANDOFF_LABEL
+        looking = comment(2, "Looking", MAINTAINER, "MEMBER")
+        # The handoff already removed the waiting label; a maintainer then removed the handoff label.
+        # The bot's marker still shows it worked the thread, so the maintainer comment hands it off again.
+        worked = [asked(1, "platform"), looking, comment(3, "webOS 25")]
+        swap = change(REPORT, worked, None, {}, "")
+        self.assertEqual((swap["add"], swap["reason"]), ([handoff], "human_owned"))
+        self.assertIsNone(change(dict(REPORT, labels=[{"name": handoff}]), worked, None, {}, ""))
+        # A thread with no marker and no waiting label was never the bot's.
+        self.assertIsNone(change(REPORT, [looking, comment(3, "webOS 25")], None, {}, ""))
 
 
 if __name__ == "__main__":

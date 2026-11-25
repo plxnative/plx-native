@@ -27,7 +27,7 @@ jobs:
     name: select issues
     if: >-
       github.event_name != 'issue_comment' ||
-      ((vars.PLXNATIVE_ISSUE_SUPPORT == 'shadow' || vars.PLXNATIVE_ISSUE_SUPPORT == 'public') &&
+      (vars.PLXNATIVE_ISSUE_SUPPORT != 'off' &&
       !github.event.issue.pull_request &&
       github.event.issue.state == 'open' && github.event.comment.user.type == 'User' &&
       github.event.comment.user.id == github.event.issue.user.id)

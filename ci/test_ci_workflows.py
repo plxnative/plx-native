@@ -98,9 +98,11 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/triage-issue.yml", caller)
         self.assertNotIn("issues: write", caller)
         self.assertIn("issue_comment:\n    types: [created]", caller)
-        # A reporter's follow-up runs in shadow too; only public posts (ci/label-issue.py).
-        self.assertRegex(caller, r"\(vars\.PLXNATIVE_ISSUE_SUPPORT == 'shadow' \|\| vars\.PLXNATIVE_ISSUE_SUPPORT == 'public'\) &&\s+"
+        # A reporter's follow-up runs in shadow too, including while the variable is unset (an unset
+        # variable is shadow); only `off` skips it and only public posts (ci/label-issue.py).
+        self.assertRegex(caller, r"\(vars\.PLXNATIVE_ISSUE_SUPPORT != 'off' &&\s+"
                                  r"!github\.event\.issue\.pull_request")
+        self.assertNotIn("== 'shadow' ||", caller)
         self.assertNotIn("&& 'public'", caller)
         self.assertIn("github.event.comment.user.id == github.event.issue.user.id", caller)
         support_mode = re.search(r"support_mode: >-\n(.*?)\n      comment_id:", caller, re.S).group(1)
