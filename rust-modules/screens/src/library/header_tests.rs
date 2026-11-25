@@ -1,7 +1,7 @@
 // The library page header (redesign PR4): geometry, controls per kind, the focus table and the
 // "focus never switches the library" rule. Included from `navigation_tests` for its `Fixture`.
 use super::*;
-use super::header::pack_names;
+use plx_ui::page_header::pack_names;
 use plx_machine::machine::{InputEvent, InputKind, Measure, Source};
 
 fn key_press(key: Key) -> ScreenEvent<TestHost> {

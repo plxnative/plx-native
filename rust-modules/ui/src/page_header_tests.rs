@@ -171,7 +171,7 @@ fn the_filtered_readout_is_half_white_and_one_gap_left_of_collections() {
 }
 
 /// The layout stands names one `GAP` apart, the gap the Library's `pack_names` budgets with
-/// (`library::header::pack_names`, the rule the product packs by).
+/// (`page_header::pack_names`, the rule the product packs by).
 #[test]
 fn names_stand_one_gap_apart() {
     use plx_base::fontcov::advances::ShippedMeasure;
@@ -1696,4 +1696,52 @@ fn a_header_row_names_its_stops_and_finds_them_by_id() {
     assert_eq!(facts(&row, Slot::CrumbRoot), Some((id("header.crumb"), Role::Button, Some("Films".to_owned()))));
     assert_eq!(facts(&row, Slot::Right(0)).map(|f| f.0), Some(id("header.sort")));
     assert_eq!(row.stops.len(), 2, "the page name is no stop");
+}
+
+// ---- a row of names: the hoisted builders and `names_row` ----
+
+fn pills(titles: &[&str]) -> Vec<(String, usize)> {
+    titles.iter().enumerate().map(|(i, t)| (t.to_string(), i)).collect()
+}
+
+#[test]
+fn the_names_builders_are_the_headers_own() {
+    let pill = super::item("Movies");
+    assert!(pill.focusable && pill.label == "Movies" && !pill.value_only);
+    let more = super::more_item();
+    assert!(more.glyph == Some(Icon::More) && more.value_only && more.a11y == Some("libraries"), "{more:?}");
+}
+
+#[test]
+fn names_that_fit_show_in_order_behind_no_overflow() {
+    use plx_base::fontcov::advances::ShippedMeasure;
+    let m = ShippedMeasure;
+    let row = super::names_row(&pills(&["Movies", "TV Shows", "Kids"]), 1, Vec::new(), &[], 8, &m);
+    assert!(!row.overflowed());
+    assert_eq!(row.slots, [super::NameSlot::Pill(0), super::NameSlot::Pill(1), super::NameSlot::Pill(2), super::NameSlot::More]);
+    let plated: Vec<_> = row.page.spec().left.iter().filter(|it| it.selected_plate).map(|it| it.label.as_str()).collect();
+    assert_eq!(plated, ["TV Shows"]);
+}
+
+#[test]
+fn names_that_do_not_fit_go_behind_the_more_item_and_report_it() {
+    use plx_base::fontcov::advances::ShippedMeasure;
+    let m = ShippedMeasure;
+    let long: Vec<String> = (0..12).map(|i| format!("A rather long library name number {i}")).collect();
+    let titles: Vec<&str> = long.iter().map(String::as_str).collect();
+    let row = super::names_row(&pills(&titles), 0, Vec::new(), &[], 8, &m);
+    assert!(row.overflowed(), "twelve long names cannot all show");
+    let shown = row.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count();
+    assert!(shown < 12 && shown + row.folded.len() == 12, "every name is shown or folded: {shown} + {}", row.folded.len());
+    assert!(row.slots.contains(&super::NameSlot::More));
+    // a selected name that did not fit is the visitor, plated, after the more item
+    let visiting = super::names_row(&pills(&titles), 11, Vec::new(), &[], 8, &m);
+    assert_eq!(visiting.slots.last(), Some(&super::NameSlot::Pill(11)));
+    assert!(!visiting.folded.contains(&11));
+    // and the cap holds whatever the room
+    let short: Vec<String> = (0..12).map(|i| format!("L{i}")).collect();
+    let titles: Vec<&str> = short.iter().map(String::as_str).collect();
+    let capped = super::names_row(&pills(&titles), 0, Vec::new(), &[], 8, &m);
+    assert_eq!(capped.slots.iter().filter(|s| matches!(s, super::NameSlot::Pill(_))).count(), 8);
+    assert!(capped.overflowed(), "the cap folds the rest behind the more item");
 }

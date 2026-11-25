@@ -16,8 +16,7 @@
 //! row: a library switch replaces the whole row, and the pill must travel across it.
 use super::*;
 use plx_machine::machine::Measure;
-use plx_ui::hstack::{self, Align, HStack};
-use plx_ui::page_header::{self, HeaderFocus, HeaderItem, HeaderRow, PageHeader, PageHeaderSpec, Slot};
+use plx_ui::page_header::{self, item, HeaderFocus, HeaderItem, HeaderRow, PageHeader, PageHeaderSpec, Slot};
 use plx_ui::theme;
 
 /// A shared library's owner credit is atomic. An oversized credit gives its room back to the
@@ -31,29 +30,6 @@ pub(super) fn fit_name(title: &str, owner: &str, room: f32, measure: &dyn Measur
     measure.fit_line(title, room, size, false).to_string_lossy().into_owned()
 }
 
-/// The width the names `picks` (then, with `more_w`, the options after them) stand in, one
-/// [`page_header::GAP`] apart: the ui's own [`HStack::width`]. `PageHeader::layout` places the names
-/// with the same stack and the same gap, so what is packed here and where the names stand share the
-/// gap rule (not one construction: this takes measured widths, the layout takes spec items).
-fn names_w(widths: &[f32], picks: &[usize], more_w: Option<f32>) -> f32 {
-    let names: Vec<hstack::Item> = picks.iter().map(|&i| widths[i]).chain(more_w).map(hstack::Item::new).collect();
-    HStack::new(&names, page_header::GAP, Align::Leading(0.0)).width()
-}
-
-/// Which of `n` names show when the row cannot hold them all (`budget` is text edge to text edge
-/// for names plus options). Keep a stable prefix of favorites, reserving room for the options
-/// action. Choosing another library never reorders these shortcuts.
-pub(super) fn pack_names(widths: &[f32], _selected: usize, budget: f32, more_w: f32, cap: usize) -> Vec<usize> {
-    let mut picks = Vec::new();
-    for i in 0..widths.len().min(cap) {
-        let mut next = picks.clone();
-        next.push(i);
-        if names_w(widths, &next, Some(more_w)) > budget { break; }
-        picks = next;
-    }
-    picks
-}
-
 /// What the read-out's filtered count was taken under: the library listing (the key `unfiltered`
 /// carries) and the filter terms in force. A count is only ever shown for the key it was counted under.
 #[derive(Clone, PartialEq)]
@@ -61,10 +37,6 @@ pub(super) struct FilterKey {
     library: (LibrarySectionIdentity, u32, plx_data::browse::LibraryType),
     genre: Option<String>,
     unwatched: bool,
-}
-
-fn item(label: impl Into<String>) -> HeaderItem {
-    HeaderItem { label: label.into(), focusable: true, ..Default::default() }
 }
 
 /// A control that opens a page (Collections, Recommended): the row draws a chevron after it. `name`
@@ -326,26 +298,17 @@ impl LibraryScreen {
                     LIBRARY_GROUP, all.len());
                 all.push((elem, index));
             }
-            let more = HeaderItem { glyph: Some(plx_ui::icons::Icon::More), value_only: true, a11y: Some("libraries"),
-                ..item(plx_os::i18n::msg::browse_library_libraries()) };
-            let more_w = page_header::cluster_width(&[more.clone()], measure);
-            // Reserve a current-library slot whenever the roster can require one. The same
-            // reservation applies while a favorite is selected, so a visit never shifts or
-            // displaces the favorite shortcuts. Shared measurement/elision bounds every label.
+            // Reserve a current-library slot whenever the roster can require one (the shared packing,
+            // `page_header::plan_names`, says why): a visit never shifts or displaces the favorites.
             let visit_slot = all.len() > 2 || directory.sections().iter().any(|section|
                 section.kind == directory.sections()[current].kind && !section.row.pinned);
-            let slots = if visit_slot { 3.0 } else { 2.0 };
-            let name_budget = ((budget - more_w - slots * page_header::GAP) / slots).max(0.0);
             let label = |section, room| {
                 let (title, owner) = self.library_name(section, cx);
                 fit_name(title, owner, room, measure)
             };
-            let labels: Vec<String> = all.iter().map(|(_, section)| label(*section, name_budget)).collect();
-            let widths: Vec<f32> = labels.iter().map(|label|
-                page_header::cluster_width(&[item(label.as_str())], measure)).collect();
-            let reserve = if visit_slot { name_budget + page_header::GAP } else { 0.0 };
-            let picks = pack_names(&widths, 0, budget - reserve, more_w, layout::MAX_LIBRARY_PILLS);
-            let current_room = (budget - names_w(&widths, &picks, Some(more_w)) - page_header::GAP).max(0.0);
+            let plan = page_header::plan_names(budget, visit_slot, layout::MAX_LIBRARY_PILLS, measure, |room|
+                all.iter().map(|(_, section)| label(*section, room)).collect());
+            let page_header::NamesPlan { labels, picks, more, current_room } = plan;
             let current_label = label(current, current_room);
             self.folded = all.iter().enumerate().filter(|(i, (_, section))|
                 !picks.contains(i) && *section != current)
