@@ -141,12 +141,18 @@ const WINDOW_TYPE_TOPLEVEL: c_int = 1;
 ///   below it (E20's visibility walk, `e_client.c`). On the TV 10.0 emulator nothing was below and the video showed
 ///   through. On the first retail set (discussion #1460, 2026-11-25, two photos) the TV's own home screen showed
 ///   through every alpha-0 pixel: in the letterbox bars, and over the whole screen when no picture was up.
-/// - **Opaque with video** (alpha off, then [`ecore_wl2_video`]'s `has_video`). The window hides what is below
+/// - **Opaque with video** (alpha left off, then [`ecore_wl2_video`]'s `has_video`). `alpha_set(win, 0)` sends
+///   nothing on a window that never had alpha (EFL returns early on an unchanged value): the window is opaque
+///   because E20 starts every client non-ARGB and no null opaque region is ever sent. It hides what is below
 ///   it, and the compositor puts a (0, 0, 0, 0) COPY rectangle under it and blends its buffer's alpha
 ///   (`e_comp_wl_subsurface.c`, `_e_comp_wl_subsurface_check_below_bg_rectangle`), so alpha 0 reaches the plane
 ///   and nothing else. This is the mode whenever the image has the call.
 ///
-/// Opaque WITHOUT video is never chosen: with alpha off and no `has_video` the emulator showed no video at all.
+/// Opaque WITHOUT video is never chosen on purpose: with alpha off and no `has_video` the emulator showed no video at
+/// all. It can still happen by accident: EFL sends `has_video` only when the compositor's `tizen_policy` is version 7
+/// or later (and not at all without one), and the version is not readable from here, so an image that exports the
+/// symbol over an older compositor gets an opaque window with no hole. The symbol and the v7 request came together
+/// (6.0), so this is not expected; a retail set is unmeasured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMode {
     OpaqueWithVideo,
@@ -374,7 +380,9 @@ impl Window {
                 let mode = WindowMode::of(loaded("ecore_wl2_video", ecore_wl2_video::load(None)));
                 ecore_wl2_window_alpha_set(self.window, mode.alpha());
                 if mode == WindowMode::OpaqueWithVideo {
-                    // After `open`, so the window's `wl_surface` exists; the compositor reads it at the next commit.
+                    // `window_new` made the window's `wl_surface`, and `open` succeeding means a compositor answered (EFL
+                    // passes the surface to the request unchecked). The compositor reads the flag at the next commit, and
+                    // sends it only on a `tizen_policy` of version 7 or later.
                     ecore_wl2_window_video_has(self.window, 1);
                 }
                 log(&format!("ecore: window mode {mode:?} (alpha {})", mode.alpha()));
