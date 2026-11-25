@@ -576,10 +576,11 @@ fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
     assert_eq!(start(&store).pick, Some((22, 1)), "a track picked after Off plays");
 }
 
-/// **A pick is spent by the playback it started** (#1532): on a SHOW page the loaded page's key is the
-/// show's while the pick is keyed by the episode, so no landing of the page ever drops it. Pick Off,
-/// Play, turn English on in the player, stop, Resume: the second start reads the server's selection,
-/// not the stale Off.
+/// **A pick is spent by the playback it started** (#1532), and a re-read of the page does not spend it:
+/// on a SHOW page the loaded page's key is the show's while the pick is keyed by the episode. Pick Off,
+/// Play (`SpendPick`, sent by `apply_plan` for a playable plan), turn English on in the player, stop,
+/// Resume: the second start reads the server's selection, not the stale Off. Installing a playing item
+/// is not a start, and another item's playback leaves the pick.
 #[test]
 fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
     use plx_data::metadata::{PreplayPick, SubPick};
@@ -609,11 +610,13 @@ fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
     assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "control: the pick waits for the start");
     let played = PlayingItem { sid, rk: "ep-7".into(), ..item("episode", "show-1", vec![text_sub(22, "spa", "")]) };
     assert!(store.run(MetadataCmd::InstallPlaying(Some(played))));
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "installing the playing item is not the start");
+    assert!(!store.run(MetadataCmd::SpendPick { sid, rk: "ep-8".into(), audio: vec![11] }), "another item's playback leaves the pick");
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1);
+    assert!(store.run(MetadataCmd::SpendPick { sid, rk: "ep-7".into(), audio: vec![11] }));
     assert!(store.view().picks_of(sid, "ep-7").is_empty(), "the playback that started under the pick spent it");
-    let other = PlayingItem { sid, rk: "ep-8".into(), ..item("episode", "show-1", Vec::new()) };
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: off }));
-    assert!(store.run(MetadataCmd::InstallPlaying(Some(other))));
-    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "another item's playback leaves the pick");
+    assert!(ResolveEnv::snapshot(&crate::route::PlaybackSession::IDLE, store.view(), sid, "ep-7").picks.is_empty(),
+        "Resume's resolve is fed no pick: it plans from the server's selection");
 }
 
 /// **The audio half of a pick travels typed, like the subtitle half**: a movie whose DEFAULT track is

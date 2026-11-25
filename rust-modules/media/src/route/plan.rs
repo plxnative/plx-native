@@ -1522,6 +1522,17 @@ pub struct SelectionBeforeRetry {
 }
 
 impl ResolveEnv {
+    /// **The pre-play picks that feed this resolve**: the viewer's own launch's. A hero preview is not a
+    /// playback the viewer started, and a retry that carries a selection (`selection_before_retry`) plans
+    /// from the pair its attempt held, which outranks a pick made before the first start. Every other
+    /// resolve (a fresh launch, and a retry that held nothing because its first resolve failed before the
+    /// item was fetched) is fed the picks. The ONE gate both halves of a pick go through
+    /// ([`PlayingItem::apply_picks`], the subtitle half, and [`Self::under_pick`], the audio half), and
+    /// what the plan is planned under; the spend of a pick is not decided here (`route::apply_plan`).
+    pub(super) fn picks_in_force(&self) -> &[plx_data::metadata::PreplayPick] {
+        if self.preview || self.selection_before_retry.is_some() { &[] } else { &self.picks }
+    }
+
     /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file
     /// and this is the viewer's own launch (`fresh_play`): a retry carries the attempt's held pair, which
     /// outranks a pick made before the first start, and a fresh launch's `audio_sid` is only what the
@@ -1947,7 +1958,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // sidecar, the log, the write-back), and `sub_choice` carries the Off no flag can say,
             // which `pick_subtitle` ranks.
             if let Some(item) = plan.playing.as_mut() {
-                item.apply_picks(&env.picks);
+                item.apply_picks(env.picks_in_force());
             }
             // The audio half rides the same typed door as a retry's: the session's audio pick
             // (`env.audio_sid`), which [`audio_intents`] ranks first. The `selected` flags the pick

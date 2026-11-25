@@ -211,13 +211,15 @@ pub struct MetadataState {
     /// [`cached_playing`] refuses it for this item until a page read after the playback lands.
     played_since_load: Option<(plx_plex::plex::ServerId, String)>,
     /// **The one pre-play pick** ([`PreplayPick`]): what the viewer chose in the Audio & Subtitles
-    /// panel for an item before it plays, one per file (`part_id`). `MetadataCmd::PatchTracks` is the
-    /// only writer; the resolve snapshots it (`MetadataView::picks_of`) and applies it to the item it
-    /// plans, and the panel is seeded from it ([`PreplayTracks::pick`]). **A pick is the viewer's
-    /// word for the NEXT start of its item and is retired by [`retire_picks`]**: when that item's
-    /// playback is installed ([`install_playing`], the same transition that sets `played_since_load`,
-    /// so Resume after an in-player change reads the server's selection and not a stale pick), when
-    /// a fresh read of a page that describes it lands (`install_landed_detail`), and on [`reset`].
+    /// panel for an item before it plays, one per file (`part_id`). The resolve snapshots it
+    /// (`MetadataView::picks_of`) and applies it to the item it plans, and the panel is seeded from it
+    /// ([`PreplayTracks::pick`]). **One lifecycle, one writer ([`pick_step`]), three events**: the viewer's
+    /// choice (`MetadataCmd::PatchTracks`); the START of a playable, non-preview playback of the item's
+    /// file (`MetadataCmd::SpendPick`, sent by `route::apply_plan`, so Resume after an in-player change
+    /// reads the server's selection and not a stale pick, while a refused first attempt keeps the pick for
+    /// the next one); and the page's end (`clear`, `clear_item`, `reset`, and the landing of another item).
+    /// A re-read of the SAME page touches nothing: the viewer's Off must outlive the watch toggle's
+    /// read-back.
     picks: Vec<(plx_plex::plex::ServerId, String, PreplayPick)>,
     alt: AltStore,
     /// The IO this owner has asked the application to start and the application has not yet taken
@@ -2181,6 +2183,7 @@ fn patch_loaded_offset(state: &mut MetadataState, at: &crate::viewstate::ViewAt,
 fn clear(state: &mut MetadataState, adapter: &MetadataAdapter) {
     supersede_detail(adapter);
     state.current = None;
+    pick_step(state, PickEvent::PageGone);
     // The *Also available* copies describe the item that is going, so they go with it. Nothing
     // reads them afterwards — the store is addressed and no page's pair can match an empty one —
     // but a departing page should not leave another item's list in memory for the next one to be
@@ -2202,6 +2205,7 @@ fn clear_item(state: &mut MetadataState, adapter: &MetadataAdapter, sid: plx_ple
     }
     if state.current.as_ref().is_some_and(|d| same(d.sid, &d.rk)) {
         state.current = None;
+        pick_step(state, PickEvent::PageGone);
         alt_clear(state);
     }
 }
@@ -2240,7 +2244,7 @@ fn reset(state: &mut MetadataState, adapter: &MetadataAdapter) {
     state.now = None;
     state.playing = None;
     state.played_since_load = None;
-    state.picks.clear();
+    pick_step(state, PickEvent::PageGone);
     state.skipped.clear();
     alt_clear(state);
 }
@@ -2835,8 +2839,8 @@ pub enum SubPick {
 }
 
 /// **The one pre-play pick** (#1532): the tracks the viewer chose for an item's file in the Audio &
-/// Subtitles panel, as stream ids. The metadata store owns it (`MetadataState::picks`;
-/// `MetadataCmd::PatchTracks` is the only writer) and everything else reads it: the panel is seeded
+/// Subtitles panel, as stream ids. The metadata store owns it (`MetadataState::picks`, which says how it
+/// lives and ends; `MetadataCmd::PatchTracks` writes it) and everything else reads it: the panel is seeded
 /// from [`PreplayTracks::pick`], and the resolve applies it to the item it plans
 /// ([`PreplayPick::apply`]) whichever way that item arrived (the loaded page's copy, a default fetch
 /// or a named version's fetch), so a pick can neither be lost nor addressed to another file.
@@ -3102,10 +3106,52 @@ fn has_preplay_tracks(
     preplay_source(state, sid, rk, version).is_some()
 }
 
-/// **The one retirement of a pre-play pick**: drop what is held for `(sid, rk)`. Keyed by the item
-/// that PLAYS (an episode's key even from a show page, where the loaded page's own key is the show's).
-fn retire_picks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str) {
-    state.picks.retain(|(s, r, _)| !plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)));
+/// **The three events of a pre-play pick's life**, the only inputs of [`pick_step`].
+enum PickEvent<'a> {
+    /// The viewer chose `pick` for `(sid, rk)` in the Audio & Subtitles panel (`MetadataCmd::PatchTracks`).
+    Chose { sid: plx_plex::plex::ServerId, rk: &'a str, pick: PreplayPick },
+    /// A playable, non-preview playback of the item `(sid, rk)` started on the file whose audio streams
+    /// are `audio` (`MetadataCmd::SpendPick`, sent by `route::apply_plan`): the pick for that file, whether
+    /// or not that playback was planned under it, is the viewer's word for a start that has now happened.
+    Started { sid: plx_plex::plex::ServerId, rk: &'a str, audio: &'a [i64] },
+    /// The page the picks were chosen on ended: it closed ([`clear`], [`clear_item`], [`reset`]) or
+    /// another item's page replaced it (`install_landed_detail`). A show page's picks are keyed by the
+    /// episode, the page by the show, so no key could name them from the page's close and none needs to.
+    PageGone,
+}
+
+/// MAIN THREAD, **the ONE writer of the pre-play picks** (`MetadataState::picks`): nothing else in the
+/// store adds, replaces or removes one, and every reader goes through [`picks_of`]. Returns whether the
+/// held picks changed.
+fn pick_step(state: &mut MetadataState, event: PickEvent<'_>) -> bool {
+    let held = state.picks.len();
+    match event {
+        PickEvent::Chose { sid, rk, pick } => {
+            // Lands only when the loaded page holds the item ([`preplay_source`]'s two shapes).
+            let holds = current(state).is_some_and(|d| {
+                d.sid == sid
+                    && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || d.play_episode_streaming(rk).is_some())
+            });
+            if !holds {
+                return false;
+            }
+            let file = |s: &plx_plex::plex::ServerId, r: &String, p: &PreplayPick| {
+                plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)) && p.part_id == pick.part_id
+            };
+            // It replaces what was held for the same file.
+            match state.picks.iter_mut().find(|(s, r, p)| file(s, r, p)) {
+                Some((_, _, held)) => return std::mem::replace(held, pick) != pick,
+                None => state.picks.push((sid, rk.to_string(), pick)),
+            }
+        }
+        PickEvent::Started { sid, rk, audio } => {
+            state.picks.retain(|(s, r, p)| {
+                !(plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)) && audio.contains(&p.audio_sid) && p.audio_sid != 0)
+            });
+        }
+        PickEvent::PageGone => state.picks.clear(),
+    }
+    state.picks.len() != held
 }
 
 /// The picks held for `(sid, rk)`, one per file.
@@ -3113,27 +3159,6 @@ fn picks_of<'a>(
     state: &'a MetadataState, sid: plx_plex::plex::ServerId, rk: &'a str,
 ) -> impl Iterator<Item = &'a PreplayPick> {
     state.picks.iter().filter(move |(s, r, _)| plx_plex::plex::same_item((*s, r.as_str()), (sid, rk))).map(|(_, _, p)| p)
-}
-
-/// MAIN THREAD, the ONE writer of the pre-play pick: the viewer chose `pick` for `(sid, rk)` before it
-/// played. It replaces what was held for the same file and is read by the panel's seed and by the
-/// resolve ([`PreplayPick::apply`]), never copied onto the page's streams. Lands only when the loaded
-/// page holds the item ([`preplay_source`]'s two shapes). Returns whether the held pick changed.
-fn patch_tracks(state: &mut MetadataState, sid: plx_plex::plex::ServerId, rk: &str, pick: PreplayPick) -> bool {
-    let holds = current(state).is_some_and(|d| {
-        d.sid == sid
-            && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || d.play_episode_streaming(rk).is_some())
-    });
-    if !holds {
-        return false;
-    }
-    match state.picks.iter_mut().find(|(s, r, p)| plx_plex::plex::same_item((*s, r.as_str()), (sid, rk)) && p.part_id == pick.part_id) {
-        Some((_, _, held)) => std::mem::replace(held, pick) != pick,
-        None => {
-            state.picks.push((sid, rk.to_string(), pick));
-            true
-        }
-    }
 }
 
 /// `client` is the caller's own client for `sid`, the server `rk` is a key on. It runs on the
@@ -3336,10 +3361,6 @@ fn install_playing(state: &mut MetadataState, pt: Option<PlayingItem>) {
     state.skipped.clear(); // a different leaf's markers, so a fresh slate
     if let Some(pt) = &pt {
         state.played_since_load = Some((pt.sid, pt.rk.clone()));
-        // The playback starts under the pick (the resolve captured it at the press), so it is spent:
-        // the page's next Play or Resume plans from the server's selection, which a change made
-        // in the player has moved.
-        retire_picks(state, pt.sid, &pt.rk);
         plx_base::eventlog::log(&format!(
             "playing item: rk={} audio={} subs={} markers={} chapters={}",
             pt.rk,
@@ -4617,9 +4638,8 @@ pub fn run_with_keys(state: &mut MetadataState, adapter: &std::sync::Arc<Metadat
             true
         }
         MetadataCmd::AppendPlayingSub { sid, rk, stream } => append_playing_sub(state, sid, &rk, stream),
-        MetadataCmd::PatchTracks { sid, rk, pick } => {
-            patch_tracks(state, sid, &rk, pick)
-        }
+        MetadataCmd::PatchTracks { sid, rk, pick } => pick_step(state, PickEvent::Chose { sid, rk: &rk, pick }),
+        MetadataCmd::SpendPick { sid, rk, audio } => pick_step(state, PickEvent::Started { sid, rk: &rk, audio: &audio }),
         MetadataCmd::MarkSkipped(m) => {
             mark_skipped(state, m);
             true
@@ -4736,14 +4756,17 @@ fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<Met
     // A page with no guid, or a one-server install, spawns nothing.
     request_alt_sources(state, adapter, d.sid, &d.rk, &d.guid, keys);
     // A page read now is read after any playback that has landed: the streams it describes are the
-    // server's, so a playback or a pick held for an item it describes is spent. ONE rule over every item
-    // the page's streams are about: its own and, on a show page, the episode its backfill read
-    // ([`Detail::stream_episode_key`]), which is the one Play starts and the one a pick is keyed by.
+    // server's, so the playback marker of every item the page's streams are about is spent: its own and,
+    // on a show page, the episode its backfill read ([`Detail::stream_episode_key`]), which is the one
+    // Play starts. A pick is NOT spent by a read (see [`MetadataState::picks`]): it lives as long as the
+    // page does, so the same item read again keeps it and another item's page ends it.
     for rk in std::iter::once(d.rk.as_str()).chain(d.stream_episode_key()) {
         if state.played_since_load.as_ref().is_some_and(|(s, r)| plx_plex::plex::same_item((*s, r), (d.sid, rk))) {
             state.played_since_load = None;
         }
-        retire_picks(state, d.sid, rk);
+    }
+    if !state.current.as_ref().is_some_and(|old| plx_plex::plex::same_item((old.sid, &old.rk), (d.sid, &d.rk))) {
+        pick_step(state, PickEvent::PageGone);
     }
     let mut d = d;
     if let Some(old) = state.current.as_ref() {

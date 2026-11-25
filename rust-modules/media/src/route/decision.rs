@@ -12178,9 +12178,22 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     // The remembered choice this landing applied and the server may not have (W6). Computed here
     // because the playing item moves into the store just below, and only for a playable landing.
     let write_back = parked_write_back(&plan);
+    // **The start of a playback is what spends the viewer's pick, and only a playable plan of the viewer's
+    // own starts one**: a REFUSED plan installs its item too (its verdict feeds the read-out) but nothing
+    // played, so BACK and Play must still find the pick; a hero preview is not the viewer's playback. A
+    // playable plan spends the pick held for its file whether or not the plan was planned under it: a
+    // retry that carries the failure screen's pair (`ResolveEnv::picks_in_force`) is a start all the same,
+    // and the pick must not outlive it to be applied to a later Resume. `source_ready` is the same
+    // predicate that says the plan has a source to start.
+    let preview = ps.request.as_ref().is_some_and(|r| r.preview);
+    let started = plan.playing.as_ref().filter(|_| source_ready && !preview)
+        .map(|item| (item.sid, item.rk.clone(), item.audio.iter().map(|a| a.id).collect::<Vec<_>>()));
     meta.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(
         plan.playing,
     ));
+    if let Some((sid, rk, audio)) = started {
+        meta.run(plx_data::stores::metadata::MetadataCmd::SpendPick { sid, rk, audio });
+    }
     // main thread only — `up_next()`/`with_queue()` lend out of this (see their docs). The rows
     // arrive already projected: the worker never retained a `Metadata` tree to install here.
     { let s = &mut *ps; {
@@ -12251,7 +12264,6 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
         let metric_request = s.metric_request;
         let pending_metric_lifecycle = std::mem::take(&mut s.pending_metric_lifecycle);
         let reconfigure_pause_goal = s.reconfigure_pause_goal;
-        let preview = request.as_ref().is_some_and(|r| r.preview);
         *s = PlaybackSession {
             attempt_view: crate::player::attempt_view::AttemptView::EMPTY,
             // A new plan is not a new item or a torn-down engine: the readout's members live

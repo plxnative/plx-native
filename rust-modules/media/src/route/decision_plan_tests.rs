@@ -1780,3 +1780,66 @@ fn a_transcode_profile_names_the_codecs_of_the_attempts_own_caps() {
     assert!(without_dts.contains("ac3"), "the rest of the profile is unchanged: {without_dts}");
     plx_plex::plex::reset_servers_for_test();
 }
+
+/// **(b) A pick is spent by a playback that STARTS, not by a plan that was refused** (#1532): a refused
+/// plan installs its item too (the verdict feeds the read-out), but nothing played, so BACK and Play must
+/// still find the pick; the playable plan that follows spends it. A hero preview is not the viewer's
+/// playback and spends nothing, and a playable retry that carries the failure screen's pair (planned under
+/// no pick) still spends the pick held for its file, or the page's next Resume would apply it. Through the
+/// real `apply_plan`, the one place the spend is sent from.
+#[test]
+fn a_refused_plan_keeps_the_pick_and_the_playable_one_spends_it() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![stream(11)],
+        subs: vec![stream(21)],
+        ..Default::default()
+    }));
+    let off = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Off };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
+    let planned = |url: &str, store: &MetadataStore| {
+        let mut playing = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        playing.apply_picks(&store.view().picks_of(sid, "m1"));
+        Plan { sid, url: url.into(), playing: Some(playing), ..Default::default() }
+    };
+    // the plans are resolved at their presses; the first install marks the page's copy as played
+    let url = "https://example.invalid/m1.mkv";
+    let (refused, playable) = (planned("", &store), planned(url, &store));
+    let (preview, retry) = (planned(url, &store), planned(url, &store));
+    let install = |ps: &mut crate::route::PlaybackSession, store: &mut MetadataStore, plan: Plan| {
+        let start = super::apply_plan(ps, store, plan, "m1", CandidatePurpose::NewCandidate);
+        settle_plan_start_in_unit_test(ps, start);
+    };
+    install(&mut ps, &mut store, refused);
+    assert_eq!(store.view().picks_of(sid, "m1"), [off], "a refused first attempt spent nothing");
+    ps.request = Some(PlaybackRequest {
+        sid, rk: "m1".into(), part: "/library/parts/9001/1/file.mkv".into(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: true, live: None, version: None, show_rk: String::new(),
+    });
+    install(&mut ps, &mut store, preview);
+    assert_eq!(store.view().picks_of(sid, "m1"), [off], "a hero preview is not the viewer's playback");
+    ps.request = None;
+    install(&mut ps, &mut store, playable);
+    assert!(store.view().picks_of(sid, "m1").is_empty(), "the playback that started under the pick spent it");
+
+    // the retry that carries the failure screen's pair is planned under no pick (`picks_in_force`), yet its
+    // start is the start the pick was waiting for
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
+    let mut under_retry = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+    under_retry.selection_before_retry = Some(SelectionBeforeRetry {
+        retry_part_id: 9001, audio_sid: 0, sub_sid: 0, subtitle_override: None, sub_mode: SubMode::Track, memory: Vec::new(),
+    });
+    assert!(under_retry.picks_in_force().is_empty(), "setup: the retry is planned under no pick");
+    install(&mut ps, &mut store, retry);
+    assert!(store.view().picks_of(sid, "m1").is_empty(), "a start that was not fed the pick still spends it");
+}

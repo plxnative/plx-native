@@ -22,8 +22,9 @@
 //! memory, so the start's plan reads the pick instead of the old selection.
 //!
 //! **One pick value.** What is chosen is a [`plx_data::metadata::PreplayPick`] (part, audio stream,
-//! subtitle as `Server` / `Off` / `Track`): the metadata store owns it and `MetadataCmd::PatchTracks`
-//! ([`patch_command`]) is its only writer. [`PickerState`] is seeded from [`PreplayTracks::pick`]
+//! subtitle as `Server` / `Off` / `Track`): the metadata store owns it; `MetadataCmd::PatchTracks`
+//! ([`patch_command`]) writes it and `MetadataCmd::SpendPick` spends it when a playback it fed starts, and
+//! the page's close or replacement drops it. [`PickerState`] is seeded from [`PreplayTracks::pick`]
 //! (the store's, or on the failure screen the session's held / standing selection) and carries each
 //! [`Selection::pick`] forward as the only record of the choice; what the rows show is [`chosen`] of
 //! it. The resolve applies the same value to the item it plans, so a pick reaches the start whichever
@@ -509,8 +510,8 @@ impl PopoverPanel for PickerState {
 }
 
 /// The store command that holds what was picked for the item's next start: the plan applies the stored
-/// pick over the file's own flags (`PreplayPick::apply`, its audio as the session audio) and the start
-/// retires it.
+/// pick over the file's own flags (`PreplayPick::apply`, its audio as the session audio) and the start of
+/// the playback that took it spends it (`MetadataCmd::SpendPick`).
 pub fn patch_command(tracks: &plx_data::metadata::PreplayTracks, sel: &Selection) -> plx_data::stores::metadata::MetadataCmd {
     plx_data::stores::metadata::MetadataCmd::PatchTracks {
         sid: tracks.sid,
