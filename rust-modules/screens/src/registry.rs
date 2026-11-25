@@ -1498,6 +1498,17 @@ pub trait HomeLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {
 /// A host publishing the Live TV store's retained view for this frame.
 pub trait LiveTvLike: AppLike<Memory = PageMemory> + Sized {
     fn livetv<'a>(cx: &Cx<'a, Self>) -> plx_data::livetv::LiveTvView<'a>;
+    /// **This frame's wall-clock time** (Unix second and UTC offset), as the loop published it
+    /// beside `today`: what a clock face, "22m left" or an airing's progress is derived from
+    /// (`plx_ui::fmt::airing_line`, `frac`). A page reads no clock. `None` before the first
+    /// publication, under a replay (which has no wall clock) and where the platform cannot say: the
+    /// page then draws no clock face and no progress.
+    ///
+    /// A provided method so a host that has no clock still compiles; `AppHost` (`src/app/bridge.rs`)
+    /// answers the publication.
+    fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
+        None
+    }
 }
 
 /// A host that publishes this frame's playback session (spec §2.3). The player's owned screens

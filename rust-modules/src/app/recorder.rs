@@ -301,7 +301,6 @@ pub(crate) fn state_fp_v7() -> u64 {
 #[cfg(test)]
 const PRE_LIBRARY_RECORD_SHAPE: &str = "HubsResultV1{gen:u32,seq:u32,sid:u16,client:Option<u32>,token_gen:u32,build:Option<{cw:[{last_viewed_at:i64,m:PmsMovie}],shelves:[{title:str,hub_id:str,key:str,items:[PmsMovie],positions:[u64],total:u64,offset:u64,end:u64,more:bool}]}>};PmsMovie{sid:u16,sec:i64,title:str,year:i32,rating:str,dur_ns:i64,part:str,thumb:str,still:str,art:str,summary:str,rk:str,vcodec:str,acodec:str,blur:[[f32bits;3];4],has_blur:bool,kind:i32,resume_ms:i64,show_rk:str,season_index:i32,show_title:str,ep_index:i32,unwatched:bool,watched:bool,aired:str,child_count:i64}";
 
-// Probe only: install complete vector and numeric literals after the production probe run.
 /// Put the recorded Home result's frozen shape ([`PRE_LIBRARY_RECORD_SHAPE`]) where the live one stands.
 #[cfg(test)]
 fn pre_library_record(shapes: &mut [&str]) {
@@ -309,6 +308,7 @@ fn pre_library_record(shapes: &mut [&str]) {
     shapes[record] = PRE_LIBRARY_RECORD_SHAPE;
 }
 
+// Probe only: install complete vector and numeric literals after the production probe run.
 #[cfg(test)]
 fn session_app_prior_vector() -> Vec<&'static str> {
     let mut shapes = APP_SHAPES.to_vec();
@@ -2883,10 +2883,8 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape (only
-        // the screen half moves): previously 0x7410_4747_8858_9e13.
-        // A recorded shelf carries the library it was decided for: previously 0xabbc_7fbf_8c17_4be3.
-        assert_eq!(state_fp(), 0x25c8_ffc9_391e_a2c3, "current V13 producer census");
+        // A recorded shelf carries the library it was decided for: previously 0x7410_4747_8858_9e13.
+        assert_eq!(state_fp(), 0x1026_c131_7573_ba73, "current V13 producer census");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");

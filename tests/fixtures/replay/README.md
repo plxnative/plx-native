@@ -735,8 +735,11 @@ true` restored), then replayed SAME in Targets and Resolve on three consecutive 
 `docs/ui-replay-v13-anchor.md` has the record.
 
 The recorded Home result's shape gained a shelf's decided `library` (`record::SHAPE`), which moved the state
-shape from `12374906336773098467` to `2722707214457283267`. Both current anchors no longer match it
-(`plxnative-rec rerecord` accepts a fixture only when its shape moved), so they were recorded afresh against the synthetic server (`MOCK_PORT=32685 tests/focusfp.sh --rec
---only 12,13`) and installed with `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one
-string `Mixed` (a `ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter
-at zero (925 and 1328 frames). `docs/ui-replay-v13-anchor.md` has the record.
+shape from `8363262880582770195` to `1163829971889928819`; the Home roster's key also began to fold Browse's
+household verdicts before a pin table, which republishes Home once more on the verdict's landing, so the
+committed anchors replayed DIVERGED from the first Home landing with every difference counter at zero. Both current
+anchors no longer match the shape (`plxnative-rec rerecord` accepts a fixture only when its shape moved), so they
+were recorded afresh against the synthetic server (`MOCK_PORT=32685 tests/focusfp.sh --rec --only 12,13`) and installed
+with `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a
+`ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter at zero (998 and
+1343 frames). `docs/ui-replay-v13-anchor.md` has the record.
