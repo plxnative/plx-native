@@ -97,7 +97,7 @@ pub enum LiveTvCmd { Reset, Retry }
 /// **What the app captured for one step of the store**: the clients, the time and the seat. The step
 /// reads no registry, no clock and no preference of its own; the same input to the same state is the
 /// same step.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LiveTvInput<'a> {
     pub keys: &'a ClientKeys,
     /// The frame's wall-clock Unix second, or `None` when the frame has none (a replay, a zone the
@@ -105,7 +105,7 @@ pub struct LiveTvInput<'a> {
     /// refreshed (a due time cannot be judged), while the row and the lineup already held still publish.
     pub now: Option<i64>,
     /// Who is seated and what the memory door holds for them ([`recent`]).
-    pub recent: RecentSeat<'a>,
+    pub recent: RecentSeat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,22 +238,22 @@ impl LiveTvState {
             }
         }
         let changed = self.pump(gate, input);
-        changed || (reset && self.publish(input.keys))
+        changed || (reset && self.publish(input.keys, &input.recent))
     }
     /// A live channel was tuned with nobody seated: noted for the session. A seated tune is written to
     /// the memory door by the app and arrives in the next input, so it is not the store's to note (it
     /// answers false). The seat input is applied first, so the note is judged under the seat it is made in.
     pub fn note_unseated(&mut self, key: RecentKey, input: &LiveTvInput<'_>) -> bool {
-        self.recent.drive(input.recent);
+        self.recent.drive(&input.recent);
         let _ = self.recent.note_unseated(key);
-        self.publish_recent(input.keys)
+        self.publish_recent(input.keys, &input.recent)
     }
     pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, input: &LiveTvInput<'_>) -> bool {
         let keys = input.keys;
         // The seat and the stored list are not the guide's: they are followed (and the row re-resolved
         // against the roster and the lineup) whatever owns the run.
-        self.recent.drive(input.recent);
-        let recent = self.publish_recent(keys);
+        self.recent.drive(&input.recent);
+        let recent = self.publish_recent(keys, &input.recent);
         // A recording, a replay or a dump owns the run, and the tape carries no Live TV read
         // (Notify stands down the same way): no tuner lineup is asked while the gate is armed.
         if gate.is_armed() { return recent; }
@@ -322,17 +322,17 @@ impl LiveTvState {
                 }, LiveTvPort(Arc::clone(&s.adapter))));
             }
         }
-        (dirty && self.publish(keys)) | recent
+        (dirty && self.publish(keys, &input.recent)) | recent
     }
     /// The row alone, after the list moved: the lineup did not, so nothing else is rebuilt.
-    fn publish_recent(&mut self, keys: &ClientKeys) -> bool {
-        let recent = self.recent.row(keys, &self.channels);
-        if recent == self.recent_row { return false; }
-        self.recent_row = recent;
+    fn publish_recent(&mut self, keys: &ClientKeys, seat: &RecentSeat) -> bool {
+        let row = self.recent.row(seat, keys, &self.channels);
+        if row.iter().copied().eq(self.recent_row.iter()) { return false; }
+        self.recent_row = row.into_iter().cloned().collect();
         self.revision = self.revision.wrapping_add(1);
         true
     }
-    fn publish(&mut self, keys: &ClientKeys) -> bool {
+    fn publish(&mut self, keys: &ClientKeys, seat: &RecentSeat) -> bool {
         let mut channels: Vec<_> = self.sources.iter().flat_map(|s| s.guides.iter()
             .flat_map(move |g| g.channels.iter().map(move |c| Channel::of(s.sid, c)))).collect();
         channels.sort_by(|a, b| livetv::vcn_order(&a.vcn, &b.vcn));
@@ -340,8 +340,9 @@ impl LiveTvState {
             else if self.sources.iter().any(|s| s.failed) { LiveTvStatus::Failed }
             else if self.sources.is_empty() || self.sources.iter().any(|s| !s.answered) { LiveTvStatus::Loading }
             else { LiveTvStatus::Empty };
-        let recent = self.recent.row(keys, &channels);
-        if channels == self.channels && status == self.status && recent == self.recent_row { return false; }
+        let recent = self.recent.row(seat, keys, &channels);
+        if channels == self.channels && status == self.status && recent.iter().copied().eq(self.recent_row.iter()) { return false; }
+        let recent: Vec<Channel> = recent.into_iter().cloned().collect();
         self.tiles = channels.iter().map(|c| Arc::new(channel_tile(c))).collect();
         self.recent_row = recent;
         self.channels = channels;
@@ -353,8 +354,8 @@ impl LiveTvState {
     pub(crate) fn install_for_test(&mut self, channels: Vec<Channel>) {
         self.status = if channels.is_empty() { LiveTvStatus::Empty } else { LiveTvStatus::Ready };
         self.tiles = channels.iter().map(|c| Arc::new(channel_tile(c))).collect();
-        // A seated row is resolved by the next step, which holds the roster it joins through.
-        self.recent_row = self.recent.row(&ClientKeys::default(), &channels);
+        // A seated row is resolved by the next step, which holds the list and the roster it joins through.
+        self.recent_row = self.recent.row(&RecentSeat::Unseated, &ClientKeys::default(), &channels).into_iter().cloned().collect();
         self.channels = channels;
         self.revision = self.revision.wrapping_add(1);
     }

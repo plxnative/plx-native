@@ -4,7 +4,6 @@
 use super::*;
 use crate::stores::Stores;
 use plx_plex::plex::session::prefs::RecentChannelEntry;
-use plx_plex::plex::session::Seat;
 use plx_plex::plex::ClientFacts;
 
 fn sid(n: u16) -> ServerId { ServerId::from_raw(n) }
@@ -21,7 +20,6 @@ fn entry(machine: &str, number: &str) -> RecentChannelEntry {
     RecentChannelEntry::new(machine, "7", &format!("C{number}"))
 }
 fn lineup(server: u16, numbers: &[&str]) -> Vec<Channel> { numbers.iter().map(|n| channel(server, n)).collect() }
-fn seat(user: &str) -> Seat { Seat::Seated { user: user.into(), stamp: "stamp".into() } }
 
 /// A registry as the Bridge captures it: slot `n` holds the server whose machine id is `machines[n]`.
 fn roster(roster_gen: u32, machines: &[(u16, &str)]) -> ClientKeys {
@@ -37,8 +35,8 @@ fn row(stores: &Stores) -> Vec<String> { stores.livetv_view().recent.iter().map(
 fn unseated<'a>(keys: &'a ClientKeys) -> LiveTvInput<'a> {
     LiveTvInput { keys, now: Some(100), recent: RecentSeat::Unseated }
 }
-fn seated<'a>(keys: &'a ClientKeys, seat: &'a Seat, stored: &'a [RecentChannelEntry]) -> LiveTvInput<'a> {
-    LiveTvInput { keys, now: Some(100), recent: RecentSeat::Seated { seat, stored } }
+fn seated<'a>(keys: &'a ClientKeys, stored: &[RecentChannelEntry]) -> LiveTvInput<'a> {
+    LiveTvInput { keys, now: Some(100), recent: RecentSeat::Seated(stored.to_vec()) }
 }
 /// One step under `input`, then `lineup` as the store's published lineup (the roster the step
 /// registered owns no guide of its own here), then one more step: the row the input resolves to.
@@ -66,13 +64,12 @@ fn an_empty_recent_is_published_as_an_empty_list() {
 #[test]
 fn the_seated_row_is_the_stored_list_newest_first() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let stored: Vec<_> = ["1", "2", "3"].iter().map(|n| entry("machine-a", n)).collect();
     let lineup = lineup(0, &["1", "2", "3", "4"]);
     assert_eq!(vcns(&resolve(&stored, &keys, &lineup)), ["3", "2", "1"]);
     let mut stores = Stores::default();
-    assert_eq!(show(&mut stores, &seated(&keys, &me, &stored), lineup.clone()), ["3", "2", "1"]);
-    assert!(!stores.livetv_pump(&seated(&keys, &me, &stored)), "the same input twice is no change");
+    assert_eq!(show(&mut stores, &seated(&keys, &stored), lineup.clone()), ["3", "2", "1"]);
+    assert!(!stores.livetv_pump(&seated(&keys, &stored)), "the same input twice is no change");
 }
 
 #[test]
@@ -88,16 +85,15 @@ fn at_most_five_are_shown_whatever_a_list_holds() {
 /// when the row is read and stays in the list: it comes back when the roster or the lineup has it.
 #[test]
 fn a_hidden_entry_is_skipped_and_comes_back_when_it_can() {
-    let me = seat("");
     let stored = vec![entry("machine-a", "1"), entry("machine-gone", "2"), entry("machine-a", "9"), entry("machine-a", "3")];
     let mut stores = Stores::default();
     let before = roster(1, &[(0, "machine-a")]);
-    assert_eq!(show(&mut stores, &seated(&before, &me, &stored), lineup(0, &["1", "2", "3"])), ["3", "1"],
+    assert_eq!(show(&mut stores, &seated(&before, &stored), lineup(0, &["1", "2", "3"])), ["3", "1"],
         "machine-gone is not registered and channel 9 is not in the lineup");
     let mut gone_back = lineup(0, &["1", "2", "3", "9"]);
     gone_back.push(channel(4, "2"));
     let after = roster(2, &[(0, "machine-a"), (4, "machine-gone")]);
-    assert_eq!(show(&mut stores, &seated(&after, &me, &stored), gone_back), ["3", "9", "2", "1"],
+    assert_eq!(show(&mut stores, &seated(&after, &stored), gone_back), ["3", "9", "2", "1"],
         "both are shown again, each in the place it was stored");
 }
 
@@ -108,16 +104,15 @@ fn a_hidden_entry_is_skipped_and_comes_back_when_it_can() {
 #[test]
 fn a_hidden_server_counts_toward_the_one_cap() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let mut lineup = lineup(0, &["1", "2", "3", "4"]);
     lineup.push(channel(9, "1"));
     let before: Vec<_> = vec![entry("machine-a", "1"), entry("machine-a", "2"), entry("machine-a", "3"),
         entry("machine-b", "1"), entry("machine-b", "2")];
     let mut stores = Stores::default();
-    assert_eq!(show(&mut stores, &seated(&keys, &me, &before), lineup.clone()), ["3", "2", "1"]);
+    assert_eq!(show(&mut stores, &seated(&keys, &before), lineup.clone()), ["3", "2", "1"]);
     let after = vec![entry("machine-a", "2"), entry("machine-a", "3"), entry("machine-b", "1"),
         entry("machine-b", "2"), entry("machine-a", "4")];
-    stores.livetv_pump(&seated(&keys, &me, &after));
+    stores.livetv_pump(&seated(&keys, &after));
     assert_eq!(row(&stores), ["4", "3", "2"], "A1 went at the tune");
     assert_eq!(vcns(&resolve(&after, &keys, &lineup)), ["4", "3", "2"], "and a fresh read of the list says the same");
 }
@@ -127,13 +122,12 @@ fn a_hidden_server_counts_toward_the_one_cap() {
 #[test]
 fn a_seated_store_notes_nothing_and_shows_what_the_input_says() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let stored = vec![entry("machine-a", "1")];
     let mut stores = Stores::default();
-    show(&mut stores, &seated(&keys, &me, &stored), lineup(0, &["1", "2"]));
-    assert!(!stores.livetv_note_unseated(key(0, "2"), &seated(&keys, &me, &stored)), "a seated tune is the door's to keep");
+    show(&mut stores, &seated(&keys, &stored), lineup(0, &["1", "2"]));
+    assert!(!stores.livetv_note_unseated(key(0, "2"), &seated(&keys, &stored)), "a seated tune is the door's to keep");
     assert_eq!(row(&stores), ["1"]);
-    stores.livetv_pump(&seated(&keys, &me, &[]));
+    stores.livetv_pump(&seated(&keys, &[]));
     assert!(row(&stores).is_empty(), "the door emptied (a sign-out, a cleared list): so is the row");
 }
 
@@ -191,7 +185,6 @@ fn an_unseated_tune_the_lineup_does_not_list_waits_for_it() {
 #[test]
 fn a_seat_arriving_replaces_the_session_and_leaving_starts_it_empty() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let mut stores = Stores::default();
     show(&mut stores, &unseated(&keys), lineup(0, &["1", "2", "3"]));
     stores.livetv_note_unseated(key(0, "1"), &unseated(&keys));
@@ -199,7 +192,7 @@ fn a_seat_arriving_replaces_the_session_and_leaving_starts_it_empty() {
     assert_eq!(row(&stores), ["2", "1"]);
 
     let stored = vec![entry("machine-a", "3")];
-    assert_eq!(show(&mut stores, &seated(&keys, &me, &stored), lineup(0, &["1", "2", "3"])), ["3"],
+    assert_eq!(show(&mut stores, &seated(&keys, &stored), lineup(0, &["1", "2", "3"])), ["3"],
         "the seat's own list, and none of the session's");
 
     assert!(stores.livetv_pump(&unseated(&keys)));
@@ -221,13 +214,12 @@ fn an_unseated_roster_move_keeps_the_session_row() {
 #[test]
 fn a_reset_keeps_recent() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let stored = vec![entry("machine-a", "1")];
     let mut stores = Stores::default();
-    assert_eq!(show(&mut stores, &seated(&keys, &me, &stored), lineup(0, &["1"])), ["1"]);
-    stores.livetv_run(LiveTvCmd::Reset, &seated(&keys, &me, &stored));
+    assert_eq!(show(&mut stores, &seated(&keys, &stored), lineup(0, &["1"])), ["1"]);
+    stores.livetv_run(LiveTvCmd::Reset, &seated(&keys, &stored));
     assert!(row(&stores).is_empty(), "the lineup was dropped, and a row is made of the lineup");
-    assert_eq!(show(&mut stores, &seated(&keys, &me, &stored), lineup(0, &["1"])), ["1"], "the mode survived it");
+    assert_eq!(show(&mut stores, &seated(&keys, &stored), lineup(0, &["1"])), ["1"], "the mode survived it");
 }
 
 /// **No clock is not the epoch.** A frame with no wall time asks the guide nothing (a due refresh
@@ -235,13 +227,12 @@ fn a_reset_keeps_recent() {
 #[test]
 fn a_frame_with_no_time_asks_nothing_and_still_resolves_the_row() {
     let keys = roster(1, &[(0, "machine-a")]);
-    let me = seat("");
     let stored = vec![entry("machine-a", "1")];
     let mut stores = Stores::default();
-    let dark = LiveTvInput { keys: &keys, now: None, recent: RecentSeat::Seated { seat: &me, stored: &stored } };
+    let dark = LiveTvInput { keys: &keys, now: None, recent: RecentSeat::Seated(stored.clone()) };
     assert_eq!(show(&mut stores, &dark, lineup(0, &["1"])), ["1"]);
     assert!(!stores.has_jobs(), "no time, no request");
-    let lit = LiveTvInput { now: Some(100), ..dark };
+    let lit = LiveTvInput { now: Some(100), ..dark.clone() };
     stores.livetv_pump(&lit);
     assert!(stores.has_jobs(), "the next frame with a time asks");
 }
