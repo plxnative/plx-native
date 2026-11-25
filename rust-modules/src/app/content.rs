@@ -783,18 +783,18 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
                 // session, the one owner of what a retry carries, and the retry consumes it. A refusal
                 // DecisionRefused has no Try again, so a pick that only held would have nothing to play it.
                 if let plx_screens::preplay_panel::Source::Failed { .. } = tracks_from {
-                    plx_media::route::hold_pick_for_retry(&mut app.player.session, &sel.pick);
-                    // The panel closes only on a retry that started: a refused one leaves the panel up,
-                    // with the pair held for Try again.
-                    if super::playback::retry_failed_playback(
+                    commit_failed_pick(
                         &mut app.player.session,
-                        &mut app.adapters.player,
-                        app.bridge.metadata_mut(),
-                        None,
-                        plx_media::player::report::AttemptOrigin::ViewerReconfigure,
-                    ) {
-                        content_back(&mut app.pages, source, entry, ret);
-                    }
+                        &sel.pick,
+                        |session| super::playback::retry_failed_playback(
+                            session,
+                            &mut app.adapters.player,
+                            app.bridge.metadata_mut(),
+                            None,
+                            plx_media::player::report::AttemptOrigin::ViewerReconfigure,
+                        ),
+                        || content_back(&mut app.pages, source, entry, ret),
+                    );
                 }
             }
             ContentReq::Panel(panel) => {
@@ -824,6 +824,21 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             }
     }
     AppCommandOutcome::Completed
+}
+
+/// **A pick made on the failure screen, performed**: the pair is held on the session, the one owner of what
+/// a retry carries, and the retry consumes it. The panel closes only when the retry STARTED: a refused one
+/// leaves the panel up, with the pair held for Try again.
+fn commit_failed_pick(
+    session: &mut plx_media::route::PlaybackSession,
+    pick: &plx_data::metadata::PreplayPick,
+    retry: impl FnOnce(&mut plx_media::route::PlaybackSession) -> bool,
+    close: impl FnOnce(),
+) {
+    plx_media::route::hold_pick_for_retry(session, pick);
+    if retry(session) {
+        close();
+    }
 }
 
 /// **Home's BACK fold, performed**: the screen owns the fold (its dive), the input engine owns the
@@ -2915,5 +2930,50 @@ mod repair_replay_tests {
         let mut live = vec![PlayerReq::RepairSandbox, PlayerReq::Exit];
         assert!(!remove_replayed_repairs(&mut live, false, false));
         assert_eq!(live, vec![PlayerReq::RepairSandbox, PlayerReq::Exit]);
+    }
+}
+
+#[cfg(test)]
+mod failed_pick_tests {
+    use super::commit_failed_pick;
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_media::route::PlaybackSession;
+
+    fn pick() -> PreplayPick {
+        PreplayPick { part_id: 9001, audio_sid: 21, sub: SubPick::Off }
+    }
+
+    /// **The failure panel closes only on a retry that STARTED**: the pair is held on the session either way
+    /// (a refused retry leaves the panel up, with the pair held for Try again), but the panel goes only when
+    /// the retry returned `true`.
+    #[test]
+    fn the_failure_panel_closes_when_the_retry_started_and_stays_up_when_it_did_not() {
+        for started in [true, false] {
+            let mut session = PlaybackSession::default();
+            let (mut asked, mut closed) = (0, 0);
+            commit_failed_pick(&mut session, &pick(), |_| { asked += 1; started }, || closed += 1);
+            assert_eq!(asked, 1, "the pick starts the retry once");
+            assert_eq!(closed, usize::from(started), "retry started = {started}");
+        }
+    }
+
+    /// The real retry on a session with no Plex request has nothing to resolve again and answers `false`:
+    /// the panel stays up, the case the injected `false` above stands for.
+    #[test]
+    fn a_session_with_nothing_to_retry_leaves_the_panel_up_through_the_real_retry() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let mut closed = false;
+        commit_failed_pick(
+            &mut session,
+            &pick(),
+            |s| crate::app::playback::retry_failed_playback(
+                s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::ViewerReconfigure),
+            || closed = true,
+        );
+        assert!(!closed, "no request descriptor: the retry is refused and the panel stays");
     }
 }
