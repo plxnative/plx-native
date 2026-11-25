@@ -41,7 +41,8 @@ pub const TABLE: &[(&str, Option<Action>, Basis)] = &[
     // The system keyboard's delete key (`ime`): the panel sends it to the window as this key, code 22, and the
     // field reads it as `Action::Backspace` (measured on the TV 10.0 emulator, 2026-11-25).
     ("BackSpace", Some(Action::Backspace), Basis::Measured),
-    // The panel's Done, code 0: OK, so the field commits and closes the keyboard as OK on it does.
+    // The panel's Done, code 0: OK, so the field commits and closes the keyboard as OK on it does. Delivered only
+    // while the panel is up (`ecore::on_key` asks `ime::Panel::done`): its HIDE may arrive first.
     ("Select", Some(Action::Ok), Basis::Measured),
     // Back while the panel is up, code 231. No action: the panel closes itself and says so
     // (`ime`'s STATE callback, `Input::KeyboardDismissed`), so a Back here would be a second dismissal.

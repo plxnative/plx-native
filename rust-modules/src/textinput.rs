@@ -426,6 +426,29 @@ mod tests {
     /// itself takes a NULL window and an uninitialised video is the shell crate's own test,
     /// `the_real_sdl_answers_a_null_window_with_video_uninitialised`: this module's calls are stubbed under
     /// test, so only the shell crate can reach the real ones.)
+    /// **The panel is the platform's, not SDL's** (the Tizen report: a field that raised nothing because
+    /// `start` called SDL, which Tizen does not run). A shell that states its own keyboard answers
+    /// `available`, and `start`/`stop` raise and dismiss through it exactly once per edge, however often the
+    /// field asks.
+    #[test]
+    fn the_keyboard_is_raised_and_dismissed_through_the_platforms_shell_once_per_edge() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
+        let shell = crate::app::platform::KeyboardShell::default();
+        assert!(available(&shell), "the platform's answer, not SDL's (none on a host)");
+        // SAFETY: the module's own singleton, under its test lock.
+        unsafe { *addr_of_mut!(STARTED) = false };
+        start(&shell);
+        start(&shell);
+        assert_eq!(shell.shows.load(Relaxed), 1, "a raise per edge, not per call");
+        stop(&shell);
+        stop(&shell);
+        assert_eq!(shell.hides.load(Relaxed), 1, "a dismissal per edge");
+        start(&shell);
+        assert_eq!(shell.shows.load(Relaxed), 2, "and it rises again after a dismissal");
+        stop(&shell);
+    }
+
     #[test]
     fn a_null_window_has_no_focus_reading_and_asks_sdl_nothing() {
         let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());

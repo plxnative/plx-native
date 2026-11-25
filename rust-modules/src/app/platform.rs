@@ -569,6 +569,58 @@ impl Shell for SwapShell {
     }
 }
 
+/// A shell whose system keyboard is its own, not SDL's (the Tizen shape), counting the raises and dismissals
+/// the application asks of it. Test builds only: the SDL stubs a host test runs on have no panel, so only a shell
+/// that states the keyboard hooks can show that `textinput` asks the platform and not SDL.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct KeyboardShell {
+    pub(crate) shows: std::sync::atomic::AtomicUsize,
+    pub(crate) hides: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl Shell for KeyboardShell {
+    fn sdl(&self) -> InitHooks {
+        HOST_TEST_SDL
+    }
+    fn window(&self, _stored: Option<(std::os::raw::c_int, std::os::raw::c_int)>) -> WindowPlan {
+        HOST_TEST_WINDOW
+    }
+    fn init(&self, _mt: &MainThread) -> Result<(), Exit> {
+        Ok(())
+    }
+    fn open(&self, _mt: &MainThread, _ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
+        Ok(detached_surface())
+    }
+    fn bind_window(&self, _win: *mut c_void) {}
+    fn grab_surface(&self, _win: *mut c_void) {}
+    fn release_surface(&self) -> bool {
+        false
+    }
+    fn arm_opaque_region(&self) {}
+    fn opaque_route(&self, _player: bool) {}
+    fn clear_opaque_region(&self) {}
+    fn pump_bus(&self) {}
+    fn hide_pointer(&self) {}
+    fn show_pointer_after_motion(&self) {}
+    fn hide_is_cursor_swap(&self) -> bool {
+        false
+    }
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
+    fn keyboard_available(&self) -> bool {
+        true
+    }
+    fn show_keyboard(&self) {
+        self.shows.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn hide_keyboard(&self) {
+        self.hides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 impl SwapShell {
     /// A platform whose shell is a fresh `SwapShell`, and that shell, for a test to read the counts

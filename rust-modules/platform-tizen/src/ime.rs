@@ -92,10 +92,18 @@ impl PanelState {
 /// `asked` is set by [`show`] and cleared by [`hide`] (and by the dismissal itself); `seen` is set by a SHOW
 /// while asked. A HIDE is a dismissal only while both are set: a HIDE before the panel has shown (a panel still
 /// rising) or after our own `hide` is not the viewer's.
+///
+/// **Done sends two things, in no promised order**: its `Select` key (OK, which commits the field and has the
+/// application close the panel) and the panel's own HIDE. [`Panel::done`] makes the pair one decision whichever
+/// arrives first: a `Select` while the panel is up is the commit, and ends the ask so the HIDE behind it is ours;
+/// a `Select` after a HIDE already dismissed the field is dropped, since an OK on a field that is no longer
+/// editing would raise the panel again.
 #[derive(Debug, Default)]
 pub(crate) struct Panel {
     asked: bool,
     seen: bool,
+    /// A `Select` down was admitted and its up has not come yet.
+    done_held: bool,
 }
 
 impl Panel {
@@ -104,6 +112,19 @@ impl Panel {
     }
     pub(crate) fn dismissed_by_us(&mut self) {
         (self.asked, self.seen) = (false, false);
+    }
+    /// One edge of the panel's `Select` (its Done); `true` when the edge is delivered as the OK it is bound to.
+    pub(crate) fn done(&mut self, down: bool) -> bool {
+        if down {
+            if self.asked && self.seen && !self.done_held {
+                self.dismissed_by_us();
+                self.done_held = true;
+                return true;
+            }
+            false
+        } else {
+            std::mem::take(&mut self.done_held)
+        }
     }
     /// One STATE event; `true` when it is the viewer's dismissal, which also ends the ask.
     pub(crate) fn state(&mut self, state: PanelState) -> bool {
@@ -129,7 +150,7 @@ static CONTEXT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static INITIALISED: AtomicBool = AtomicBool::new(false);
 /// Host thread only (the callbacks and [`show`] / [`hide`]); never held across an Ecore call, since the panel
 /// may report its state from inside `input_panel_show`.
-static PANEL: Mutex<Panel> = Mutex::new(Panel { asked: false, seen: false });
+static PANEL: Mutex<Panel> = Mutex::new(Panel { asked: false, seen: false, done_held: false });
 
 fn loaded() -> bool {
     static LOADED: OnceLock<bool> = OnceLock::new();
@@ -156,6 +177,11 @@ pub(crate) fn available() -> bool {
 
 fn panel() -> std::sync::MutexGuard<'static, Panel> {
     PANEL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The key handler's question for the panel's `Select` ([`Panel::done`]). HOST THREAD.
+pub(crate) fn admit_done(down: bool) -> bool {
+    panel().done(down)
 }
 
 /// The context, made on first use. HOST THREAD.
@@ -319,6 +345,29 @@ mod tests {
         p.dismissed_by_us();
         assert!(!p.state(PanelState::Hide), "our own hide is not the viewer's");
         assert_eq!(PanelState::of(7), PanelState::Other(7));
+    }
+
+    /// **Done is one decision whichever of its two signals arrives first.** Key first: the `Select` is the OK
+    /// (both edges), and the HIDE behind it is not the viewer's. HIDE first: the field was dismissed, and the
+    /// `Select` behind it is dropped (both edges), so no OK lands on a field that stopped editing.
+    #[test]
+    fn done_is_one_commit_whichever_of_its_key_and_its_hide_arrives_first() {
+        let mut key_first = Panel::default();
+        key_first.asked();
+        key_first.state(PanelState::Show);
+        assert!(key_first.done(true), "Select down while the panel is up is the OK");
+        assert!(!key_first.state(PanelState::Hide), "the HIDE behind it is ours, not a dismissal");
+        assert!(key_first.done(false), "and its up goes with it");
+
+        let mut hide_first = Panel::default();
+        hide_first.asked();
+        hide_first.state(PanelState::Show);
+        assert!(hide_first.state(PanelState::Hide), "the HIDE dismisses the field");
+        assert!(!hide_first.done(true), "a Select after it would re-open the panel: dropped");
+        assert!(!hide_first.done(false));
+
+        let mut idle = Panel::default();
+        assert!(!idle.done(true) && !idle.done(false), "a Select with no panel up is not an OK");
     }
 
     /// The commit is read up to its NUL, and a null one is empty.
