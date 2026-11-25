@@ -198,8 +198,15 @@ fn context() -> Option<*mut c_void> {
     // SAFETY (block): the embedder's calls on the host thread, with the live table; the context is
     // null-checked before use and the id string is Ecore's own, read for the call.
     unsafe {
-        if !INITIALISED.swap(true, Ordering::SeqCst) {
-            log(&format!("ime: ecore_imf_init -> {}", ecore_imf_init()));
+        // The count is raised once, and marked raised only when init says it was, so `release` never
+        // shuts down a count it did not raise.
+        if !INITIALISED.load(Ordering::SeqCst) {
+            let count = ecore_imf_init();
+            log(&format!("ime: ecore_imf_init -> {count}"));
+            if count <= 0 {
+                return None;
+            }
+            INITIALISED.store(true, Ordering::SeqCst);
         }
         let default_id = ecore_imf_context_default_id_get();
         if default_id.is_null() {
