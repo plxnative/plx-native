@@ -2855,6 +2855,13 @@ impl PreplayPick {
         self.audio_sid != 0 && audio.iter().any(|s| s.id == self.audio_sid)
     }
 
+    /// **The one lookup of the pick that is for a file**: the first of `picks` that names a stream on
+    /// `audio`. The plan ([`PlayingItem::apply_picks`], `ResolveEnv::under_pick`) and the page's
+    /// facts line all find it here.
+    pub fn for_file<'a>(picks: &'a [PreplayPick], audio: &[Stream]) -> Option<&'a PreplayPick> {
+        picks.iter().find(|p| p.is_for(audio))
+    }
+
     /// The pick over a file's own selection flags: the audio checked is the pick's, a subtitle track
     /// is the one checked, Off leaves none, and `Server` keeps what the server selected. Returns
     /// the subtitle half for [`PlayingItem::sub_choice`]. Nothing happens for a pick of another file.
@@ -2928,7 +2935,7 @@ impl PlayingItem {
     /// **Plan under the viewer's pre-play pick**: the one that is for this item's file, if any
     /// ([`PreplayPick::apply`], the only writer of `sub_choice`).
     pub fn apply_picks(&mut self, picks: &[PreplayPick]) {
-        if let Some(pick) = picks.iter().find(|p| p.is_for(&self.audio)) {
+        if let Some(pick) = PreplayPick::for_file(picks, &self.audio) {
             self.sub_choice = pick.apply(&mut self.audio, &mut self.subs);
         }
     }

@@ -1529,7 +1529,7 @@ impl ResolveEnv {
         if self.audio_sid > 0 {
             return None;
         }
-        let pick = self.picks.iter().find(|p| p.is_for(&item.audio))?;
+        let pick = plx_data::metadata::PreplayPick::for_file(&self.picks, &item.audio)?;
         Some(ResolveEnv { audio_sid: pick.audio_sid, ..self.clone() })
     }
 
@@ -4719,13 +4719,16 @@ pub struct AudioPreviewInputs<'a> {
     pub local_link: bool,
     /// `Media[0].bitrate`, kbps.
     pub part_kbps: i64,
+    /// The session audio pick, the viewer's pre-play audio ([`ResolveEnv::under_pick`]'s twin): `0`
+    /// for none. The plan ranks it first, so the preview does too.
+    pub session_audio: i64,
 }
 
 impl AudioPreviewInputs<'_> {
     /// No subtitle, no default codec: the pick over the tracks alone.
     pub const NONE: AudioPreviewInputs<'static> = AudioPreviewInputs {
         default_acodec: "", sub_selected: false, quality: Quality::Original,
-        dv_declared: false, local_link: false, part_kbps: 0,
+        dv_declared: false, local_link: false, part_kbps: 0, session_audio: 0,
     };
 }
 
@@ -4750,7 +4753,7 @@ pub(super) fn audio_intent_needs_conversion(
     }
     let eligible = |codec: &str, channels: i64, rate: i64| plx_plex::plex::is_dp_audio_track_with(caps, codec, channels, rate);
     let pick = |stand_in| pick_dp_audio_eligible(
-        tracks, inputs.default_acodec, AudioLangPrefs::default(), 0, stand_in, eligible,
+        tracks, inputs.default_acodec, AudioLangPrefs::default(), inputs.session_audio, stand_in, eligible,
     );
     if pick(StandIn::SameKind).is_some() {
         return false;

@@ -10579,12 +10579,17 @@ impl ResolveEnv {
 }
 
 pub fn playback_preview(d: &plx_data::metadata::Detail) -> Option<Preview> {
-    detail_playback_preview(d).map(|(preview, _)| preview)
+    detail_playback_preview(d, &[]).map(|(preview, _)| preview)
 }
 
 /// The route preview and its source facts from the same selection and capability snapshot.
-pub fn detail_playback_preview(d: &plx_data::metadata::Detail) -> Option<(Preview, PlayedVideo<'_>)> {
-    playback_preview_with_capability(d, None)
+/// `picks` are the viewer's pre-play picks for the item Play starts (`MetadataView::picks_of`): the
+/// page's own track flags describe the server, not the pick, so the preview applies the pick the way
+/// the plan does ([`plx_data::metadata::PreplayPick::apply`], the audio half as the session audio).
+pub fn detail_playback_preview<'d>(
+    d: &'d plx_data::metadata::Detail, picks: &[plx_data::metadata::PreplayPick],
+) -> Option<(Preview, PlayedVideo<'d>)> {
+    playback_preview_with_capability(d, None, picks)
 }
 
 pub fn detail_played_video(d: &plx_data::metadata::Detail) -> Option<PlayedVideo<'_>> {
@@ -10617,10 +10622,11 @@ pub fn taken_version(
         .map(|v| v.id)
 }
 
-fn playback_preview_with_capability(
-    d: &plx_data::metadata::Detail,
+fn playback_preview_with_capability<'d>(
+    d: &'d plx_data::metadata::Detail,
     capability: Option<plx_os::devcaps::dv::DvCapability>,
-) -> Option<(Preview, PlayedVideo<'_>)> {
+    picks: &[plx_data::metadata::PreplayPick],
+) -> Option<(Preview, PlayedVideo<'d>)> {
     let mode = direct_play_mode();
     // The facts row is a read-out of what the device would do NOW, with no attempt behind it, so it
     // is a start edge of its own: the value a play started this moment would begin on (the boot
@@ -10636,6 +10642,16 @@ fn playback_preview_with_capability(
             (streams.part.as_str(), &streams.audio, &streams.subs)
         }
         None => (file.primary_part, &d.audio, &d.subs),
+    };
+    // The viewer's pick over the page's flags, through the plan's own path.
+    let picked = plx_data::metadata::PreplayPick::for_file(picks, audio).map(|pick| {
+        let (mut audio, mut subs) = (audio.clone(), subs.clone());
+        pick.apply(&mut audio, &mut subs);
+        (audio, subs, pick.audio_sid)
+    });
+    let (audio, subs, session_audio) = match &picked {
+        Some((audio, subs, sid)) => (audio, subs, *sid),
+        None => (audio, subs, 0),
     };
     let presentation = file.dv.presentation;
     if mode == DirectPlayMode::Forced {
@@ -10660,6 +10676,7 @@ fn playback_preview_with_capability(
             local_link: plx_plex::plex::client_for(d.sid)
                 .is_some_and(|c| c.link() == Some(plx_plex::plex::probe::Location::Local)),
             part_kbps: file.kbps,
+            session_audio,
         },
     )?;
     // The user's quality ceiling is the LAST gate `build_stream` applies, so it is the last one
@@ -10689,7 +10706,7 @@ pub fn playback_preview_with_capability_for_test(
     d: &plx_data::metadata::Detail,
     capability: plx_os::devcaps::dv::DvCapability,
 ) -> Option<Preview> {
-    playback_preview_with_capability(d, Some(capability)).map(|(preview, _)| preview)
+    playback_preview_with_capability(d, Some(capability), &[]).map(|(preview, _)| preview)
 }
 
 static PLAY_GEN: AtomicU32 = AtomicU32::new(0);

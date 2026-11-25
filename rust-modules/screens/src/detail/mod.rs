@@ -3180,7 +3180,8 @@ impl DetailScreen {
             );
         }
         if let Some(d) = d {
-            hero::draw_facts(chrome, d, H::screen_inputs(cx).can_play(), chain.facts_y, cx.measure);
+            let picks = H::metadata(cx).picks_of(d.sid, d.play_rk());
+            hero::draw_facts(chrome, d, &picks, H::screen_inputs(cx).can_play(), chain.facts_y, cx.measure);
             hero::draw_people(chrome, d, chain.btn_y, measure);
         }
         // Full-trailer mode takes the action row with the rest of the page: the viewer asked for
