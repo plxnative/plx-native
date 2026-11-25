@@ -332,15 +332,11 @@ fn a_refresh_decides_a_released_row_from_its_fresh_first_page() {
     carry_descriptors(&old, &mut new);
     assert_eq!(new.shelves[0].library, ShelfLibrary::One(5), "the fresh first page decided it");
     assert!(new.shelves[0].released());
-    let mut undecided = built(0, &[], vec![shelf_in(0, 5, "Mixed", "mock.shelf.0", &["m2", "m3"])]);
-    undecided.shelves[0].library = ShelfLibrary::Unknown;
-    carry_descriptors(&old, &mut undecided);
-    assert_eq!(undecided.shelves[0].library, ShelfLibrary::One(2), "a row projection left undecided keeps what it held");
 }
 
 /// A refresh's preview is evidence for a row that still holds cards: a row whose cards sat in one
 /// library, refreshed with a preview that spans two, is `Mixed` now, not stuck on the first library
-/// for the source's whole life. Only a row that gave its cards up keeps the earlier decision (above).
+/// for the source's whole life; a row that gave its cards up is decided the same way (above).
 #[test]
 fn a_refresh_re_decides_a_row_that_holds_a_full_preview() {
     let old = built(0, &[], vec![shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"])]);

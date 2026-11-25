@@ -1177,7 +1177,8 @@ struct Shelf {
     /// decides it**, from what the row's hub names (id, else its key's `sectionID`) and else the cards
     /// of the first page that projection read, and the latest projection wins on every path: a refresh
     /// over a held row, a row the ring released, and a Sample or ledger row that keeps its old window
-    /// ([`adopt_window`], [`carry_descriptors`] and the Sample branch of [`HubRequest::fetch`]). Between
+    /// ([`adopt_window`] and the Sample branch of [`HubRequest::fetch`] keep the fresh one, and
+    /// [`carry_descriptors`] leaves it alone). Between
     /// projections nothing alters it: no window move, page read ([`land_page`], [`land_reload`]), ring
     /// release or re-admit ([`admit`] runs twice over a quiet read's build). It is recorded with the row,
     /// so a replay reads what the live run decided instead of re-deriving it from a window whose first
@@ -1232,8 +1233,6 @@ impl ShelfLibrary {
             Self::Unknown => plx_plex::plex::library_order::hub_library(hub_id, key),
         }
     }
-    /// What a row that replaces another knows: its own decision, else the one it replaces.
-    fn or(self, other: Self) -> Self { if self == Self::Unknown { other } else { self } }
     fn is_unknown(&self) -> bool { *self == Self::Unknown }
 }
 
@@ -1692,11 +1691,9 @@ fn carry_descriptors(old: &SourceBuild, new: &mut SourceBuild) {
     for shelf in &mut new.shelves {
         let Some(was) = find_shelf(&old.shelves, &shelf.hub_id, &shelf.key) else { continue };
         if !was.released() { continue; }
-        // the refresh's projection decided this row from the server's whole first page, whatever the
-        // row's window was, and that is the latest answer: it stands, as it does for a row that still
-        // holds its cards (the early `continue` above). Only a row projection left undecided (one
-        // decoded from a recording that predates the decision) takes what the row held before.
-        shelf.library = shelf.library.or(was.library);
+        // the library is not carried: the refresh's projection decided it from the server's whole first
+        // page (`admit` ran `decide_library` first), the latest answer, as for a row that still holds its cards
+        // (the early `continue` above).
         if !pages(&shelf.key) {
             // nothing but the refresh's own preview says what the row shows now (a row the refresh
             // already gave up has put those keys in `kept`)
