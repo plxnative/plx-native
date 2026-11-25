@@ -10525,7 +10525,7 @@ impl ResolveEnv {
     /// carries the server it came from (`PmsMovie`/`UpNext`/`Detail` all hold one now), so a play
     /// raised off a merged shelf resolves against the server that shelf's row belongs to rather
     /// than whichever server happens to be current when the worker gets around to asking.
-    fn snapshot(ps: &PlaybackSession, meta: plx_data::metadata::MetadataView<'_>, sid: ServerId, rk: &str) -> ResolveEnv {
+    pub(in crate::route) fn snapshot(ps: &PlaybackSession, meta: plx_data::metadata::MetadataView<'_>, sid: ServerId, rk: &str) -> ResolveEnv {
         let s = ps;
         ResolveEnv {
             sid,

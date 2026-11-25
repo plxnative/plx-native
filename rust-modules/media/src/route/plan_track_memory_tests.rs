@@ -614,3 +614,38 @@ fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
     assert!(store.run(MetadataCmd::InstallPlaying(Some(other))));
     assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "another item's playback leaves the pick");
 }
+
+/// **The audio half of a pick travels typed, like the subtitle half**: a movie whose DEFAULT track is
+/// the Japanese original (also what PMS has selected) and an English dub, under an English account.
+/// The viewer picks Japanese. The flags the pick sets cannot say so (`audio_intents` skips a selected
+/// default and falls to the language), so the pick rides the plan's session audio (`env.audio_sid`).
+#[test]
+fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![audio(11, "jpn", "eac3", true, true), audio(12, "eng", "eac3", false, false)],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let ps = crate::route::PlaybackSession::IDLE;
+    let prefs = AudioLangPrefs::new(None, Some("en"));
+    let first_intent = |store: &MetadataStore| {
+        let env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(&env.picks);
+        let session = env.under_pick(&item).map_or(env.audio_sid, |e| e.audio_sid);
+        audio_intents(&item.audio, prefs, session)[0]
+    };
+    assert_eq!(first_intent(&store), AudioIntent::Language("en"), "control: no pick, the account's English dub plays");
+    let jpn = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Server };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: jpn }));
+    assert_eq!(first_intent(&store), AudioIntent::Selection(0), "the viewer's Japanese beats the language rule though it is the file's default");
+}

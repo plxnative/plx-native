@@ -1522,6 +1522,17 @@ pub struct SelectionBeforeRetry {
 }
 
 impl ResolveEnv {
+    /// **The viewer's pre-play audio pick as the plan's session audio**, when it is for `item`'s file
+    /// and no retry already holds one (the session's held pair outranks a pick made before the
+    /// first start). The single place the pick's `audio_sid` becomes `audio_sid`.
+    pub(super) fn under_pick(&self, item: &plx_data::metadata::PlayingItem) -> Option<ResolveEnv> {
+        if self.audio_sid > 0 {
+            return None;
+        }
+        let pick = self.picks.iter().find(|p| p.is_for(&item.audio))?;
+        Some(ResolveEnv { audio_sid: pick.audio_sid, ..self.clone() })
+    }
+
     pub(super) fn with_selection_for_part(&self, part_id: i64) -> Option<ResolveEnv> {
         let before = self
             .selection_before_retry
@@ -1936,6 +1947,12 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             if let Some(item) = plan.playing.as_mut() {
                 item.apply_picks(&env.picks);
             }
+            // The audio half rides the same typed door as a retry's: the session's audio pick
+            // (`env.audio_sid`), which [`audio_intents`] ranks first. The `selected` flags the pick
+            // also set cannot carry it for the file's default track (`audio_intents` skips a
+            // selected default, so the account's language would win over the viewer's choice).
+            let under_pick = plan.playing.as_ref().and_then(|item| env.under_pick(item));
+            let env = under_pick.as_ref().unwrap_or(env);
             if let (Some(id), Some(item)) = (env.subtitle_override, plan.playing.as_mut()) {
                 // The retry's explicit selection owns both embedded and sidecar restoration; a stale
                 // server-side selection must not turn subtitles back on after the viewer chose Off.
