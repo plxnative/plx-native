@@ -2860,10 +2860,24 @@ impl PreplayPick {
     }
 
     /// **The one lookup of the pick that is for a file**: the first of `picks` that names a stream on
-    /// `audio`. The plan ([`PlayingItem::apply_picks`], `ResolveEnv::under_pick`) and the page's
-    /// facts line all find it here.
-    pub fn for_file<'a>(picks: &'a [PreplayPick], audio: &[Stream]) -> Option<&'a PreplayPick> {
-        picks.iter().find(|p| p.is_for(audio))
+    /// `audio`. The plan ([`PlayingItem::apply_picks`], `ResolveEnv::under_pick`), the panel's seed
+    /// ([`preplay_tracks`]) and [`Self::applied`] (the facts line, the Track information sheet) all find
+    /// it here, over the store's own picks or a snapshot of them.
+    pub fn for_file<'a>(picks: impl IntoIterator<Item = &'a PreplayPick>, audio: &[Stream]) -> Option<&'a PreplayPick> {
+        picks.into_iter().find(|p| p.is_for(audio))
+    }
+
+    /// **A file's tracks as they will play under `picks`, the one read every display takes**: the pick that
+    /// is for the file applied over its own flags ([`Self::apply`]), the page's streams untouched when
+    /// none is, and then nothing is cloned. `session_audio` is the pick's audio as the plan's session audio
+    /// (`0`: none), what the plan's audio ladder ranks first.
+    pub fn applied<'a>(picks: &[PreplayPick], audio: &'a [Stream], subs: &'a [Stream]) -> PickedTracks<'a> {
+        let Some(pick) = Self::for_file(picks, audio) else {
+            return PickedTracks { audio: std::borrow::Cow::Borrowed(audio), subs: std::borrow::Cow::Borrowed(subs), session_audio: 0 };
+        };
+        let (mut audio, mut subs) = (audio.to_vec(), subs.to_vec());
+        pick.apply(&mut audio, &mut subs);
+        PickedTracks { audio: std::borrow::Cow::Owned(audio), subs: std::borrow::Cow::Owned(subs), session_audio: pick.audio_sid }
     }
 
     /// The pick over a file's own selection flags: the audio checked is the pick's, a subtitle track
@@ -2883,6 +2897,13 @@ impl PreplayPick {
         }
         self.sub
     }
+}
+
+/// A file's audio and subtitle lists under the viewer's pre-play pick ([`PreplayPick::applied`]).
+pub struct PickedTracks<'a> {
+    pub audio: std::borrow::Cow<'a, [Stream]>,
+    pub subs: std::borrow::Cow<'a, [Stream]>,
+    pub session_audio: i64,
 }
 
 #[derive(Clone)]
@@ -3057,7 +3078,8 @@ struct PreplaySource<'a> {
 /// pair identity, and an item that has played since the page loaded, whose selection has moved
 /// under the page's copy.
 ///
-/// **Which file**: `version` is the one the viewer selected (`route::chosen_version`), so the rows and
+/// **Which file**: `version` is the one Play takes (`route::taken_version`: the viewer's selection while its
+/// media is listed, else what plays unasked), so the rows and
 /// the part the PUT addresses are that file's, the file Play will start; a version the page does not
 /// list is the default file, as it is for the plan. `None` is "nothing to show" (no streams, no
 /// part), the ONE rule [`preplay_tracks`] (the rows) and [`has_preplay_tracks`] (the hero's disc
@@ -3087,7 +3109,7 @@ fn preplay_tracks(
     state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str, version: Option<plx_plex::plex::MediaId>,
 ) -> Option<PreplayTracks> {
     let src = preplay_source(state, sid, rk, version)?;
-    let pick = picks_of(state, sid, rk).find(|p| p.is_for(src.audio)).copied();
+    let pick = PreplayPick::for_file(picks_of(state, sid, rk), src.audio).copied();
     Some(PreplayTracks {
         sid,
         rk: rk.to_string(),

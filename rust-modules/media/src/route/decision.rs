@@ -10644,15 +10644,8 @@ fn playback_preview_with_capability<'d>(
         None => (file.primary_part, &d.audio, &d.subs),
     };
     // The viewer's pick over the page's flags, through the plan's own path.
-    let picked = plx_data::metadata::PreplayPick::for_file(picks, audio).map(|pick| {
-        let (mut audio, mut subs) = (audio.clone(), subs.clone());
-        pick.apply(&mut audio, &mut subs);
-        (audio, subs, pick.audio_sid)
-    });
-    let (audio, subs, session_audio) = match &picked {
-        Some((audio, subs, sid)) => (audio, subs, *sid),
-        None => (audio, subs, 0),
-    };
+    let picked = plx_data::metadata::PreplayPick::applied(picks, audio, subs);
+    let (audio, subs, session_audio) = (&*picked.audio, &*picked.subs, picked.session_audio);
     let presentation = file.dv.presentation;
     if mode == DirectPlayMode::Forced {
         return (part_is_streamable(part)

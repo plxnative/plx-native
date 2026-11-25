@@ -890,3 +890,24 @@ fn a_pick_is_spent_by_exactly_the_playback_it_fed() {
     assert!(state.picks.is_empty(), "the playback that started under the pick spent it");
     clear(test_state(), test_adapter());
 }
+
+/// **`PreplayPick::applied` is the one read of a file's tracks under a pick**: with no pick for the file it
+/// lends the page's own streams (nothing cloned, no session audio), with one it returns the pick laid over
+/// the flags and names its audio as the session audio. A pick for another file is no pick.
+#[test]
+fn applied_lends_the_pages_streams_without_a_pick_and_lays_the_pick_over_them_with_one() {
+    use std::borrow::Cow;
+    let stream = |id, selected| Stream { id, selected, ..Default::default() };
+    let (audio, subs) = (vec![stream(11, true), stream(12, false)], vec![stream(21, true), stream(22, false)]);
+    let none = PreplayPick::applied(&[], &audio, &subs);
+    assert!(matches!((&none.audio, &none.subs), (Cow::Borrowed(_), Cow::Borrowed(_))), "nothing is cloned for the page's own flags");
+    assert_eq!(none.session_audio, 0);
+    let elsewhere = PreplayPick { part_id: 5, audio_sid: 99, sub: SubPick::Off };
+    assert!(matches!(PreplayPick::applied(&[elsewhere], &audio, &subs).audio, Cow::Borrowed(_)), "a pick of another file");
+    let pick = PreplayPick { part_id: 5, audio_sid: 12, sub: SubPick::Track(22) };
+    let picked = PreplayPick::applied(&[elsewhere, pick], &audio, &subs);
+    assert_eq!(picked.session_audio, 12);
+    assert_eq!(picked.audio.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, true]);
+    assert_eq!(picked.subs.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, true]);
+    assert!(audio[0].selected && subs[0].selected, "the page's own copy is untouched");
+}

@@ -967,16 +967,12 @@ struct Content {
     subs: (usize, Vec<TrackRow>),
 }
 
-/// The tracks as they will play: the viewer's pre-play pick over the page's flags (`PreplayPick::apply`,
-/// the one path the plan and the facts line take), so "playing" is the pick while one is held and the
+/// The tracks as they will play: the viewer's pre-play pick over the page's flags (`PreplayPick::applied`,
+/// the one read the facts line takes too), so "playing" is the pick while one is held and the
 /// server's selection otherwise.
 fn content_of(d: &Detail, picks: &[plx_data::metadata::PreplayPick]) -> Content {
-    let picked = plx_data::metadata::PreplayPick::for_file(picks, &d.audio).map(|pick| {
-        let (mut audio, mut subs) = (d.audio.clone(), d.subs.clone());
-        pick.apply(&mut audio, &mut subs);
-        (audio, subs)
-    });
-    let (audio, subs) = picked.as_ref().map_or((&d.audio, &d.subs), |(audio, subs)| (audio, subs));
+    let picked = plx_data::metadata::PreplayPick::applied(picks, &d.audio, &d.subs);
+    let (audio, subs) = (&*picked.audio, &*picked.subs);
     Content {
         cols: [
             (plx_os::i18n::msg::widgets_tracks_file_heading(), file_rows(d)),
@@ -1378,7 +1374,7 @@ pub(crate) mod tests {
     use super::*;
 
     /// **"playing" is what will play**: while the viewer holds a pre-play pick (`PreplayPick`), the panel
-    /// marks that track and not the server's selection, through the one `PreplayPick::apply` path.
+    /// marks that track and not the server's selection, through the one `PreplayPick::applied` read.
     #[test]
     fn the_track_marked_playing_follows_the_viewers_pick() {
         use plx_data::metadata::{PreplayPick, SubPick};

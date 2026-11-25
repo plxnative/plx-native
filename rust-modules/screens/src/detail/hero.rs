@@ -836,14 +836,37 @@ enum Bit {
 
 const FACTS_BITS: usize = 8;
 
-fn play_mode_bits(d: &Detail, picks: &[PreplayPick], playable: bool, after: bool) -> ([Bit; FACTS_BITS], usize) {
+/// **What the facts line says of the route Play would take, read ONCE per draw.** Reading the route
+/// (`detail_playback_preview`) applies the viewer's pick over the file's flags, so the draw resolves it
+/// here and derives every width and every painted bit of the clause from the value, with or without the
+/// separator in front ([`Self::bits`]); nothing is kept between draws.
+#[derive(Clone, Copy)]
+enum PlayMode {
+    /// Nothing to say: the route direct plays or remuxes, or no route can be read for the item.
+    Quiet,
+    /// No playback driver is composed: the one reason word, whatever the item.
+    NoPlayback,
+    Route { preview: plx_media::route::Preview, hdr: bool, subscription: plx_plex::plex::serverinfo::Subscription },
+}
+
+fn play_mode(d: &Detail, picks: &[PreplayPick], playable: bool) -> PlayMode {
     if !playable {
-        return no_playback_bits(after);
+        return PlayMode::NoPlayback;
     }
     match plx_media::route::detail_playback_preview(d, picks) {
-        Some((plx_media::route::Preview::DirectPlay | plx_media::route::Preview::Remux, _)) => ([Bit::Air(0.0); FACTS_BITS], 0),
-        Some((preview, file)) => play_mode_bits_for(preview, file.hdr, item_subscription(d), after),
-        None => ([Bit::Air(0.0); FACTS_BITS], 0),
+        Some((plx_media::route::Preview::DirectPlay | plx_media::route::Preview::Remux, _)) | None => PlayMode::Quiet,
+        Some((preview, file)) => PlayMode::Route { preview, hdr: file.hdr, subscription: item_subscription(d) },
+    }
+}
+
+impl PlayMode {
+    /// The clause's bits, behind a separator of its own when something already stands in front of it (`after`).
+    fn bits(self, after: bool) -> ([Bit; FACTS_BITS], usize) {
+        match self {
+            PlayMode::Quiet => ([Bit::Air(0.0); FACTS_BITS], 0),
+            PlayMode::NoPlayback => no_playback_bits(after),
+            PlayMode::Route { preview, hdr, subscription } => play_mode_bits_for(preview, hdr, subscription, after),
+        }
     }
 }
 
@@ -861,7 +884,7 @@ fn no_playback_bits(after: bool) -> ([Bit; FACTS_BITS], usize) {
     (bits, n + 1)
 }
 
-/// [`play_mode_bits`] once the item's route has been read: the line's play-mode clause, behind a
+/// [`PlayMode::bits`] once the item's route has been read: the line's play-mode clause, behind a
 /// separator of its own when something already stands in front of it (`after`).
 fn play_mode_bits_for(
     preview: plx_media::route::Preview,
@@ -949,22 +972,20 @@ fn bits_flow(
     flow.end() - x
 }
 
-fn play_mode_w(d: &Detail, picks: &[PreplayPick], playable: bool, after: bool, measure: &dyn plx_machine::machine::Measure) -> f32 {
-    let (bits, n) = play_mode_bits(d, picks, playable, after);
+fn play_mode_w(mode: PlayMode, after: bool, measure: &dyn plx_machine::machine::Measure) -> f32 {
+    let (bits, n) = mode.bits(after);
     bits_flow(&bits[..n], 0.0, measure, |_, _| {})
 }
 
 fn draw_play_mode(
     p: Painter,
-    d: &Detail,
-    picks: &[PreplayPick],
-    playable: bool,
+    mode: PlayMode,
     x: f32,
     y: f32,
     after: bool,
     measure: &dyn plx_machine::machine::Measure,
 ) -> f32 {
-    let (bits, n) = play_mode_bits(d, picks, playable, after);
+    let (bits, n) = mode.bits(after);
     paint_bits(p, &bits[..n], x, y, measure)
 }
 
@@ -1064,7 +1085,8 @@ pub fn draw_facts(
     let extent = extent.as_deref().unwrap_or("");
     let credit = plx_ui::fmt::shared_by(&d.source()).unwrap_or_default();
     let column = Rect::new(plx_ui::consts::MARGIN_X, y, FACTS_R - plx_ui::consts::MARGIN_X, theme::hero::FACTS_H);
-    if play_mode_w(d, picks, playable, false, measure) == 0.0 {
+    let mode = play_mode(d, picks, playable);
+    if play_mode_w(mode, false, measure) == 0.0 {
         let resumes = hero_resume_ns(d) > 0;
         return plx_ui::widgets::hero_facts(p, column, &date, extent, resumes, &credit, measure);
     }
@@ -1073,7 +1095,7 @@ pub fn draw_facts(
             &[date.as_str(), if fit.extent { extent } else { "" }],
             if fit.credit { &credit } else { "" },
             |text, _, size, _| measure.width_str(text, size, false),
-            |_, after| play_mode_w(d, picks, playable, after, measure),
+            |_, after| play_mode_w(mode, after, measure),
         )
     };
     let fit = facts_fit(
@@ -1083,7 +1105,7 @@ pub fn draw_facts(
     );
     let elided;
     let date = if fit.elide {
-        let budget = (column.w - play_mode_w(d, picks, playable, true, measure)).max(0.0);
+        let budget = (column.w - play_mode_w(mode, true, measure)).max(0.0);
         elided = plx_gfx::text::elide_by(&date, budget, false, |t| {
             measure.width_str(t, theme::size::CAPTION, false)
         });
@@ -1110,7 +1132,7 @@ pub fn draw_facts(
                 })
                 .unwrap_or(0.0)
         },
-        |dx, after| draw_play_mode(p, d, picks, playable, plx_ui::consts::MARGIN_X + dx, y, after, measure),
+        |dx, after| draw_play_mode(p, mode, plx_ui::consts::MARGIN_X + dx, y, after, measure),
     )
 }
 
@@ -2444,14 +2466,14 @@ mod tests {
     fn no_playback_replaces_the_play_mode_clause_with_one_reason_word() {
         let d = Detail::default();
         let measure = plx_ui::fixture::FixtureMeasure;
-        assert_eq!(play_mode_w(&d, &[], true, false, &measure), 0.0, "today: nothing to say for this item");
-        assert!(play_mode_w(&d, &[], false, false, &measure) > 0.0, "no driver: the reason is drawn");
-        let (bits, n) = play_mode_bits(&d, &[], false, false);
+        assert_eq!(play_mode_w(play_mode(&d, &[], true), false, &measure), 0.0, "today: nothing to say for this item");
+        assert!(play_mode_w(play_mode(&d, &[], false), false, &measure) > 0.0, "no driver: the reason is drawn");
+        let (bits, n) = play_mode(&d, &[], false).bits(false);
         assert_eq!(n, 1);
         assert!(matches!(bits[0], Bit::Word(word, ink, 0)
             if word == plx_os::i18n::msg::browse_detail_no_playback_c()
                 && ink == plx_ui::detail_layout::FACTS_INK), "one word in the facts line's own ink");
-        let (after, n) = play_mode_bits(&d, &[], false, true);
+        let (after, n) = play_mode(&d, &[], false).bits(true);
         assert!(n == 2 && matches!(after[0], Bit::Sep) && matches!(after[1], Bit::Word(..)));
     }
 
