@@ -82,6 +82,8 @@ const MOVE_MARK: f32 = 24.0;
 ///   way (the other chevron is quieter still).
 /// * `Lifted` - the row that IS being moved: grown ([`LIFT_SCALE`]), risen ([`LIFT_RISE`]), cast a
 ///   focus shadow, wearing its own pill and full chevrons, and drawn last, over the rows it passes.
+///   The grow, rise and shadow follow ONE spring (`TableView::lift`, 0 to 1 on pickup and back on
+///   drop, at [`K_ROW`]), so the row eases up and settles down rather than cutting.
 /// * `Waiting` - every other row while one is lifted: read in secondary ink.
 ///
 /// [`Icon::ChevronUp`]: crate::icons::Icon::ChevronUp
@@ -788,6 +790,13 @@ pub struct TableView {
     /// reinstall reorders rows, so a row slides to its new slot instead of cutting. Empty at rest
     /// (and for every table that never reorders), so a table pays nothing for it.
     glide: Vec<Spring>,
+    /// **The lift**: 0 at rest, 1 under a [`RowMove::Lifted`] selection. ONE spring at [`K_ROW`] for
+    /// the whole table (a table lifts at most one row), so the zoom, the rise and the shadow of
+    /// [`RowMove::Lifted`] all ease in on pickup and out on drop together, instead of cutting. It
+    /// belongs to the row `lift_row` (the selection while lifted; kept after the drop until the
+    /// spring has landed, so the dropped row settles instead of snapping), `-1` at rest.
+    lift: Spring,
+    lift_row: i32,
     /// A drill-in page's title band, see [`TableView::set_title`].
     title: Option<String>,
     /// Re-stamped by every mutation that can change the table's measured size (new sections, a new
@@ -807,17 +816,18 @@ const WALK_TITLE: i32 = -3;
 /// The glyph that opens a page title: the drill-in's "back" mark, the mirror of a row's chevron.
 const TITLE_BACK_GLYPH: &str = "\u{2039}";
 impl TableView {
-    pub const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32},glide:[Spring{pos:f32,vel:f32}]}";
+    pub const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32},glide:[Spring{pos:f32,vel:f32}],lift:Spring{pos:f32,vel:f32},lift_row:i32}";
 
     /// The owner records its row data separately. These fields determine layout, the selected
     /// face and subsequent motion; no text/texture cache or renderer pointer is traversed.
     pub fn write_motion(&self, c: &mut plx_machine::machine::Canon) {
-        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
+        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, lift, lift_row, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
         c.u32(*sel as u32).bool(*list_focused).bool(*compact).bool(*tall);
         for component in header_ink { c.f32(*component); }
         for spring in [hl_top, hl_bot, scroll] { c.f32(spring.pos).f32(spring.vel); }
         c.seq(glide.len());
         for spring in glide { c.f32(spring.pos).f32(spring.vel); }
+        c.f32(lift.pos).f32(lift.vel).u32(*lift_row as u32);
     }
 
     /// **Two-line rows at the CATALOG measure (98) rather than the settings one (92).**
@@ -905,6 +915,8 @@ impl TableView {
             hl_bot: Spring::at(0.0),
             scroll: Spring::at(0.0),
             glide: Vec::new(),
+            lift: Spring::at(0.0),
+            lift_row: -1,
             title: None,
             rev: 0,
         }
@@ -1686,6 +1698,33 @@ impl TableView {
         sc = sc.clamp(0.0, max_scroll);
         self.scroll.step(sc, 300.0, dt);
         self.step_glide(dt);
+        self.step_lift(dt);
+    }
+
+    /// Step the lift toward 1 while the selection is [`RowMove::Lifted`], else toward 0, and park it
+    /// (`lift_row` back to -1) once it has landed, so a table that never lifts writes the same motion
+    /// as ever.
+    fn step_lift(&mut self, dt: f32) {
+        let lifted = self.n_rows() > 0 && self.rows_at(self.sel).moving.is_lifted();
+        if lifted {
+            self.lift_row = self.sel;
+        }
+        self.lift.step(if lifted { 1.0 } else { 0.0 }, K_ROW, dt);
+        if !lifted && plx_machine::motion::report::settled(self.lift.pos, 0.0, self.lift.vel) {
+            self.lift.jump(0.0);
+            self.lift_row = -1;
+        }
+    }
+
+    /// How far row `gi` is lifted, 0..1: the lift spring for the row it belongs to (the row being
+    /// moved, or the one just dropped while the spring lands), 0 for every other.
+    fn lift_at(&self, gi: i32, row: &Row) -> f32 {
+        if row.moving.is_lifted() || gi == self.lift_row { self.lift.pos.max(0.0) } else { 0.0 }
+    }
+
+    /// Is row `gi` drawn in the lifted pass (over its neighbours, under its own pill)?
+    fn lifted_now(&self, gi: i32, row: &Row) -> bool {
+        row.moving.is_lifted() || (gi == self.lift_row && self.lift.pos > 0.0)
     }
 
     /// Step every row's glide toward 0 and drop the lot once all have landed, so a settled table
@@ -1960,7 +1999,7 @@ impl TableView {
             }
             let row = self.rows_at(gi);
             // the LIFTED row waits for the second pass, so it is drawn over every row it passes
-            if row.moving.is_lifted() != late {
+            if self.lifted_now(gi, row) != late {
                 return;
             }
             let h = row.height_in(self.tall_row_h());
@@ -1979,8 +2018,8 @@ impl TableView {
             let p = p.translate(0.0, self.glide_at(gi));
             // a lifted row grows, rises, casts its shadow and wears its OWN pill (the shared one is
             // not drawn under it, `shared_pill`); everything below draws through this painter
-            let lifted = row.moving.is_lifted();
-            let p = if lifted { self.lift_row(p, Rect::new(frame.x + SIDE, sy, frame.w - 2.0 * SIDE, h)) } else { p };
+            let lifted = self.lifted_now(gi, row);
+            let p = if lifted { self.lift_row(p, Rect::new(frame.x + SIDE, sy, frame.w - 2.0 * SIDE, h), self.lift_at(gi, row)) } else { p };
             if row.sep && row.label.is_empty() {
                 // grouping hairline, on the row's centre line and inset to the label column so it
                 // reads as a divider between groups rather than a full-bleed panel rule
@@ -2239,7 +2278,7 @@ impl TableView {
         };
         self.walk(|cy, gi, si| paint(cy, gi, si, false));
         // the second pass: the lifted row (at most one, but the table does not say so), over the rest
-        if self.sections.iter().flat_map(|s| &s.rows).any(|r| r.moving.is_lifted()) {
+        if self.lift.pos > 0.0 || self.sections.iter().flat_map(|s| &s.rows).any(|r| r.moving.is_lifted()) {
             self.walk(|cy, gi, si| {
                 if gi >= 0 {
                     paint(cy, gi, si, true);
@@ -2251,10 +2290,10 @@ impl TableView {
     /// `p` for a [`RowMove::Lifted`] row at `band` (the row's full band): grown about its centre,
     /// risen, with its focus shadow cast and its own accent pill drawn under it - the one place the
     /// lift's look lives. What the row then draws through the returned painter is grown with it.
-    fn lift_row(&self, p: Painter, band: Rect) -> Painter {
-        let z = p.translate(0.0, -LIFT_RISE).zoomed(crate::Zoom::about(band, (0.5, 0.5), LIFT_SCALE));
+    fn lift_row(&self, p: Painter, band: Rect, lift: f32) -> Painter {
+        let z = p.translate(0.0, -LIFT_RISE * lift).zoomed(crate::Zoom::about(band, (0.5, 0.5), 1.0 + (LIFT_SCALE - 1.0) * lift));
         let pill = Rect::new(band.x, band.y + PILL_INSET, band.w, band.h - 2.0 * PILL_INSET);
-        z.focus_shadow_outside(pill, PILL_RAD, 1.0);
+        z.focus_shadow_outside(pill, PILL_RAD, lift);
         if self.list_focused {
             z.rrect(pill, PILL_RAD, PILL_RAD, crate::ACCENT);
         }
@@ -2394,7 +2433,7 @@ mod tests {
             c.finish()
         }
         let baseline = hash(&super::TableView::new());
-        for field in 0..8 {
+        for field in 0..10 {
             let mut table = super::TableView::new();
             match field {
                 0 => table.hl_top.vel = 1.0,
@@ -2405,6 +2444,8 @@ mod tests {
                 5 => table.compact = !table.compact,
                 6 => table.tall = !table.tall,
                 7 => table.glide = vec![Spring::at(3.0)],
+                8 => table.lift = Spring::at(0.5),
+                9 => table.lift_row = 2,
                 _ => unreachable!(),
             }
             assert_ne!(hash(&table), baseline, "field {field}");

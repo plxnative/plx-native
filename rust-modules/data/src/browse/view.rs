@@ -694,6 +694,18 @@ impl DirectorySnapshot {
         }
     }
 
+    /// This directory publishing a Library order: `rows` (the favourites in presentation order,
+    /// what [`DirectoryView::library_order`] reads), what the profile's record is and where its
+    /// last write stands. For a page test that has no store to drive.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_library_order(mut self, rows: Vec<super::LibraryOrderRow>, state: super::OrderState, write: super::WriteState) -> Self {
+        let data = Arc::make_mut(&mut self.data);
+        data.order_rows = rows;
+        data.order_state = state;
+        self.order_write = write;
+        self
+    }
+
     /// This directory with `kind`'s library's shelves read and committed.
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_kind_shelves_published(mut self, kind: super::SecKind) -> Self {

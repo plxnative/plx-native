@@ -117,6 +117,19 @@ fn reorder_table(states: [RowMove; 3]) -> TableView {
     t
 }
 
+/// Step `t` until its lift has landed (a lifted selection at 1, an unlifted one at 0).
+fn settle_lift(t: &mut TableView) {
+    for _ in 0..600 {
+        t.update(DT, 600.0);
+    }
+}
+
+/// B's text size and y as the table draws them now.
+fn b_face(t: &TableView) -> (f32, i32) {
+    let runs = draw_census::capture_runs(|| t.draw(Painter::recording(), FRAME, &LegacyMeasure));
+    runs.iter().find(|r| r.text == "B").map(|r| (r.at.y, r.size)).unwrap()
+}
+
 #[test]
 fn chevrons_follow_the_state_alone() {
     let pick = RowMove::Pickable { can_up: true, can_down: false };
@@ -144,7 +157,8 @@ fn a_focused_pickable_row_draws_the_chevron_pair_in_the_check_column() {
 #[test]
 fn a_lifted_row_grows_rises_casts_a_shadow_and_is_drawn_last() {
     let off = reorder_table([RowMove::Off; 3]);
-    let lifted = reorder_table([RowMove::Waiting, RowMove::Lifted { can_up: true, can_down: true }, RowMove::Waiting]);
+    let mut lifted = reorder_table([RowMove::Waiting, RowMove::Lifted { can_up: true, can_down: true }, RowMove::Waiting]);
+    settle_lift(&mut lifted);
     let still = draw_census::capture_runs(|| off.draw(Painter::recording(), FRAME, &LegacyMeasure));
     let runs = draw_census::capture_runs(|| lifted.draw(Painter::recording(), FRAME, &LegacyMeasure));
     let at = |runs: &[draw_census::Run], l: &str| runs.iter().find(|r| r.text == l).map(|r| (r.at.y, r.size)).unwrap();
@@ -218,4 +232,48 @@ fn glide_state_is_part_of_the_canonical_motion() {
     assert_eq!(seeded, hash(&t), "reading it does not advance it");
     t.update(DT, 600.0);
     assert_ne!(hash(&t), seeded, "stepping moves it");
+}
+
+// ---- the lift spring ----
+
+#[test]
+fn the_lift_eases_in_on_pickup_and_out_on_drop_on_one_spring() {
+    let rest = b_face(&reorder_table([RowMove::Off; 3]));
+    let mut t = reorder_table([RowMove::Waiting, RowMove::Lifted { can_up: true, can_down: true }, RowMove::Waiting]);
+    assert_eq!(b_face(&t), rest, "the frame the page lifts the row it has not grown yet: the spring starts at 0");
+    t.update(DT * 4.0, 600.0);
+    let mid = b_face(&t);
+    assert!(mid.0 < rest.0, "a few frames in it has begun to rise and grow: {mid:?} vs {rest:?}");
+    settle_lift(&mut t);
+    let up = b_face(&t);
+    assert!(up.0 < mid.0 && up.1 >= mid.1, "and it lands higher and larger: {up:?}");
+    // the drop: the page hands the row back as an ordinary one; it settles down instead of cutting
+    t.set_sections(vec![Section::new("Libraries")
+        .row(row("A").moving(RowMove::Pickable { can_up: true, can_down: true }))
+        .row(row("B").moving(RowMove::Pickable { can_up: true, can_down: true }))
+        .row(row("C").moving(RowMove::Pickable { can_up: true, can_down: true }))], 1, false);
+    assert_eq!(b_face(&t), up, "the frame after the drop still shows the lifted row: it has not cut");
+    t.update(DT * 4.0, 600.0);
+    let down = b_face(&t);
+    assert!(down.0 > up.0 && down.1 <= up.1, "it is coming back down: {down:?}");
+    settle_lift(&mut t);
+    assert_eq!(b_face(&t), rest, "and lands exactly at rest");
+}
+
+#[test]
+fn a_landed_drop_leaves_the_motion_as_a_table_that_never_lifted() {
+    let hash = |t: &TableView| {
+        let mut c = plx_machine::machine::Canon::new();
+        t.write_motion(&mut c);
+        c.finish()
+    };
+    let mut t = reorder_table([RowMove::Off; 3]);
+    settle_lift(&mut t);
+    let base = hash(&t);
+    t.set_sections(vec![Section::new("Libraries").row(row("A")).row(row("B").moving(RowMove::Lifted { can_up: true, can_down: true })).row(row("C"))], 1, false);
+    t.update(DT * 4.0, 600.0);
+    assert_ne!(hash(&t), base, "a lift in flight is canonical state");
+    t.set_sections(vec![Section::new("Libraries").row(row("A")).row(row("B")).row(row("C"))], 1, false);
+    settle_lift(&mut t);
+    assert_eq!(hash(&t), base, "once landed it is gone");
 }
