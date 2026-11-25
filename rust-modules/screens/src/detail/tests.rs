@@ -5787,13 +5787,12 @@ fn the_audio_and_subtitles_disc_follows_the_pages_tracks_and_opens_the_picker() 
     let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
     let set = screen.hero_set(test_store().view());
     assert!(set.tracks);
-    assert!(hero::hero_ctls(set).0[..hero::hero_ctls(set).1].contains(&hero::HeroCtl::AudioSubtitles) || hero::overflow_ctls(set).0.contains(&hero::HeroCtl::AudioSubtitles));
-    // On the drawn row (3 or fewer actions) the press asks for the panel; behind … the menu row does.
+    let (row, n) = hero::hero_ctls(set);
+    assert!(row[..n].contains(&hero::HeroCtl::AudioSubtitles), "three actions are all round buttons");
     let (_, effects) = step(&mut screen, &ScreenEvent::Activate(hero::ELEM_AUDIO_SUBTITLES), Some(hero::ELEM_AUDIO_SUBTITLES));
     assert!(
         effects.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { .. }))))),
-        "OK on the disc opens the picker: {}",
-        effects.len()
+        "OK on the disc opens the picker"
     );
     clear();
     drop(_guard);

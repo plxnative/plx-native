@@ -1930,11 +1930,11 @@ impl Bridge<'_> {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);
             let meta = <AppHost as plx_screens::registry::MetadataLike>::metadata(&cx);
-            if let Some((rk, rows)) = page.hero_overflow(ret.focus, meta) {
+            if let Some((rk, kind)) = d.nav.instance_of(entry).and_then(|opener| page.hero_overflow(ret.focus, meta, opener)) {
                 // The hero's …: the item Play from Start / Play Version act on may be the on-deck
                 // episode, which need not be in the loaded season window, so the ordinary
                 // addressed-item path fetches it rather than the filmstrip's loaded-only one.
-                let mut arg = strip_menu_arg(sid, &rk, ItemMenuKind::HeroOverflow { rows }, entry, ret.focus, rect);
+                let mut arg = strip_menu_arg(sid, &rk, kind, entry, ret.focus, rect);
                 arg.loaded_episode = false;
                 return Some(arg);
             }

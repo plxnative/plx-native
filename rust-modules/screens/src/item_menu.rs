@@ -56,14 +56,14 @@ use std::os::raw::c_int;
 use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
-use crate::registry::{AppFx, AppLike, ItemMenuArg, ItemMenuKind, ItemMenuReq, OverflowRow};
+use crate::registry::{AppFx, AppLike, AppMsg, ItemMenuArg, ItemMenuKind, ItemMenuReq, OverflowRow};
 use plx_ui::consts::*;
 use plx_ui::form::{Activation, Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::frame::Budget;
 use plx_ui::icons::Icon;
 use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
-    LogicalState, Machine, NavOp,
+    LogicalState, Machine, NavOp, MachineId, Delivery,
 };
 use plx_ui::a11y::{A11y, A11yPath, Role};
 use plx_ui::screen::{
@@ -122,6 +122,9 @@ pub enum Action {
     /// Select Version…: turn the panel into the list of this leaf's versions. The menu performs
     /// it itself (`ItemMenuScreen::activate`); it never reaches the app.
     ChooseVersion(String),
+    /// Audio & Subtitles…: close the menu and ask the Detail page that opened it for its picker
+    /// (`AppMsg::OpenPreplayTracks`). The menu performs it itself; it never reaches the app.
+    ChooseTracks(String),
     /// Select this leaf's version `media` as the file Play and Resume start. It plays nothing; the
     /// app remembers it for the profile (`plx_media::route::choose_version`). The id, never a
     /// position: it is resolved against the item when it is played
@@ -165,7 +168,8 @@ impl Action {
             | Action::RemoveFromDeck(rk)
             | Action::GoToCatalog(rk)
             | Action::WatchlistRemove(rk)
-            | Action::ChooseVersion(rk) => rk,
+            | Action::ChooseVersion(rk)
+            | Action::ChooseTracks(rk) => rk,
             Action::SelectVersion { rk, .. } => rk,
             Action::PlayTrailer { rk, .. } => rk,
             // No ratingKey: the subject is a catalog id.
@@ -190,6 +194,7 @@ impl Action {
             Action::ChooseVersion(_) => 12,
             // Tag 13 was `PlayVersion` when it was recorded; the wire is unchanged by what a press MEANS.
             Action::SelectVersion { .. } => 13,
+            Action::ChooseTracks(_) => 14,
         };
         c.u32(tag).str(self.rk());
         if let Action::WatchlistAdd { hex } = self {
@@ -261,6 +266,8 @@ pub enum ItemRow {
     WatchlistAdd,
     /// Play Version… (a leaf with two or more versions).
     PlayVersion,
+    /// Audio & Subtitles… (the hero's … menu).
+    ChooseTracks,
     /// One version on the Play Version page, by its position in the list captured at open.
     Version(u16),
 }
@@ -290,6 +297,7 @@ impl ItemRow {
             ItemRow::WatchlistRemove => "watchlist_remove",
             ItemRow::WatchlistAdd => "watchlist_add",
             ItemRow::PlayVersion => "play_version",
+            ItemRow::ChooseTracks => "choose_tracks",
             ItemRow::Version(_) => "version",
         }
     }
@@ -310,6 +318,7 @@ impl FormId for ItemRow {
             ItemRow::WatchlistRemove => 10,
             ItemRow::WatchlistAdd => 11,
             ItemRow::PlayVersion => 12,
+            ItemRow::ChooseTracks => 13,
             ItemRow::Version(n) => VERSION_KEY_BASE + u32::from(*n),
         })
     }
@@ -612,6 +621,12 @@ fn build_hero_overflow(rk: &str, rows: &[OverflowRow]) -> ItemForm {
                 Action::ChooseVersion(rk.to_string()),
                 Row::new(plx_os::i18n::msg::browse_detail_select_version()).licon(Icon::Collection),
             ),
+            OverflowRow::AudioSubtitles => sec.item(
+                ItemRow::ChooseTracks,
+                RowKind::Button,
+                Action::ChooseTracks(rk.to_string()),
+                Row::new(plx_os::i18n::msg::settings_audio_title()).licon(Icon::Audio),
+            ),
         };
     }
     Form::new().section(sec)
@@ -785,7 +800,7 @@ impl ItemMenuScreen {
             }
             ItemMenuKind::Episode { mark, versions } => build_episode(&self.arg.rk, *mark, versions, self.face.as_ref()),
             ItemMenuKind::Season { mark, .. } => build_season(&self.arg.rk, *mark, self.face.as_ref()),
-            ItemMenuKind::HeroOverflow { rows } => build_hero_overflow(&self.arg.rk, rows),
+            ItemMenuKind::HeroOverflow { rows, .. } => build_hero_overflow(&self.arg.rk, rows),
             ItemMenuKind::Catalog { state } => {
                 let guid = self.arg.catalog.as_ref().map_or("", |c| c.guid.as_str());
                 let kind = self.arg.catalog.as_ref().map_or(plx_data::watchlist::model::Kind::Movie, |c| c.kind);
@@ -836,6 +851,17 @@ impl ItemMenuScreen {
             self.show_versions(rk);
             return;
         }
+        // The picker is the Detail page's panel (a `PickerState` screen with its own pages and
+        // motion); a second copy of it inside this menu would be a second picker. The menu closes
+        // and hands the request back, anchored on the rect it hung off.
+        if let (Some(Action::ChooseTracks(_)), ItemMenuKind::HeroOverflow { opener, .. }) = (&act, &self.arg.kind) {
+            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+            fx.push(Fx::Deliver(
+                MachineId::Instance(*opener),
+                Delivery::Screen(ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor: self.arg.anchor })),
+            ));
+            return;
+        }
         // Every arm of the dispatch turns an rk into a blocking fetch, a scrobble or a play; an
         // empty one would fetch nothing and land on a blank page. `build` already refuses to offer
         // such a row — this is the belt to that braces, since the rows are data-driven off hub
@@ -864,7 +890,7 @@ impl ItemMenuScreen {
         match &self.arg.kind {
             ItemMenuKind::Card { row, .. } => &row.versions,
             ItemMenuKind::Episode { versions, .. } => versions,
-            ItemMenuKind::HeroOverflow { rows } => rows
+            ItemMenuKind::HeroOverflow { rows, .. } => rows
                 .iter()
                 .find_map(|r| match r {
                     OverflowRow::PlayVersion { versions } => Some(versions.as_slice()),
@@ -1412,14 +1438,20 @@ pub(crate) mod tests {
             OverflowRow::GoToShow { show_rk: "show-1".into(), season: 3 },
             OverflowRow::PlayFromStart,
             OverflowRow::PlayVersion { versions: plx_appkit::version_list::sample() },
+            OverflowRow::AudioSubtitles,
         ];
         let menu = built(super::build_hero_overflow("ep-9", &rows));
-        assert_eq!(menu.ids(), [ItemRow::GoToShow, ItemRow::PlayFromStart, ItemRow::PlayVersion]);
-        let icons: Vec<_> = (0..3).map(|i| menu.0.table.sections[0].rows[i].licon).collect();
-        assert_eq!(icons, [Some(Icon::Show), Some(Icon::Restart), Some(Icon::Collection)]);
+        assert_eq!(menu.ids(), [ItemRow::GoToShow, ItemRow::PlayFromStart, ItemRow::PlayVersion, ItemRow::ChooseTracks]);
+        let icons: Vec<_> = (0..4).map(|i| menu.0.table.sections[0].rows[i].licon).collect();
+        assert_eq!(icons, [Some(Icon::Show), Some(Icon::Restart), Some(Icon::Collection), Some(Icon::Audio)]);
         assert_eq!(
             menu.actions(),
-            [Action::GoToShow("show-1".into(), 3), Action::PlayFromStart("ep-9".into()), Action::ChooseVersion("ep-9".into())]
+            [
+                Action::GoToShow("show-1".into(), 3),
+                Action::PlayFromStart("ep-9".into()),
+                Action::ChooseVersion("ep-9".into()),
+                Action::ChooseTracks("ep-9".into()),
+            ]
         );
         // two rows or more: the menu never stands for a single item either
         assert!(menu.ids().len() >= 2);
@@ -2648,6 +2680,40 @@ pub(crate) mod tests {
             }
         }
         plx_ui::table::assert_no_fit_failures(&out);
+    }
+
+    /// **Audio & Subtitles under …** closes the menu and hands the request back to the page that opened
+    /// it, anchored on the rect the menu hung off: the picker is the page's panel, not a second copy
+    /// inside the menu, so nothing reaches the app runner.
+    #[test]
+    fn the_overflow_menus_audio_row_closes_it_and_asks_the_page_for_the_picker() {
+        let anchor = [10.0f32, 20.0, 64.0, 64.0].map(f32::to_bits);
+        let mut arg = card_arg(&item(3, PosterMark::None), false);
+        arg.anchor = anchor;
+        arg.kind = ItemMenuKind::HeroOverflow {
+            rows: vec![OverflowRow::PlayFromStart, OverflowRow::AudioSubtitles],
+            opener: plx_machine::machine::InstanceId(4),
+        };
+        let mut s = ItemMenuScreen::new(EntryId(7), arg);
+        s.built = true;
+        s.form.set(build_hero_overflow("ep-9", &[OverflowRow::PlayFromStart, OverflowRow::AudioSubtitles]), None);
+        let elem = first_action(&s, |a| matches!(a, Action::ChooseTracks(_)));
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
+        s.activate::<HostFixture>(elem, &mut fx);
+        assert!(out.iter().any(|e| matches!(e.fx, Fx::Nav(NavOp::Dismiss(EntryId(7))))), "the menu closes");
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.fx,
+                Fx::Deliver(
+                    MachineId::Instance(plx_machine::machine::InstanceId(4)),
+                    Delivery::Screen(ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor: got })),
+                ) if *got == anchor
+            )),
+            "the opening page is asked for its picker on the menu's anchor"
+        );
+        assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::ItemMenu(_)))), "nothing reaches the app runner");
     }
 
     /// A leaf with three versions, its card menu built (so Play Version is a row).

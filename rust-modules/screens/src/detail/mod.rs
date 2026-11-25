@@ -869,7 +869,8 @@ impl DetailScreen {
         &self,
         focus: Option<FocusKey<u32>>,
         meta: plx_data::metadata::MetadataView<'_>,
-    ) -> Option<(String, Vec<crate::registry::OverflowRow>)> {
+        opener: plx_machine::machine::InstanceId,
+    ) -> Option<(String, crate::registry::ItemMenuKind)> {
         use crate::registry::OverflowRow;
         let key = focus.filter(|key| key.entry == self.entry)?;
         if key.elem != hero::ELEM_MORE {
@@ -884,10 +885,13 @@ impl DetailScreen {
                     .map(|(show_rk, season)| OverflowRow::GoToShow { show_rk: show_rk.to_string(), season: season as std::os::raw::c_int }),
                 hero::HeroCtl::Restart => Some(OverflowRow::PlayFromStart),
                 hero::HeroCtl::Version => Some(OverflowRow::PlayVersion { versions: hero_versions(d).to_vec() }),
+                hero::HeroCtl::AudioSubtitles => Some(OverflowRow::AudioSubtitles),
                 _ => None,
             })
             .collect();
-        Some((play_subject(d)?.to_string(), rows)).filter(|(_, rows)| !rows.is_empty())
+        Some((play_subject(d)?.to_string(), rows))
+            .filter(|(_, rows)| !rows.is_empty())
+            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener }))
     }
 
     pub fn focused_episode(
@@ -2653,6 +2657,11 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
             }
             // The *Select Version* surface committed a row: that version is now the file this page's
             // Play and Resume start (and its facts line describes). Nothing plays.
+            // The hero's … menu asked for the picker and closed itself: the same request the disc makes.
+            ScreenEvent::App(AppMsg::OpenPreplayTracks { anchor }) => {
+                self.content(fx, ContentReq::Panel(ContentPanel::PreplayTracks { anchor: *anchor }));
+                Handled::Yes
+            }
             ScreenEvent::App(AppMsg::SelectVersion(media)) => {
                 // The panel's rows are disabled with no driver composed (`versions_panel`) and send
                 // nothing; a message that arrives anyway selects nothing.
