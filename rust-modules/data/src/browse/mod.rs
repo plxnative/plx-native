@@ -123,12 +123,13 @@ pub enum SourceState {
 /// **THE default source order**, the one definition: the household's own servers first (a managed
 /// profile's family server is the household's though plex.tv sends it a handle, and a share plex.tv
 /// never named is not the household's though it carries none: #68), then servers with no owner to
-/// name before shares that have one, each group in roster (slot) order. Browse's default section order
+/// name before shares that have one, each group in registry slot order (`ServerId::raw`: the same quantity on both surfaces, whatever order
+/// a roster sync appended the sources in). Browse's default section order
 /// ([`BrowseState::default_section_order`]), and so the Library header, the tab fallback and Settings,
 /// read it; so does Home's roster (`pms::roster_with_scope`), so a profile's shelves and its header
 /// never disagree about which server leads.
-pub(crate) fn source_rank(household: bool, has_handle: bool, slot: usize) -> (bool, bool, usize) {
-    (!household, has_handle, slot)
+pub(crate) fn source_rank(household: bool, has_handle: bool, sid: ServerId) -> (bool, bool, u16) {
+    (!household, has_handle, sid.raw())
 }
 
 /// One SOURCE the table is addressed by — a server this account has been granted. Comes from the
@@ -2167,7 +2168,8 @@ impl BrowseState {
         order.sort_by_key(|&index| {
             let src = self.sections[index].src;
             let source = self.sources.get(src);
-            source_rank(source.is_some_and(|source| source.household), source.is_some_and(|source| !source.handle.is_empty()), src)
+            // a section whose source is gone sorts last, then by source index
+            (source.map_or((true, true, u16::MAX), |source| source_rank(source.household, !source.handle.is_empty(), source.sid)), src)
         });
         order
     }

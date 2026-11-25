@@ -223,6 +223,10 @@ fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     let pins = [(sid(61), 1, true)];
     let key_of = |households: &[(ServerId, bool)]| BrowseScope { households, pins: &pins, ..BrowseScope::standalone() }.cache_key();
     assert_ne!(key_of(&households), key_of(&moved));
+    // and with no pin table yet: a reclassification landing before any directory still re-sorts Home
+    let no_pins = |households: &[(ServerId, bool)]| BrowseScope { households, ..BrowseScope::standalone() }.cache_key();
+    assert_ne!(no_pins(&households), no_pins(&moved));
+    assert_eq!(no_pins(&[]), 0, "nothing known, nothing to republish");
 }
 
 /// F7: a refresh re-projects every row, and a released row's library is the one it was given when

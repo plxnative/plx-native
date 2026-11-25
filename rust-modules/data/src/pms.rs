@@ -3210,26 +3210,26 @@ impl<'a> BrowseScope<'a> {
     /// are fixed-width atomics; fold the actual `(server, section, pin)` input into that existing
     /// shape instead of adding a global owner selector.
     fn cache_key(&self) -> u32 {
-        // An empty pin table carries no new Home membership, even when discovery advances.
-        if self.pins.is_empty() { return 0; }
         let mut hash = 0x811c_9dc5u32;
         let mut fold = |bytes: &[u8]| {
             for byte in bytes {
                 hash = (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
             }
         };
+        // The roster's order follows the households (`roster_with_scope`): a source that changes sides
+        // is a moved roster, with or without a pin table or a generation moving beside it.
+        for (sid, household) in self.households {
+            fold(&sid.raw().to_le_bytes());
+            fold(&[*household as u8]);
+        }
+        // An empty pin table carries no new Home membership, even when discovery advances.
+        if self.pins.is_empty() { return if self.households.is_empty() { 0 } else { hash }; }
         fold(&self.sections_gen.to_le_bytes());
         fold(&(self.pins.len() as u64).to_le_bytes());
         for (sid, section, pinned) in self.pins {
             fold(&sid.raw().to_le_bytes());
             fold(&section.to_le_bytes());
             fold(&[*pinned as u8]);
-        }
-        // The roster's order follows the households (`roster_with_scope`): a source that changes sides
-        // is a moved roster, with or without a generation moving beside it.
-        for (sid, household) in self.households {
-            fold(&sid.raw().to_le_bytes());
-            fold(&[*household as u8]);
         }
         // A moved Library order is a moved Home even when no pin or generation moved with it.
         match self.order {
@@ -3311,8 +3311,8 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 /// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
-    let mut ranked: Vec<((bool, bool, usize), ServerId, String)> = Vec::new();
-    for (slot, sid) in scope.clients.slots().enumerate() {
+    let mut ranked: Vec<((bool, bool, u16), ServerId, String)> = Vec::new();
+    for sid in scope.clients.slots() {
         if scope.clients.key(sid).is_none() || !feeds_home(sid, &pinned, &known) {
             continue;
         }
@@ -3321,7 +3321,7 @@ fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
             .unwrap_or_default();
         let household = scope.households.iter().find(|(known, _)| *known == sid)
             .map_or(handle.is_empty(), |(_, household)| *household);
-        ranked.push((crate::browse::source_rank(household, !handle.is_empty(), slot), sid, handle));
+        ranked.push((crate::browse::source_rank(household, !handle.is_empty(), sid), sid, handle));
     }
     ranked.sort_by_key(|(rank, ..)| *rank);
     ranked.into_iter().map(|(_, sid, handle)| (sid, handle)).collect()
