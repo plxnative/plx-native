@@ -204,35 +204,72 @@ fn an_unranked_source_sits_behind_the_whole_of_a_reordered_source() {
     assert_eq!(ids(&after), ids(&hubs), "ranking her last moves nothing she already showed");
 }
 
+/// Browse's verdict on a source as the fixtures spell it: household, and whether it has an owner to name.
+fn verdict(sid: ServerId, household: bool, has_handle: bool) -> (ServerId, crate::browse::SourceVerdict) {
+    (sid, crate::browse::SourceVerdict { household, has_handle })
+}
+
 /// The default source order is Browse's (`browse::source_rank`): a managed profile's family server is
 /// the household's though plex.tv sends it a handle, so it leads a friend's share even from the higher
 /// slot. This CHANGES Home for a managed profile with no record: it used to list the friend first.
 #[test]
 fn home_lists_the_household_before_a_share_whichever_slot_holds_it() {
     let keys = roster(&[(61, Some(key(1)), "anna"), (62, Some(key(2)), "mum"), (63, Some(key(3)), "")], 1, 1);
-    let households = [(sid(61), false), (sid(62), true), (sid(63), true)];
-    let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let verdicts = [verdict(sid(61), false, true), verdict(sid(62), true, true), verdict(sid(63), true, false)];
+    let scope = BrowseScope { verdicts: &verdicts, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
     assert_eq!(rank, [63, 62, 61], "no owner, then the family's, then the friend's share");
     // a source Browse has not classified (the step after a reset empties its table, while the registry
     // still lists every slot) is graded by no second rule, a handle included: it ranks behind the
     // classified ones, in slot order
-    let unknown = BrowseScope { households: &[], clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let unknown = BrowseScope { verdicts: &[], clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&unknown).iter().map(|(sid, _)| sid.raw()).collect();
     assert_eq!(rank, [61, 62, 63], "no verdict, no grouping: slot order");
-    let partly = [(sid(62), true)];
-    let scope = BrowseScope { households: &partly, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+    let partly = [verdict(sid(62), true, true)];
+    let scope = BrowseScope { verdicts: &partly, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
     let rank: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
     assert_eq!(rank, [62, 61, 63], "the classified source leads, the unclassified follow in slot order");
-    // a household verdict that moves is a moved roster
-    let moved = [(sid(61), true), (sid(62), true), (sid(63), true)];
+    // a verdict that moves, on either half, is a moved roster
+    let moved = [verdict(sid(61), true, true), verdict(sid(62), true, true), verdict(sid(63), true, false)];
+    let named = [verdict(sid(61), false, true), verdict(sid(62), true, true), verdict(sid(63), true, true)];
     let pins = [(sid(61), 1, true)];
-    let key_of = |households: &[(ServerId, bool)]| BrowseScope { households, pins: &pins, ..BrowseScope::standalone() }.cache_key();
-    assert_ne!(key_of(&households), key_of(&moved));
+    let key_of = |verdicts: &[(ServerId, crate::browse::SourceVerdict)]| BrowseScope { verdicts, pins: &pins, ..BrowseScope::standalone() }.cache_key();
+    assert_ne!(key_of(&verdicts), key_of(&moved));
+    assert_ne!(key_of(&verdicts), key_of(&named), "a source gaining an owner to name moves the roster too");
     // and with no pin table yet: a reclassification landing before any directory still re-sorts Home
-    let no_pins = |households: &[(ServerId, bool)]| BrowseScope { households, ..BrowseScope::standalone() }.cache_key();
-    assert_ne!(no_pins(&households), no_pins(&moved));
+    let no_pins = |verdicts: &[(ServerId, crate::browse::SourceVerdict)]| BrowseScope { verdicts, ..BrowseScope::standalone() }.cache_key();
+    assert_ne!(no_pins(&verdicts), no_pins(&moved));
+    assert_ne!(no_pins(&verdicts), no_pins(&named));
     assert_eq!(no_pins(&[]), 0, "nothing known, nothing to republish");
+}
+
+/// ONE verdict per publication: Home is handed Browse's WHOLE verdict with the directory and computes
+/// no half of it. A share that gains a handle in the registry's facts is graded by the directory it is
+/// published with, so Home and the Library header (which ranks by the same verdicts) cannot disagree
+/// in that publication; the roster follows the facts only when the next directory carries them.
+#[test]
+fn home_and_the_header_rank_by_one_verdict_inside_a_publication() {
+    use crate::browse::source_rank;
+    // two household servers: 62 has no owner to name in Browse's table; 61 has one
+    let table = [verdict(sid(61), true, true), verdict(sid(62), true, false)];
+    // the registry's facts have since given 62 a handle too (a facts refresh Browse has not yet absorbed)
+    let refreshed = roster(&[(61, Some(key(1)), "anna"), (62, Some(key(2)), "mum")], 2, 2);
+    let directory = crate::stores::browse::DirectorySnapshot::fixture_with_sources(1, 0, Vec::new(), Vec::new()).with_source_verdicts(table.to_vec());
+    let scope = BrowseScope::retained(directory.view(), &refreshed);
+    let home: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
+    let header: Vec<u16> = {
+        let mut ranked: Vec<_> = table.iter().map(|(sid, v)| (source_rank(Some(*v), *sid), sid.raw())).collect();
+        ranked.sort();
+        ranked.into_iter().map(|(_, raw)| raw).collect()
+    };
+    assert_eq!(header, [62, 61], "no owner to name leads, in Browse's table");
+    assert_eq!(home, header, "Home takes the verdict as published, not the fresher facts' handle");
+    // the next publication carries the refreshed verdict, and both surfaces move together
+    let absorbed = [verdict(sid(61), true, true), verdict(sid(62), true, true)];
+    let directory = directory.with_source_verdicts(absorbed.to_vec());
+    let scope = BrowseScope::retained(directory.view(), &refreshed);
+    let home: Vec<u16> = roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect();
+    assert_eq!(home, [61, 62], "both have an owner to name now: slot order");
 }
 
 /// PMS mints one `home.television.recent` hub PER TV library when a household owns two
@@ -268,10 +305,10 @@ fn a_lone_type_hub_is_its_librarys_shelf_and_a_whole_server_hub_is_nobodys() {
 #[test]
 fn home_orders_the_roster_by_slot_number_whatever_order_the_registry_listed_them() {
     let rows = |order: &[u16]| roster(&order.iter().map(|&raw| (raw, Some(key(raw as u32)), if raw == 62 { "anna" } else { "" })).collect::<Vec<_>>(), 1, 1);
-    let households = [(sid(61), true), (sid(62), false), (sid(63), true)];
+    let verdicts = [verdict(sid(61), true, false), verdict(sid(62), false, true), verdict(sid(63), true, false)];
     let order = |listed: &[u16]| {
         let keys = rows(listed);
-        let scope = BrowseScope { households: &households, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
+        let scope = BrowseScope { verdicts: &verdicts, clients: std::borrow::Cow::Borrowed(&keys), ..BrowseScope::standalone() };
         roster_with_scope(&scope).iter().map(|(sid, _)| sid.raw()).collect::<Vec<u16>>()
     };
     assert_eq!(order(&[61, 62, 63]), [61, 63, 62]);
@@ -294,6 +331,26 @@ fn a_refresh_keeps_the_library_a_released_row_was_projected_with() {
     carry_descriptors(&old, &mut new);
     assert_eq!(new.shelves[0].library, ShelfLibrary::One(2));
     assert!(new.shelves[0].released());
+}
+
+/// A refresh's preview is evidence for a row that still holds cards: a row whose cards sat in one
+/// library, refreshed with a preview that spans two, is `Mixed` now, not stuck on the first library
+/// for the source's whole life. Only a row that gave its cards up keeps the earlier decision (above).
+#[test]
+fn a_refresh_re_decides_a_row_that_holds_a_full_preview() {
+    let old = built(0, &[], vec![shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m0", "m1"])]);
+    assert_eq!(old.shelves[0].library, ShelfLibrary::One(2), "one library's preview");
+    assert!(!old.shelves[0].released());
+    let mut fresh = shelf_in(0, 2, "Mixed", "mock.shelf.0", &["m2", "m3"]);
+    Arc::make_mut(&mut fresh.items[1]).sec = 5;
+    fresh.library = ShelfLibrary::projected(&fresh.hub_id, &fresh.items);
+    let mut new = built(0, &[], vec![fresh]);
+    carry_descriptors(&old, &mut new);
+    assert_eq!(new.shelves[0].library, ShelfLibrary::Mixed, "two libraries' preview");
+    // and back: a later preview of one library is that library's again
+    let mut again = built(0, &[], vec![shelf_in(0, 5, "Mixed", "mock.shelf.0", &["m4", "m5"])]);
+    carry_descriptors(&new, &mut again);
+    assert_eq!(again.shelves[0].library, ShelfLibrary::One(5));
 }
 
 /// F7: a window read builds the replacement with no library of its own: the row keeps the projection's.

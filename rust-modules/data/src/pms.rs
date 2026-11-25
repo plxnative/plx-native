@@ -1173,10 +1173,10 @@ struct Shelf {
     /// ([`HubRef::epoch`]). Bookkeeping of this run: not recorded, not hashed.
     #[serde(skip)]
     epoch: u32,
-    /// Which library this row belongs to ([`ShelfLibrary`]): decided once at projection, while the row
-    /// still holds its cards, and carried across every replacement of the row (a refresh, a window
-    /// read, a landing), so Library order ranks the row the same whether it holds its cards or gave
-    /// them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
+    /// Which library this row belongs to ([`ShelfLibrary`]): decided at projection from the cards the row
+    /// holds, again by each refresh that brings a full preview, and carried across every replacement
+    /// of a row that has given its cards up (a refresh, a window read, a landing), so Library order
+    /// ranks the row the same whether it holds its cards or gave them up to the ring. Bookkeeping like `epoch`: not recorded, not hashed.
     #[serde(skip)]
     library: ShelfLibrary,
 }
@@ -1184,8 +1184,8 @@ struct Shelf {
 /// **Which library a Home row belongs to**: three states, not a number with a sentinel.
 ///
 /// Library order ranks a row by its library, and a row's cards cannot be asked for it later (a row in
-/// the ring has given them up), so the answer is computed once, at projection, and travels with the
-/// row.
+/// the ring has given them up), so the answer is computed while the row holds its cards (at projection, and again
+/// by a refresh's full preview), and travels with the row once it gives them up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ShelfLibrary {
     /// Not computed: a row built from a page read (it replaces a window of a row that was projected, and
@@ -1670,10 +1670,11 @@ fn admit(old: Option<&SourceBuild>, new: &mut SourceBuild) {
 fn carry_descriptors(old: &SourceBuild, new: &mut SourceBuild) {
     for shelf in &mut new.shelves {
         let Some(was) = find_shelf(&old.shelves, &shelf.hub_id, &shelf.key) else { continue };
-        // the row's library was decided when it was first projected; a refresh's own preview (a random
-        // sample, perhaps) does not re-decide it
-        shelf.library = was.library.or(shelf.library);
         if !was.released() { continue; }
+        // a row that gave its cards up keeps the decision made while it held them: nothing of it is
+        // left to decide from, and the refresh's own preview is a sample. A row that still holds a
+        // full fresh preview (the early `continue` above) keeps what `admit` decided from that preview.
+        shelf.library = was.library.or(shelf.library);
         if !pages(&shelf.key) {
             // nothing but the refresh's own preview says what the row shows now (a row the refresh
             // already gave up has put those keys in `kept`)
@@ -2706,8 +2707,8 @@ struct Src {
     /// [`sync_roster`] time, never inside a worker.
     ///
     /// An empty handle is NOT what orders Home: [`roster_with_scope`] ranks sources by
-    /// [`browse::source_rank`], Browse's household verdict first; the handle only breaks ties inside
-    /// one verdict (a server with an owner to name after one without). So a share plex.tv never
+    /// [`browse::source_rank`], Browse's household verdict first; the handle (Browse's, in the same verdict)
+    /// only breaks ties inside one household grade (a server with an owner to name after one without). So a share plex.tv never
     /// named, which has an empty handle but is not the household's, sorts with the shares (the
     /// mistake `docs/shared-servers.md` §13 describes cannot recur through Home's order).
     handle: String,
@@ -3177,11 +3178,12 @@ fn feeds_home(sid: ServerId, pinned: &[ServerId], known: &[ServerId]) -> bool {
 struct BrowseScope<'a> {
     sections_gen: u32,
     pins: &'a [(ServerId, i64, bool)],
-    /// Browse's household verdict per source ([`browse::DirectoryView::source_households`]), which
-    /// [`roster_with_scope`] orders the sources by (the default source order, [`browse::source_rank`]).
-    /// A source it does not name is unclassified: [`browse::source_rank`] grades it behind the
-    /// classified ones, the same as Browse's own table does for a source it no longer holds.
-    households: &'a [(ServerId, bool)],
+    /// Browse's WHOLE verdict per source ([`browse::DirectoryView::source_verdicts`]: household and
+    /// handle), which [`roster_with_scope`] hands to [`browse::source_rank`] as it is: Home computes no
+    /// part of it, so it cannot disagree with the Library header inside one publication. A source it
+    /// does not name is unclassified: [`browse::source_rank`] grades it behind the classified ones,
+    /// the same as Browse's own table does for a source it no longer holds.
+    verdicts: &'a [(ServerId, crate::browse::SourceVerdict)],
     /// The profile's Library order as Home reads it ([`HomeOrder`]); [`HomeOrder::Natural`] for the
     /// server order (and always for a fixture), which leaves Home exactly as it was.
     order: HomeOrder<&'a [(ServerId, i64)]>,
@@ -3195,14 +3197,14 @@ impl<'a> BrowseScope<'a> {
     /// code only: a production step is handed them ([`BrowseScope::retained`]).
     #[cfg(any(test, feature = "test-support"))]
     fn standalone() -> Self {
-        Self { sections_gen: 0, pins: &[], households: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
+        Self { sections_gen: 0, pins: &[], verdicts: &[], order: HomeOrder::Natural, clients: std::borrow::Cow::Owned(registry_keys_for_test()) }
     }
 
     fn retained(directory: crate::stores::browse::DirectoryView<'a>, clients: &'a ClientKeys) -> Self {
         Self {
             sections_gen: directory.sections_gen(),
             pins: directory.favorite_sections(),
-            households: directory.source_households(),
+            verdicts: directory.source_verdicts(),
             order: directory.home_order(),
             clients: std::borrow::Cow::Borrowed(clients),
         }
@@ -3219,14 +3221,15 @@ impl<'a> BrowseScope<'a> {
                 hash = (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
             }
         };
-        // The roster's order follows the households (`roster_with_scope`): a source that changes sides
-        // is a moved roster, with or without a pin table or a generation moving beside it.
-        for (sid, household) in self.households {
+        // The roster's order follows the verdicts (`roster_with_scope`): a source that changes sides, or
+        // gains an owner to name, is a moved roster, with or without a pin table or a generation
+        // moving beside it.
+        for (sid, verdict) in self.verdicts {
             fold(&sid.raw().to_le_bytes());
-            fold(&[*household as u8]);
+            fold(&[verdict.household as u8, verdict.has_handle as u8]);
         }
         // An empty pin table carries no new Home membership, even when discovery advances.
-        if self.pins.is_empty() { return if self.households.is_empty() { 0 } else { hash }; }
+        if self.pins.is_empty() { return if self.verdicts.is_empty() { 0 } else { hash }; }
         fold(&self.sections_gen.to_le_bytes());
         fold(&(self.pins.len() as u64).to_le_bytes());
         for (sid, section, pinned) in self.pins {
@@ -3310,8 +3313,9 @@ fn home_server_sets(pins: &[(ServerId, i64, bool)]) -> (Vec<ServerId>, Vec<Serve
 /// The registry IS the granted roster — a server is in it only once plex.tv (or the
 /// `plxnative-servers` dev trigger) handed us a token for it — and [`feeds_home`] is what narrows
 /// the grant to a pin. The handle comes from the same place (`ServerFacts`), so nothing here has an
-/// opinion about who a server belongs to that the Sources list does not share; the household verdict
-/// is Browse's own ([`BrowseScope::households`]), because it needs the Plex Home roster Home does not hold.
+/// opinion about who a server belongs to that the Sources list does not share; the whole verdict, the
+/// handle half included, is Browse's own ([`BrowseScope::verdicts`]), because the household half needs
+/// the Plex Home roster Home does not hold. The handle read here is only the credit a shelf carries.
 fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
     let (pinned, known) = home_server_sets(&scope.pins);
     let mut ranked: Vec<(crate::browse::SourceRank, ServerId, String)> = Vec::new();
@@ -3322,8 +3326,7 @@ fn roster_with_scope(scope: &BrowseScope) -> Vec<(ServerId, String)> {
         let handle = scope.clients.facts(sid).and_then(|facts| facts.described)
             .map(|f| f.handle.clone())
             .unwrap_or_default();
-        let verdict = scope.households.iter().find(|(known, _)| *known == sid)
-            .map(|(_, household)| (*household, !handle.is_empty()));
+        let verdict = scope.verdicts.iter().find(|(known, _)| *known == sid).map(|(_, verdict)| *verdict);
         ranked.push((crate::browse::source_rank(verdict, sid), sid, handle));
     }
     ranked.sort_by_key(|(rank, ..)| *rank);

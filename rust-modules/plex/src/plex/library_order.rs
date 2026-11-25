@@ -146,8 +146,7 @@ pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], pr
 /// [`is_whole_server_hub`] one spans libraries by construction, and any other (a `home.<type>.recent`
 /// among them) is decided by the cards it holds.
 pub fn hub_library(hub_identifier: &str) -> Option<i64> {
-    const PER_LIBRARY: [&str; 3] = ["movie.recentlyadded.", "show.recentlyadded.", "tv.recentlyadded."];
-    for prefix in PER_LIBRARY {
+    for prefix in super::hub_title::PER_LIBRARY_PREFIXES {
         if let Some(rest) = hub_identifier.strip_prefix(prefix) {
             return rest.parse().ok();
         }
@@ -302,6 +301,12 @@ mod tests {
         assert_eq!(hub_library("custom.collection.x.420.420"), None);
         assert_eq!(hub_library("home.movies.recent"), None, "a whole-server hub spans libraries");
         assert_eq!(hub_library("home.ondeck"), None);
+        // one list of the per-library prefixes: every one `is_recently_added_hub` accepts names its library here
+        for prefix in crate::plex::hub_title::PER_LIBRARY_PREFIXES {
+            let id = format!("{prefix}5");
+            assert!(crate::plex::hub_title::is_recently_added_hub(&id), "{id}");
+            assert_eq!(hub_library(&id), Some(5), "{id}");
+        }
         assert_eq!(hub_library("movie.recentlyadded.x"), None);
     }
 }
