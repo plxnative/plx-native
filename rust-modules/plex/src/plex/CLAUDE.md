@@ -374,6 +374,13 @@ The whole shared-source feature rests on keeping these apart:
   this same route (`SettingsPage::Favourites` — the enum lives in `screens/family.rs`, not
   `screens/settings.rs` — hosting the same screen type). Owner's ruling, 2026-08-21 — "it
   is separate for each profile" — and it hung off the whole `Session` (one per install) before that.
+  **Order is a fourth, separate question** and not a state: Settings' *Library order*
+  (`Preferences::library_order`, rules in `library_order.rs`, per profile, naming libraries by
+  `(machineIdentifier, section key)`) ranks the FAVOURITE libraries across servers and governs
+  exactly two surfaces, the order of Home's shelves (`pms::published_order`) and of the Library
+  header's pills (`DirectoryView::rows_for`). It never changes which libraries are favourites, the
+  tab strip, `section_of_kind`, Search or the Sources picker, and an absent record is the server order
+  (own servers first, then shares, each server's directory order).
 - **reachable** — a fact about NOW: something answered at one of its addresses, *as the right
   machine*. It changes while nobody touches anything, and it is never a reason to forget the grant
   or the pin.

@@ -4665,6 +4665,10 @@ mod hero_pool_tests;
 mod multi_source_merge_tests;
 
 #[cfg(test)]
+#[path = "pms_library_order_tests.rs"]
+mod library_order_tests;
+
+#[cfg(test)]
 #[path = "pms_recent_paging_tests.rs"]
 mod recent_paging_tests;
 
