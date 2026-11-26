@@ -124,3 +124,10 @@ path = "fuzz_targets/owp_json.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "owp_party"
+path = "fuzz_targets/owp_party.rs"
+test = false
+doc = false
+bench = false
