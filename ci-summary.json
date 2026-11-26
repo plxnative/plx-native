@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T23:31:56Z",
+ "generated": "2026-11-26T23:42:24Z",
  "metrics": [
   {
-   "change30_pct": 50.5,
-   "change7_pct": 44.7,
-   "d30": 200,
-   "delta30": 101,
-   "delta7": 93,
+   "change30_pct": 51.1,
+   "change7_pct": 45.7,
+   "d30": 200.5,
+   "delta30": 102.5,
+   "delta7": 95.0,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 71,
+   "n_now": 72,
    "n_prev": 47,
-   "now": 301,
+   "now": 303.0,
    "prev7": 208,
    "shown": true,
    "state": "worse",
@@ -319,10 +319,10 @@
    "unit": "s"
   },
   {
-   "change30_pct": 31.6,
+   "change30_pct": 31.3,
    "change7_pct": 23.2,
-   "d30": 196,
-   "delta30": 62,
+   "d30": 196.5,
+   "delta30": 61.5,
    "delta7": 48.5,
    "group": "ci",
    "id": "ci|host harness tests",
@@ -340,10 +340,10 @@
    "unit": "s"
   },
   {
-   "change30_pct": 14.8,
+   "change30_pct": 14.5,
    "change7_pct": -0.5,
-   "d30": 365.0,
-   "delta30": 54.0,
+   "d30": 366,
+   "delta30": 53.0,
    "delta7": -2.0,
    "group": "ci",
    "id": "pr_wait",
@@ -361,18 +361,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 23.2,
-   "change7_pct": 3.5,
-   "d30": 340,
-   "delta30": 79,
-   "delta7": 14,
+   "change30_pct": 22.7,
+   "change7_pct": 3.3,
+   "d30": 341.0,
+   "delta30": 77.5,
+   "delta7": 13.5,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 77,
+   "n_now": 78,
    "n_prev": 61,
-   "now": 419,
+   "now": 418.5,
    "prev7": 405,
    "shown": true,
    "state": "flat",
@@ -522,8 +522,8 @@
   {
    "change30_pct": 24.1,
    "change7_pct": 7.6,
-   "d30": 2178,
-   "delta30": 525,
+   "d30": 2178.5,
+   "delta30": 524.5,
    "delta7": 191,
    "group": "ci",
    "id": "minutes",
@@ -564,8 +564,8 @@
   {
    "change30_pct": 26.1,
    "change7_pct": 2.7,
-   "d30": 322,
-   "delta30": 84,
+   "d30": 322.0,
+   "delta30": 84.0,
    "delta7": 10.5,
    "group": "ci",
    "id": "ci|armv7 cross-build and artifact assertions",
@@ -585,8 +585,8 @@
   {
    "change30_pct": 15.0,
    "change7_pct": 18.4,
-   "d30": 339,
-   "delta30": 51,
+   "d30": 339.0,
+   "delta30": 51.0,
    "delta7": 60.5,
    "group": "ci",
    "id": "ci|host unit tests (default features)",
@@ -606,16 +606,16 @@
   {
    "change30_pct": 30.6,
    "change7_pct": -1.7,
-   "d30": 265.0,
+   "d30": 265,
    "delta30": 81.0,
-   "delta7": -6,
+   "delta7": -6.0,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 71,
+   "n_now": 72,
    "n_prev": 47,
-   "now": 346,
+   "now": 346.0,
    "prev7": 352,
    "shown": true,
    "state": "flat",
@@ -648,8 +648,8 @@
   {
    "change30_pct": 26.5,
    "change7_pct": 16.0,
-   "d30": 215,
-   "delta30": 57,
+   "d30": 215.0,
+   "delta30": 57.0,
    "delta7": 37.5,
    "group": "ci",
    "id": "ci|host python/shell/C gates",
@@ -667,10 +667,10 @@
    "unit": "s"
   },
   {
-   "change30_pct": -10.9,
+   "change30_pct": -11.1,
    "change7_pct": 10.3,
-   "d30": 288.5,
-   "delta30": -31.5,
+   "d30": 289,
+   "delta30": -32,
    "delta7": 24.0,
    "group": "ci",
    "id": "ci|host unit tests (hostsim)",
@@ -690,8 +690,8 @@
   {
    "change30_pct": 52.1,
    "change7_pct": -4.6,
-   "d30": 165,
-   "delta30": 86,
+   "d30": 165.0,
+   "delta30": 86.0,
    "delta7": -12.0,
    "group": "ci",
    "id": "ci|host lint + type-checks",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 35.6,
-   "change7_pct": 0.0,
-   "d30": 163.0,
-   "delta30": 58.0,
-   "delta7": 0,
+   "change30_pct": 36.8,
+   "change7_pct": 0.9,
+   "d30": 163,
+   "delta30": 60.0,
+   "delta7": 2.0,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 71,
+   "n_now": 72,
    "n_prev": 47,
-   "now": 221,
+   "now": 223.0,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -818,16 +818,16 @@
   {
    "change30_pct": 11.1,
    "change7_pct": 0.0,
-   "d30": 18.0,
+   "d30": 18,
    "delta30": 2.0,
-   "delta7": 0,
+   "delta7": 0.0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 71,
+   "n_now": 72,
    "n_prev": 47,
-   "now": 20,
+   "now": 20.0,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -839,8 +839,8 @@
   {
    "change30_pct": 0.0,
    "change7_pct": 0.0,
-   "d30": 5,
-   "delta30": 0,
+   "d30": 5.0,
+   "delta30": 0.0,
    "delta7": 0.0,
    "group": "ci",
    "id": "ci|which gates apply",
@@ -860,8 +860,8 @@
   {
    "change30_pct": 0.0,
    "change7_pct": 0.0,
-   "d30": 3.0,
-   "delta30": 0.0,
+   "d30": 3,
+   "delta30": 0,
    "delta7": 0.0,
    "group": "ci",
    "id": "ci|cross-build (armv7) + artifact assertions",
@@ -881,8 +881,8 @@
   {
    "change30_pct": 0.0,
    "change7_pct": 0.0,
-   "d30": 3.0,
-   "delta30": 0.0,
+   "d30": 3,
+   "delta30": 0,
    "delta7": 0.0,
    "group": "ci",
    "id": "ci|host checks (NOT a device gate)",
@@ -923,13 +923,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 44.7,
+   "change_pct": 45.7,
    "commits": [
-    {
-     "pr": 1560,
-     "sha": "5c1274eff",
-     "title": "URI engine: a title that played to its end no longer blocks the next play"
-    },
     {
      "pr": 1547,
      "sha": "91c523a7c",
@@ -974,6 +969,11 @@
      "pr": 1580,
      "sha": "cf8bd26b8",
      "title": "Live TV: the number-entry panel is glass over the app's pages"
+    },
+    {
+     "pr": 1581,
+     "sha": "1e8cff3d2",
+     "title": "ui: the Resume pill's rail takes the min-width slack, not its ends"
     }
    ],
    "from": 208,
@@ -981,16 +981,11 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-26",
    "threshold_pct": 20.0,
-   "to": 301
+   "to": 303.0
   },
   {
    "change_pct": 23.2,
    "commits": [
-    {
-     "pr": 1560,
-     "sha": "5c1274eff",
-     "title": "URI engine: a title that played to its end no longer blocks the next play"
-    },
     {
      "pr": 1547,
      "sha": "91c523a7c",
@@ -1035,6 +1030,11 @@
      "pr": 1580,
      "sha": "cf8bd26b8",
      "title": "Live TV: the number-entry panel is glass over the app's pages"
+    },
+    {
+     "pr": 1581,
+     "sha": "1e8cff3d2",
+     "title": "ui: the Resume pill's rail takes the min-width slack, not its ends"
     }
    ],
    "from": 209.5,
@@ -1069,7 +1069,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 346
+   "now": 346.0
   },
   {
    "group": "ci",
