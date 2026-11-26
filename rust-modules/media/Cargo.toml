@@ -44,7 +44,7 @@ lab-diagnostics = []
 # directory, the settled route start). Enabled from the dependents' `[dev-dependencies]`; never in a
 # shipped build.
 # The caption path of a URI driver that hands the selected subtitle's cues to the app (`UriDriver::delivers_captions`,
-# `player::uri_captions`): only the Tizen build composes such a driver (`plx_platform_tizen`'s `uri` enables it), so the
+# `player::uri_captions`): only the Tizen build composes such a driver (`plx_platform_tizen`'s `tizen` enables it), so the
 # webOS binary does not carry it. The crate's own tests get it through the self dev-dependency below, and
 # `test-support` turns it on for the dependents' tests.
 uri-captions = []
