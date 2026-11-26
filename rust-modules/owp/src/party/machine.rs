@@ -1311,8 +1311,8 @@ impl Party {
                     let mut seq = vec![Work::RefreshPlayer];
                     if let (Some(before), Some(seat)) = (&before, self.phase.seat()) {
                         let (joined, left) = view::joined_and_left(before, &seat.room);
-                        effects.extend(joined.into_iter().map(|peer_id| PartyEffect::Event(PartyEvent::ParticipantJoined { peer_id })));
-                        effects.extend(left.into_iter().map(|peer_id| PartyEffect::Event(PartyEvent::ParticipantLeft { peer_id })));
+                        effects.extend(joined.into_iter().map(|participant| PartyEffect::Event(PartyEvent::ParticipantJoined { participant })));
+                        effects.extend(left.into_iter().map(|participant| PartyEffect::Event(PartyEvent::ParticipantLeft { participant })));
                     }
                     seq.push(Work::SendStatus);
                     if let Some(file) = resend {
@@ -1383,8 +1383,8 @@ impl Party {
                     seq.push(Work::RefreshPlayer);
                     let Some(seat) = self.phase.seat() else { continue };
                     let (joined, left) = view::joined_and_left(&before, &seat.room);
-                    let mut events: Vec<PartyEvent> = joined.into_iter().map(|peer_id| PartyEvent::ParticipantJoined { peer_id }).collect();
-                    events.extend(left.into_iter().map(|peer_id| PartyEvent::ParticipantLeft { peer_id }));
+                    let mut events: Vec<PartyEvent> = joined.into_iter().map(|participant| PartyEvent::ParticipantJoined { participant }).collect();
+                    events.extend(left.into_iter().map(|participant| PartyEvent::ParticipantLeft { participant }));
                     if let Some((kind, by_peer_id)) = action {
                         let by = by_peer_id.clone().filter(|peer| view::has_peer(&seat.room, peer));
                         let by_me = by_peer_id.as_deref() == Some(seat.session.peer_id.as_str());

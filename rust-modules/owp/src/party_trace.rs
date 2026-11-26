@@ -718,8 +718,8 @@ fn event_json(event: PartyEvent) -> Json {
             ("byMe", Json::Bool(by_me)),
             ("room", Json::Int(rev)),
         ]),
-        PartyEvent::ParticipantJoined { peer_id } => object(vec![("type", string("participantJoined")), ("peerId", string(&peer_id))]),
-        PartyEvent::ParticipantLeft { peer_id } => object(vec![("type", string("participantLeft")), ("peerId", string(&peer_id))]),
+        PartyEvent::ParticipantJoined { participant } => object(vec![("type", string("participantJoined")), ("peerId", field(&participant, "peerId").clone())]),
+        PartyEvent::ParticipantLeft { participant } => object(vec![("type", string("participantLeft")), ("peerId", field(&participant, "peerId").clone())]),
         PartyEvent::Error { error } => object(vec![("type", string("error")), ("code", string(&error.code)), ("re", opt_string(error.re.as_deref()))]),
         PartyEvent::ResolveFailed { timeout } => object(vec![("type", string("resolveFailed")), ("timeout", Json::Bool(timeout))]),
         PartyEvent::PlayBlocked => object(vec![("type", string("playBlocked"))]),
@@ -947,6 +947,27 @@ fn a_name_the_send_checks_refuse_fails_create_with_invalid_message() {
     party.step(PartyInput::Net { at: at(0), conn, event: NetEvent::Opened }, &mut effects);
     assert!(!effects.iter().any(|effect| matches!(effect, PartyEffect::Send { text, .. } if text.is_empty() || text.contains("\"create\""))), "{effects:?}");
     assert!(effects.iter().any(|effect| matches!(effect, PartyEffect::Done { call: 1, outcome: Outcome::Failed(error) } if error.code == "invalid_message")), "{effects:?}");
+}
+
+#[test]
+fn participant_events_carry_the_entry_and_a_leave_the_last_known_one() {
+    let mut driver = driver_after(0, 2);
+    let conn = driver.conn_for(None).expect("member connection");
+    let room = |rev: i64, ben: &str| {
+        format!(
+            r#"{{"type":"room","rev":{rev},"code":"K7MQ2X","epoch":0,"phase":"idle","positionMs":0,"atMs":1000000,"rate":1,"control":"host","locked":false,"waitingOn":[],"participants":[{{"peerId":"ann","name":"Ann","client":"Example/1.0","host":true,"connected":true,"player":"idle","match":null,"offsetMs":0}}{ben}]}}"#
+        )
+    };
+    let ben = r#",{"peerId":"ben","name":"Ben","client":"Example/1.0","host":false,"connected":true,"player":"idle","match":null,"offsetMs":0}"#;
+    let events = |driver: &mut Driver, message: String| {
+        let mut effects = Vec::new();
+        driver.party.step(PartyInput::Net { at: driver.at(), conn, event: NetEvent::Text(message) }, &mut effects);
+        effects.into_iter().filter_map(|effect| if let PartyEffect::Event(event) = effect { Some(event) } else { None }).collect::<Vec<_>>()
+    };
+    let joined = events(&mut driver, room(2, ben));
+    assert!(matches!(joined.as_slice(), [PartyEvent::ParticipantJoined { participant }] if text(participant, "name").as_deref() == Some("Ben")), "{joined:?}");
+    let left = events(&mut driver, room(3, ""));
+    assert!(matches!(left.as_slice(), [PartyEvent::ParticipantLeft { participant }] if text(participant, "name").as_deref() == Some("Ben")), "{left:?}");
 }
 
 #[test]

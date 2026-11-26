@@ -176,8 +176,8 @@ pub enum Outcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PartyEvent {
     Action { kind: String, by_peer_id: Option<String>, by: Option<String>, by_me: bool, rev: i64 },
-    ParticipantJoined { peer_id: String },
-    ParticipantLeft { peer_id: String },
+    ParticipantJoined { participant: Json },
+    ParticipantLeft { participant: Json },
     Error { error: PartyError },
     ResolveFailed { timeout: bool },
     PlayBlocked,

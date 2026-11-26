@@ -55,11 +55,11 @@ pub fn everyone_controls(room: &Json) -> bool {
     text(room, "control").as_deref() == Some("everyone")
 }
 
-pub fn joined_and_left(before: &Json, after: &Json) -> (Vec<String>, Vec<String>) {
+pub fn joined_and_left(before: &Json, after: &Json) -> (Vec<Json>, Vec<Json>) {
     let had = peer_ids(before);
     let has = peer_ids(after);
-    let joined = has.iter().filter(|peer| !had.contains(peer)).cloned().collect();
-    let left = had.iter().filter(|peer| !has.contains(peer)).cloned().collect();
+    let joined = entries(after).iter().filter(|entry| text(entry, "peerId").is_some_and(|peer| !had.contains(&peer))).cloned().collect();
+    let left = entries(before).iter().filter(|entry| text(entry, "peerId").is_some_and(|peer| !has.contains(&peer))).cloned().collect();
     (joined, left)
 }
 
