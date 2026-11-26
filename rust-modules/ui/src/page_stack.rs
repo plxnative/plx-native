@@ -68,6 +68,20 @@ impl<P: Copy, R> PageStack<P, R> {
         self.saved.last().map(|s| s.page)
     }
 
+    /// The page pushed at depth `i` (`0` = the first above the root).
+    pub fn page_at(&self, i: usize) -> Option<P> {
+        self.saved.get(i).map(|s| s.page)
+    }
+
+    /// Pop every page from depth `depth` up; the FIRST popped (the one that opened the page `depth`
+    /// restores), `None` when nothing is above `depth`.
+    pub fn truncate(&mut self, depth: usize) -> Option<Saved<P, R>> {
+        if depth >= self.saved.len() {
+            return None;
+        }
+        self.saved.drain(depth..).next()
+    }
+
     /// The first page pushed (what a pop-to-root restores), `None` at the root.
     pub fn first(&self) -> Option<&Saved<P, R>> {
         self.saved.first()
