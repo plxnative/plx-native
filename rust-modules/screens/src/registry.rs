@@ -1783,6 +1783,9 @@ pub enum AppMsg {
     /// launched from, which is covered while the player is up. The page keeps it and seats the channel's card when it
     /// is restored: its Recent tile, else the row it belongs to. Named by identity (server, DVR, key).
     LiveTvSeat { sid: plx_plex::plex::ServerId, dvr: String, channel: String },
+    /// **The app took no request for the tune the player asked for** (`PlayerReq::Tune`): its zap ends on this word, not
+    /// on an inference from timing.
+    LiveTuneRefused,
     PlayerFollowRow { slot: plx_appkit::player_hud::ControlSlot, now: u32 },
     PlayerCancelNext { decline: bool },
     PlayerHudCommand { command: plx_appkit::player_hud::command::HudCommand, now: u32 },

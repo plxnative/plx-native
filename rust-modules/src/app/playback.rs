@@ -543,8 +543,10 @@ fn tune_live_channel(
         start_playback(&mut player.session, pa, 0, Origin::Here, HUD_LINGER_MS, None, pages, bridge);
     } else {
         // The retune took no request (a resolve still in flight, or a route that refused it): the
-        // old channel has already been stopped, so this is a failed change, not an ignored one.
+        // old channel has already been stopped, so this is a failed change, not an ignored one. The page is told, so
+        // its zap ends on the refusal and not on a guess from timing.
         log(&refused);
+        super::bridge::send_player_message(pages, plx_screens::registry::AppMsg::LiveTuneRefused);
     }
 }
 

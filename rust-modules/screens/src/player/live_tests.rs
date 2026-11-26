@@ -8,7 +8,7 @@ use plx_machine::machine::{Cx, Edge, Effects, Fx, Handled, InputEvent, InputKind
 use plx_media::player::PlaybackState;
 use plx_ui::consts::{
     SDLK_DOWN, SDLK_LEFT, SDLK_PAGEDOWN, SDLK_PAGEUP, SDLK_RETURN, SDLK_RIGHT, SDLK_UP, WCODE_BACK, WCODE_CH_DOWN_KEY,
-    WCODE_CH_UP_KEY, WCODE_FASTFORWARD, WCODE_STOP,
+    WCODE_CH_UP_KEY, WCODE_FASTFORWARD, WCODE_REWIND, WCODE_STOP,
 };
 use plx_ui::fixture::FixtureMeasure;
 use zap::{Art, Banner, Zap};
@@ -258,7 +258,7 @@ fn a_single_back_leaves_at_every_phase() {
 #[test]
 fn left_right_and_ok_show_the_banner_and_open_nothing() {
     let _g = plx_base::testlock::serial();
-    for (sym, wcode) in [(SDLK_LEFT, 0), (SDLK_RIGHT, 0), (SDLK_RETURN, 0), (0, WCODE_FASTFORWARD)] {
+    for (sym, wcode) in [(SDLK_LEFT, 0), (SDLK_RIGHT, 0), (SDLK_RETURN, 0), (0, WCODE_FASTFORWARD), (0, WCODE_REWIND)] {
         let (ps, mut page) = live(101, PlaybackState::Playing);
         frames(&ps, &mut page, 0, 64);
         // long after the banner's time is up and it has faded
@@ -277,18 +277,50 @@ fn left_right_and_ok_show_the_banner_and_open_nothing() {
     }
 }
 
-/// The banner rises on every tune, not only on a press: the first frame of a channel, and each channel landed on.
+/// The banner rises on every tune, not only on a press: with the page, and on each stream the app starts (`PlayerStart`).
 #[test]
 fn the_banner_rises_on_every_tune() {
     let _g = plx_base::testlock::serial();
     let (ps, mut page) = live(101, PlaybackState::Playing);
-    assert_eq!(page.live.banner, Banner::Hidden);
+    assert_eq!(page.live.banner, Banner::Entering, "raised with the page, before the screen has a clock");
     tick(&ps, &mut page, 100);
     assert_eq!(page.live.banner, Banner::Shown { until: 100 + plx_appkit::player_hud::live::SHOW_MS });
-    // another channel lands later
+    // the app starts another stream later: its word, not a poll of the session, raises the banner
     let (other, _) = live(103, PlaybackState::Playing);
     tick(&other, &mut page, 9_000);
-    assert_eq!(page.live.banner, Banner::Shown { until: 9_000 + plx_appkit::player_hud::live::SHOW_MS });
+    assert_eq!(page.live.banner, Banner::Shown { until: 100 + plx_appkit::player_hud::live::SHOW_MS }, "a channel change nobody announced raises nothing");
+    run(&other, &mut page, 9_016, ScreenEvent::App(AppMsg::PlayerStart { now: 9_016, hud_ms: input::HUD_LINGER_MS }));
+    assert_eq!(page.live.banner, Banner::Shown { until: 9_016 + plx_appkit::player_hud::live::SHOW_MS });
+}
+
+/// **Up then Down inside the window is no zap at all**: the target is back on the channel playing, so the window
+/// closes on nothing, and the session is not stopped and restarted.
+#[test]
+fn up_then_down_inside_the_window_asks_for_no_tune() {
+    let _g = plx_base::testlock::serial();
+    let (ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    down(&ps, &mut page, SDLK_UP, 0, 1_000);
+    down(&ps, &mut page, SDLK_DOWN, 0, 1_100);
+    assert_eq!(shown(&ps, &page).as_deref(), Some("101"), "the banner is back on the channel that plays");
+    assert_eq!(frames(&ps, &mut page, 1_116, 2_500), Vec::<PlayerReq>::new(), "no tune for the channel already playing");
+    assert!(page.live.zap.is_idle());
+}
+
+/// A tune the app took no request for ends the zap on the app's word (`AppMsg::LiveTuneRefused`), whatever the timing.
+#[test]
+fn a_refused_tune_ends_the_zap_on_the_apps_word() {
+    let _g = plx_base::testlock::serial();
+    let (ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    down(&ps, &mut page, SDLK_UP, 0, 1_000);
+    let (asked_at, reqs) = until_asked(&ps, &mut page, 1_016);
+    assert_eq!(reqs, vec![tune_of(102)]);
+    // the session still plays 101 with a frame, frame after frame: still tuning
+    frames(&ps, &mut page, asked_at + 16, asked_at + 400);
+    assert!(matches!(page.live.zap, Zap::Tuning { .. }), "no inference from timing");
+    run(&ps, &mut page, asked_at + 416, ScreenEvent::App(AppMsg::LiveTuneRefused));
+    assert!(page.live.zap.is_idle());
 }
 
 /// What the live page does not take stays the page's: the digits (number entry is PR5) and the transport's

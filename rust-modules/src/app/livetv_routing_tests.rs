@@ -165,6 +165,44 @@ fn a_tune_the_server_did_not_admit_joins_no_recent() {
 /// A live play and every zap are noted in Recent once admitted: the first tune joins, a channel tuned
 /// again does not move, and the newest is at the front. A run with nobody seated keeps the row for
 /// the session only (the memory door refuses the write).
+/// **The zap ends on the app's answer, through the real loop**: Up on the live page, the debounce, the `Tune` the app
+/// takes (the session is the target; the zap stands until its frame), and the app's word that it took no request
+/// (`AppMsg::LiveTuneRefused`) ends the zap. Nothing infers the end from timing.
+#[test]
+fn a_zap_key_runs_the_debounce_and_the_app_answers_the_tune() {
+    use plx_screens::player::zap::Zap;
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-zap-answer");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    start_channel(&mut app, &mut now);
+    note_tune(&mut app);
+    // the loop publishes the playback picture before every frame: the page reads the session through it
+    let publish = |app: &mut App| app.runtime.bridge(&mut app.bridge).publish_playback(&app.player.session, true, None);
+    let zap = |app: &App| crate::app::bridge::player(&app.pages).expect("the player page is mounted").zap().clone();
+    publish(&mut app);
+    let keys = super::script_key(Key::Up, Tick { ms: now + 16, dt_us: 16_000 });
+    step(&mut app, &mut now, keys);
+    assert!(matches!(zap(&app), Zap::Pending { .. }), "the press opens a window: {:?}", zap(&app));
+    // the window closes; the app takes the tune (or refuses it) and the page is told either way
+    for _ in 0..(plx_screens::player::zap::DEBOUNCE_MS / 16 + 4) {
+        publish(&mut app);
+        step(&mut app, &mut now, Vec::new());
+    }
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    let Zap::Tuning { target } = zap(&app) else { panic!("the app took the tune, so the zap stands until a frame: {:?}", zap(&app)) };
+    assert_eq!(plx_media::route::live_request(&app.player.session).map(|(_, l)| l.channel.clone()), Some(target.channel.clone()),
+        "the session is the channel the debounce closed on");
+    // the app's word that it took no request ends the zap at once, whatever the clock says
+    crate::app::bridge::send_player_message(&mut app.pages, plx_screens::registry::AppMsg::LiveTuneRefused);
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    assert!(zap(&app).is_idle(), "refused: {:?}", zap(&app));
+}
+
 #[test]
 fn an_admitted_live_play_and_every_zap_are_noted_without_moving_a_known_channel() {
     let _serial = plx_base::testlock::serial();

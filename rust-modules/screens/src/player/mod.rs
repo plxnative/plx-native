@@ -255,6 +255,11 @@ impl PlayerScreen {
         }
     }
 
+    /// The live zap's phase, for a host test that drives the page through the real loop.
+    pub fn zap(&self) -> &zap::Zap {
+        &self.live.zap
+    }
+
     pub fn set_presentation(&mut self, presentation: player_hud::Presentation) {
         self.busy = presentation.busy;
         self.presentation = presentation;
@@ -264,12 +269,7 @@ impl PlayerScreen {
         if self.model.playback_id != model.playback_id {
             self.back_motion = BackMotion::default();
         }
-        let became_live = model.is_live && !self.model.is_live;
         self.model = model;
-        if became_live {
-            self.scrub.cancel();
-            self.hud.nav.focus = self.rest_group();
-        }
     }
 
     fn back_cursor<H: AppLike>(&mut self, change: crate::registry::BackCursorChange, fx: &mut Effects<'_, H>) {
@@ -814,7 +814,13 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 self.auto_skip.resolve(*id, *outcome);
                 Handled::Yes
             }
+            ScreenEvent::App(AppMsg::LiveTuneRefused) => {
+                self.live.refused();
+                fx.invalidate(plx_machine::present::Provenance::Input);
+                Handled::Yes
+            }
             ScreenEvent::App(AppMsg::PlayerStart { now, hud_ms }) => {
+                self.live.started(*now);
                 self.hud = HudState::IDLE;
                 self.scrub = Scrub::IDLE;
                 self.up_next.reset();
@@ -1400,7 +1406,7 @@ impl PlayerScreen {
                 Handled::Yes
             }
             e if e == ELEM_SCRUB => {
-                if self.model.is_live { return Handled::Yes; }
+                if plx_media::route::is_live(ps) { return Handled::Yes; }
                 if let Some(dur) = plx_media::player::duration_ns(ps).filter(|dur| *dur > 0) {
                     self.hud.nav.focus = self.rest_group();
                     self.seat_elem(fx, ELEM_SCRUB);
@@ -1452,7 +1458,7 @@ impl PlayerScreen {
     /// release's job.
     fn handle_drag(&mut self, ps: &plx_media::route::PlaybackSession,
         x: f32, chapters: bool, now: u32) -> Handled {
-        if !self.scrub.drag || self.model.is_live {
+        if !self.scrub.drag || plx_media::route::is_live(ps) {
             return Handled::No;
         }
         if let Some(dur) = plx_media::player::duration_ns(ps).filter(|dur| *dur > 0) {
@@ -2225,23 +2231,12 @@ impl PlayerScreen {
     /// **The order vertical travel follows this frame**: the transport's groups that have a stop, top to bottom as
     /// the layout draws them ([`player_hud::travel::order`]). `chapters` is whether the item has any.
     fn travel_order(&self, chapters: bool) -> player_hud::travel::Order {
-        let order = player_hud::travel::order_content(&self.compiled, self.hud.sections.bits(), self.eff_slot(),
-            chapters && !self.model.is_live, self.model.is_episode, self.model.paused);
-        if !self.model.is_live { return order; }
-        order.retaining(|group| match group {
-            GROUP_ROW => self.live_row_available(),
-            GROUP_TABS => true,
-            _ => false,
-        })
-    }
-
-    fn live_row_available(&self) -> bool {
-        (0..self.row_len(false)).any(|i| self.row_enabled(i as i32))
+        player_hud::travel::order_content(&self.compiled, self.hud.sections.bits(), self.eff_slot(),
+            chapters, self.model.is_episode, self.model.paused)
     }
 
     fn rest_group(&self) -> GroupId {
-        if self.model.is_live { self.travel_order(false).top().unwrap_or(GROUP_TABS) }
-        else { GROUP_SCRUB }
+        GROUP_SCRUB
     }
 
     /// **The control that opened the open section focus is leaving**, when it is in group `into`: where the key
@@ -2271,7 +2266,7 @@ impl PlayerScreen {
 
     /// The rects of the open section's own buttons (Info's two), in the order its group addresses them.
     fn section_rects(&self, chapters: bool) -> Vec<Rect> {
-        if !self.hud.sections.contains(Section::Info) || self.model.is_live {
+        if !self.hud.sections.contains(Section::Info) {
             return Vec::new();
         }
         let Some((state, skip)) = player_hud::geometry::frame_state_content(
@@ -2354,7 +2349,7 @@ impl PlayerScreen {
             return;
         }
         // Chapters needs chapters, and nothing opens over a failure that owns the frame
-        if (section == Section::Chapters && (!chapters || self.model.is_live)) || player_hud::readout_owns_frame(self.busy) {
+        if (section == Section::Chapters && !chapters) || player_hud::readout_owns_frame(self.busy) {
             return;
         }
         let before = self.hud.sections;
@@ -2466,7 +2461,7 @@ impl PlayerScreen {
     /// a pointer event and the caption draw ask for their own.
     fn geometry_for(&self, chapters: bool) -> HudGeometry {
         player_hud::geometry::geometry_content(&self.compiled, self.hud.sections.bits(), self.eff_slot(),
-            chapters && !self.model.is_live, self.model.is_episode, self.model.paused)
+            chapters, self.model.is_episode, self.model.paused)
     }
 
     /// [`Self::geometry_for`] for the content the `Cx` holds.
@@ -2572,9 +2567,12 @@ impl PlayerScreen {
                 reachable: AxisMask::BOTH, edge: [EdgeRule::Stop; 4], extent: self.repair_rect(false, cx.measure).union(self.repair_rect(true, cx.measure)), len, elem: plx_ui::screen::ElemKind::Control });
             return;
         }
+        // A live channel has no transport: no stop of it is declared (its keys are `live_key`'s); the failure
+        // read-out's group below still is.
+        let transport = !plx_media::route::is_live(H::session(cx));
         // A modal section holds the middle of the transport: the scrubber and the row are not on screen, so they
         // have no group (`middle_up`).
-        if self.middle_up() && !self.model.is_live {
+        if transport && self.middle_up() {
             out.push(GroupSpec {
                 id: GROUP_SCRUB,
                 kind: GroupKind::Free,
@@ -2586,7 +2584,7 @@ impl PlayerScreen {
                 elem: plx_ui::screen::ElemKind::Control,
             });
         }
-        if self.middle_up() && (!self.model.is_live || self.live_row_available()) {
+        if transport && self.middle_up() {
             // Every item of whatever occupies the row — the Up Next PAIR included, which is two
             // controls the D-pad walks and so two stops (the compile's `items`).
             let row_len = self.row_len(plx_appkit::chapters_panel::has_chapters(H::metadata(cx))).max(1);
@@ -2608,7 +2606,7 @@ impl PlayerScreen {
         // reports pills only). A package whose openers are discs of the row (the reference's) has none, and its discs are
         // stops of the row group; a group with no stop in the state is not declared, so no step can land on it.
         // `len` reaches the last tab drawn, as the stops are addressed `ELEM_TAB_BASE + tab`.
-        if let (Some(first), Some(last)) = (geo.tabs.iter().flatten().next(), geo.tabs.iter().rposition(Option::is_some)) {
+        if let (true, Some(first), Some(last)) = (transport, geo.tabs.iter().flatten().next(), geo.tabs.iter().rposition(Option::is_some)) {
             out.push(GroupSpec {
                 id: GROUP_TABS,
                 kind: GroupKind::Row { wrap: false },
@@ -2684,7 +2682,7 @@ impl PlayerScreen {
             return Some(Placed { rect, rest_rect: rect, clip: Rect::FULL, index: None });
         }
         let rect = match *key {
-            e if e == ELEM_SCRUB && !self.model.is_live => geo.grab,
+            e if e == ELEM_SCRUB => geo.grab,
             e if let Some(index) = player_hud::row_index(e) => {
                 if !self.row_enabled(index) { return None; }
                 geo.items.get(index as usize).copied().flatten()?
@@ -2801,7 +2799,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
         if self.repair_alert.visible() {
             return matches!(*key, REPAIR_CANCEL | REPAIR_CONFIRM).then_some(GROUP_REPAIR);
         }
-        Self::hud_group_of(*key).filter(|group| !self.model.is_live || *group != GROUP_SCRUB).or_else(|| {
+        Self::hud_group_of(*key).or_else(|| {
             (ELEM_FAILURE_BASE..ELEM_FAILURE_END).contains(key).then_some(GROUP_FAILURE)
         })
     }
@@ -2907,7 +2905,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
         }
         let chapters = plx_appkit::chapters_panel::has_chapters(H::metadata(cx));
         if key == ELEM_SCRUB {
-            return (self.middle_up() && !self.model.is_live).then(|| A11y::new(A11yPath::new().name("scrub"), Role::Button));
+            return self.middle_up().then(|| A11y::new(A11yPath::new().name("scrub"), Role::Button));
         }
         if let Some(i) = player_hud::row_index(key) {
             let at = i as usize;
@@ -2985,7 +2983,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
         let Some(len) = declared.iter().find(|spec| spec.id == g).map(|spec| spec.len) else { return };
         match g {
             GROUP_REPAIR => self.repair_answers().elems(g, out),
-            GROUP_SCRUB if !self.model.is_live => out.push(player_hud::ELEM_SCRUB),
+            GROUP_SCRUB => out.push(player_hud::ELEM_SCRUB),
             GROUP_ROW => out.extend((0..len as i32).filter(|&i| self.row_enabled(i)).map(player_hud::control_elem)),
             GROUP_TABS => out.extend(
                 (0..len).filter(|&i| geo.tabs.get(i).copied().flatten().is_some()).map(|i| player_hud::ELEM_TAB_BASE + i as u32),
@@ -3052,8 +3050,8 @@ impl LogicalState for PlayerScreen {
         });
         c.bool(self.repair_alert.is_open()).bool(self.repair_alert.choice() == plx_ui::decision_alert::Choice::Destructive).u32(self.repair_scroll);
         c.u32(match self.live.zap { zap::Zap::Idle => 0, zap::Zap::Pending { .. } => 1, zap::Zap::Tuning { .. } => 2 })
-            .u32(match self.live.art { zap::Art::Clear => 0, zap::Art::Covering => 1, zap::Art::Fading { .. } => 2, zap::Art::Settled => 3 });
-        c.option(match self.live.banner { zap::Banner::Hidden => None, zap::Banner::Shown { until } => Some(until) }.as_ref(), |c, until| { c.u32(*until); });
+            .u32(match self.live.art { zap::Art::Waiting => 0, zap::Art::Covering => 1, zap::Art::Fading { .. } => 2, zap::Art::Settled => 3 });
+        c.option(match self.live.banner { zap::Banner::Entering => None, zap::Banner::Shown { until } => Some(until) }.as_ref(), |c, until| { c.u32(*until); });
     }
     fn probe(&self, out: &mut String) {
         out.push_str(WORD);
@@ -3088,9 +3086,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Screen<H> for PlayerScreen {
         if self.hud.sections.any() && self.modal() {
             if let Some(latest) = self.hud.sections.latest() {
                 let group = Sections::group_of(latest);
-                if !self.model.is_live || order.groups().contains(&group) {
-                    out.push(Link { from: GROUP_TABS, dir: order.toward_page(), to: group });
-                }
+                out.push(Link { from: GROUP_TABS, dir: order.toward_page(), to: group });
             }
             return;
         }
@@ -3101,7 +3097,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Screen<H> for PlayerScreen {
     /// `draw`'s own (`hud_drawn` and the transport's middle).
     fn prepare(&mut self, _b: &mut Budget, cx: &Cx<'_, H>) {
         let ps = H::session(cx);
-        if !self.model.is_live && self.middle_up() && self.hud_drawn(ps, cx.tick.ms) {
+        if self.middle_up() && self.hud_drawn(ps, cx.tick.ms) {
             // `model` is the app's snapshot of the PREVIOUS frame, and a held scrub moves the
             // target by seconds a frame: the one field the page already holds fresher (its `Tick`
             // ran before this pass), so the prewarm and the draw agree on it.
@@ -3803,7 +3799,7 @@ pub(crate) mod step_ladder_tests {
         let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
         page.hud.until = 5_000;
         let at = |page: &mut PlayerScreen, ps: &plx_media::route::PlaybackSession, unix_s: Option<i64>, offset: i32| {
-            page.set_model(HudModel { is_live: true, wall: unix_s.map(|unix_s| plx_ui::fmt::Wall::from_secs(unix_s, offset)), ..Default::default() });
+            page.set_model(HudModel { wall: unix_s.map(|unix_s| plx_ui::fmt::Wall::from_secs(unix_s, offset)), ..Default::default() });
             assert_eq!(page.hud_up(ps, 1_000), !plx_media::route::is_live(ps), "a live channel has no transport: the banner's words are what move");
             page.clock_fingerprint(ps, 1_000)
         };
@@ -4137,19 +4133,16 @@ pub(crate) mod step_ladder_tests {
     }
 
     #[test]
-    fn live_hud_keeps_info_and_has_no_seek_or_library_settings_targets() {
+    fn a_live_channel_declares_no_transport_stop_and_seeks_nothing() {
         let _g = plx_base::testlock::serial();
         let mut session = plx_media::route::PlaybackSession::IDLE;
         plx_media::route::mark_live_for_test(&mut session);
         let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
-        page.set_model(HudModel { is_live: true, duration_ns: 60_000_000_000, ..Default::default() });
+        page.set_model(HudModel { duration_ns: 60_000_000_000, ..Default::default() });
         let cx = cx_over(&session);
         let mut groups = Vec::new();
         page.groups(&cx, &mut groups);
-        assert!(groups.iter().any(|group| group.id == GROUP_TABS));
-        assert!(!groups.iter().any(|group| matches!(group.id, GROUP_ROW | GROUP_SCRUB)));
-        assert!(page.a11y(&player_hud::ELEM_SCRUB, &cx).is_none());
-        assert!(page.a11y(&player_hud::ELEM_TAB_BASE, &cx).is_some());
+        assert!(!groups.iter().any(|group| matches!(group.id, GROUP_ROW | GROUP_SCRUB | GROUP_TABS)), "no transport group: {groups:?}");
         for wcode in [consts::WCODE_FASTFORWARD, consts::WCODE_REWIND] {
             let (_, requests) = press_over(&session, &mut page, 0, wcode, Edge::Down);
             assert!(requests.is_empty());

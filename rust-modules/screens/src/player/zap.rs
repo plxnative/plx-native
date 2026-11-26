@@ -9,15 +9,18 @@
 //!
 //! ```text
 //!   Idle --Step--> Pending{target, last} --Step--> Pending{target', now}   (the window restarts)
-//!   Pending --Tick, DEBOUNCE_MS after the last press--> Tuning{target}  + Effect::Tune(target)
+//!   Pending --Tick, DEBOUNCE_MS after the last press, target is not what plays--> Tuning{target}  + Effect::Tune(target)
+//!   Pending --Tick, DEBOUNCE_MS after the last press, target IS what plays--> Idle   (Up then Down: nothing to retune)
 //!   Tuning --Step--> Pending{next of target, now}     (a press after the tune fired: a new window)
 //!   Tuning --Session: the session plays target and its first frame is up--> Idle
-//!   Tuning --Session: the session plays something else, a frame later--> Idle   (the tune was refused)
+//!   Tuning --Refused: the app took no request for the tune (AppMsg::LiveTuneRefused)--> Idle
+//!   Pending | Tuning --Cancel: BACK / STOP, the viewer is leaving--> Idle
 //! ```
 //!
 //! [`Art`] is the picture drawn over the video plane's hole until a first frame exists: covering from the
 //! first press (owner decision Q10) through the debounce and the tune until the first frame, fading out
-//! then. It is told only whether the picture is wanted now; the fade is its own.
+//! then. It is told one [`ArtEvent`] a frame (a zap in flight, a stream with no frame, a frame); the fade is
+//! its own, and once a frame has been shown a later stall never brings it back.
 use plx_data::livetv::Channel;
 
 /// How long after the last press the stream starts (SPEC-4).
@@ -38,8 +41,8 @@ pub enum Zap {
     Idle,
     /// presses are being collected; `last` is the time of the latest
     Pending { target: Channel, last: u32 },
-    /// the tune was asked for at `asked`; the target stands until the session shows it
-    Tuning { target: Channel, asked: u32 },
+    /// the tune was asked for; the target stands until the session shows it (or the app refuses it)
+    Tuning { target: Channel },
 }
 
 /// What happened to the machine.
@@ -47,10 +50,15 @@ pub enum Zap {
 pub enum ZapEvent<'a> {
     /// ▲ / CH+ (`dir` +1) or ▼ / CH- (-1) at `now`, over `lineup` (in number order), the session playing `playing`
     Step { dir: i32, lineup: &'a [Channel], playing: Option<&'a Channel>, now: u32 },
-    /// time passing
-    Tick { now: u32 },
+    /// time passing; `playing` is what the session plays, so a window that closes on the channel already playing
+    /// asks for nothing
+    Tick { now: u32, playing: Option<&'a Channel> },
     /// what the session plays and whether its first frame is up
-    Session { playing: Option<&'a Channel>, framed: bool, now: u32 },
+    Session { playing: Option<&'a Channel>, framed: bool },
+    /// the app took no request for the tune it was asked for (`AppMsg::LiveTuneRefused`)
+    Refused,
+    /// the viewer is leaving (BACK / STOP): no tune may follow
+    Cancel,
 }
 
 /// What the screen must do.
@@ -86,22 +94,35 @@ impl Zap {
                 *self = Zap::Pending { target: lineup[next].clone(), last: now };
                 ZapEffect::None
             }
-            ZapEvent::Tick { now } => match self {
+            ZapEvent::Tick { now, playing } => match self {
                 Zap::Pending { target, last } if now.wrapping_sub(*last) >= DEBOUNCE_MS => {
+                    if playing.is_some_and(|c| same(c, target)) {
+                        // stepped away and back inside the window: the channel is the one already playing
+                        *self = Zap::Idle;
+                        return ZapEffect::None;
+                    }
                     let target = target.clone();
-                    *self = Zap::Tuning { target: target.clone(), asked: now };
+                    *self = Zap::Tuning { target: target.clone() };
                     ZapEffect::Tune(target)
                 }
                 _ => ZapEffect::None,
             },
-            ZapEvent::Session { playing, framed, now } => {
-                if let Zap::Tuning { target, asked } = self {
-                    let landed = playing.is_some_and(|c| same(c, target));
-                    // refused: a frame after the ask the session still plays another channel
-                    if (landed && framed) || (!landed && now.wrapping_sub(*asked) > 0) {
+            ZapEvent::Session { playing, framed } => {
+                if let Zap::Tuning { target } = self {
+                    if framed && playing.is_some_and(|c| same(c, target)) {
                         *self = Zap::Idle;
                     }
                 }
+                ZapEffect::None
+            }
+            ZapEvent::Refused => {
+                if matches!(self, Zap::Tuning { .. }) {
+                    *self = Zap::Idle;
+                }
+                ZapEffect::None
+            }
+            ZapEvent::Cancel => {
+                *self = Zap::Idle;
                 ZapEffect::None
             }
         }
@@ -111,9 +132,10 @@ impl Zap {
 /// The art ground's phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Art {
-    /// nothing drawn, and the stream has shown no frame yet since the tune (the state a page opens in)
+    /// the page's first state: nothing drawn, and the stream has shown no frame since the tune. A stream that stays
+    /// frameless covers; one that shows a frame settles.
     #[default]
-    Clear,
+    Waiting,
     /// the picture is wanted: drawn whole
     Covering,
     /// the picture is no longer wanted: fading out since `since`
@@ -123,38 +145,48 @@ pub enum Art {
     Settled,
 }
 
+/// What the screen tells [`Art`] each frame: exactly one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtEvent {
+    /// a zap is in flight: its art stands over the hole whatever the stream says
+    Zapping,
+    /// the session has no picture on the panel (a stream still starting, or stalled)
+    NoFrame,
+    /// the session shows a frame
+    Frame,
+}
+
 impl Art {
-    /// One step: `zapping` is whether a zap is in flight (its art stands over the hole whatever the stream says);
-    /// `no_frame` is whether the session has no picture on the panel (a stream still starting, or stalled). Only a
-    /// stream that has NEVER shown a frame since the tune is covered for lacking one: a stall mid-playback is the
-    /// frozen picture's, not the art's.
-    pub fn step(&mut self, zapping: bool, no_frame: bool, now: u32) {
-        *self = match (*self, zapping, no_frame) {
-            (_, true, _) => Art::Covering,
-            (Art::Clear, false, true) => Art::Covering,
-            (Art::Clear, false, false) => Art::Settled,
-            (Art::Covering, false, true) => Art::Covering,
-            (Art::Covering, false, false) => Art::Fading { since: now },
-            (Art::Fading { since }, false, _) if now.wrapping_sub(since) >= ART_FADE_MS => Art::Settled,
-            (other, false, _) => other,
+    /// One step. Only a stream that has NEVER shown a frame since the tune is covered for lacking one: a stall
+    /// mid-playback ([`Art::Settled`] receiving `NoFrame`) is the frozen picture's, not the art's.
+    pub fn step(&mut self, ev: ArtEvent, now: u32) {
+        *self = match (*self, ev) {
+            (_, ArtEvent::Zapping) => Art::Covering,
+            (Art::Waiting, ArtEvent::NoFrame) => Art::Covering,
+            (Art::Waiting, ArtEvent::Frame) => Art::Settled,
+            (Art::Covering, ArtEvent::NoFrame) => Art::Covering,
+            (Art::Covering, ArtEvent::Frame) => Art::Fading { since: now },
+            (Art::Fading { since }, _) if now.wrapping_sub(since) >= ART_FADE_MS => Art::Settled,
+            (other, _) => other,
         };
     }
 
-    /// How much of the picture is drawn at `now`: 1 covering, a linear fade, 0 clear.
+    /// How much of the picture is drawn at `now`: 1 covering, a linear fade, 0 otherwise.
     pub fn alpha(self, now: u32) -> f32 {
         match self {
-            Art::Clear | Art::Settled => 0.0,
+            Art::Waiting | Art::Settled => 0.0,
             Art::Covering => 1.0,
             Art::Fading { since } => (1.0 - now.wrapping_sub(since) as f32 / ART_FADE_MS as f32).clamp(0.0, 1.0),
         }
     }
 }
 
-/// The banner's phase: never shown, or shown until a deadline (then it fades, [`live::FADE_MS`]).
+/// The banner's phase: raised with the page (the screen has no clock yet, so the deadline is stamped by its first
+/// frame), or shown until a deadline (then it fades, [`live::FADE_MS`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Banner {
     #[default]
-    Hidden,
+    Entering,
     Shown { until: u32 },
 }
 
@@ -177,8 +209,6 @@ pub struct Live {
     pub zap: Zap,
     pub art: Art,
     pub banner: Banner,
-    /// the channel the banner was last raised for, by identity (server, DVR, key): a new one is a tune
-    seen: Option<(plx_plex::plex::ServerId, String, String)>,
 }
 
 impl Live {
@@ -186,14 +216,24 @@ impl Live {
     pub fn press(&mut self, dir: i32, o: &Observed<'_>) {
         self.zap.step(ZapEvent::Step { dir, lineup: o.lineup, playing: o.playing, now: o.now });
         if !self.zap.is_idle() {
-            self.art.step(true, o.no_frame, o.now);
+            self.art.step(ArtEvent::Zapping, o.now);
             self.reveal(o.now);
         }
     }
 
     /// BACK / STOP: the viewer is leaving, so no tune may follow the Exit the same frame the debounce would have closed.
     pub fn leave(&mut self) {
-        self.zap = Zap::Idle;
+        self.zap.step(ZapEvent::Cancel);
+    }
+
+    /// The app started a stream on this page (`AppMsg::PlayerStart`: a tune, or a zap landing): the banner is raised.
+    pub fn started(&mut self, now: u32) {
+        self.reveal(now);
+    }
+
+    /// The app took no request for the tune it was asked for (`AppMsg::LiveTuneRefused`).
+    pub fn refused(&mut self) {
+        self.zap.step(ZapEvent::Refused);
     }
 
     /// Raise the banner for [`live::SHOW_MS`] more (Left, Right, OK, a tune, a press).
@@ -204,26 +244,18 @@ impl Live {
     /// One frame: the session's answer to the zap, the art's phase, the banner's on a tune, then the
     /// debounce. Returns the tune to ask for, if the window has just closed.
     pub fn tick(&mut self, o: &Observed<'_>) -> ZapEffect {
-        self.zap.step(ZapEvent::Session { playing: o.playing, framed: !o.no_frame, now: o.now });
-        let was_covering = self.art == Art::Covering;
-        self.art.step(!self.zap.is_idle(), o.no_frame, o.now);
-        // compared in place: a frame allocates nothing, only a tune stores the new identity
-        let changed = match (o.playing, &self.seen) {
-            (Some(c), Some((sid, dvr, key))) => c.sid != *sid || c.dvr != *dvr || c.channel != *key,
-            (None, None) => false,
-            _ => true,
-        };
-        if changed {
-            self.seen = o.playing.map(|c| (c.sid, c.dvr.clone(), c.channel.clone()));
-            if self.seen.is_some() {
-                self.reveal(o.now);
-            }
+        if self.banner == Banner::Entering {
+            self.reveal(o.now);
         }
+        self.zap.step(ZapEvent::Session { playing: o.playing, framed: !o.no_frame });
+        let was_covering = self.art == Art::Covering;
+        let art = if !self.zap.is_idle() { ArtEvent::Zapping } else if o.no_frame { ArtEvent::NoFrame } else { ArtEvent::Frame };
+        self.art.step(art, o.now);
         // the first frame of a tune: the banner's four seconds start when the picture does
         if was_covering && self.art != Art::Covering {
             self.reveal(o.now);
         }
-        self.zap.step(ZapEvent::Tick { now: o.now })
+        self.zap.step(ZapEvent::Tick { now: o.now, playing: o.playing })
     }
 
     /// The channel the banner and the art follow: the zap's target while one stands, else the session's.
@@ -234,7 +266,7 @@ impl Live {
     /// How opaque the banner is at `now`: held while a zap is pending or the picture is not there yet.
     pub fn banner_alpha(&self, now: u32) -> f32 {
         match self.banner {
-            Banner::Hidden => 0.0,
+            Banner::Entering => 1.0,
             Banner::Shown { until } => {
                 plx_appkit::player_hud::live::alpha(now, until, !self.zap.is_idle() || self.art == Art::Covering)
             }
@@ -251,9 +283,9 @@ impl Live {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         let mut mix = |v: u64| h = (h ^ v).wrapping_mul(0x0100_0000_01b3);
         mix(match self.zap { Zap::Idle => 0, Zap::Pending { .. } => 1, Zap::Tuning { .. } => 2 });
-        mix(match self.art { Art::Clear => 0, Art::Covering => 1, Art::Fading { .. } => 2, Art::Settled => 3 });
+        mix(match self.art { Art::Waiting => 0, Art::Covering => 1, Art::Fading { .. } => 2, Art::Settled => 3 });
         let alpha = self.banner_alpha(now);
-        mix(match self.banner { Banner::Hidden => 0, Banner::Shown { .. } => 1 + u64::from(alpha > 0.0) });
+        mix(match self.banner { Banner::Entering => 0, Banner::Shown { .. } => 1 + u64::from(alpha > 0.0) });
         // a fade is a frame per tick for as long as it runs; its start is the deadline passing
         let fading = (alpha > 0.0 && alpha < 1.0) || matches!(self.art, Art::Fading { .. });
         if fading {
@@ -291,12 +323,12 @@ mod tests {
         for now in [1_000, 1_200, 1_400] {
             assert_eq!(zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now }), ZapEffect::None);
             // the window has not elapsed since the latest press
-            assert_eq!(zap.step(ZapEvent::Tick { now: now + 599 }), ZapEffect::None, "at {now}");
+            assert_eq!(zap.step(ZapEvent::Tick { now: now + 599, playing: None }), ZapEffect::None, "at {now}");
         }
         assert_eq!(zap.target().map(|c| c.vcn.as_str()), Some("104"));
-        assert_eq!(zap.step(ZapEvent::Tick { now: 1_400 + DEBOUNCE_MS }), ZapEffect::Tune(ch("104")));
+        assert_eq!(zap.step(ZapEvent::Tick { now: 1_400 + DEBOUNCE_MS, playing: None }), ZapEffect::Tune(ch("104")));
         // the machine tunes once: further ticks ask nothing
-        assert_eq!(zap.step(ZapEvent::Tick { now: 3_000 }), ZapEffect::None);
+        assert_eq!(zap.step(ZapEvent::Tick { now: 3_000, playing: None }), ZapEffect::None);
     }
 
     #[test]
@@ -305,12 +337,12 @@ mod tests {
         let playing = ch("101");
         let mut zap = Zap::default();
         zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now: 0 });
-        assert!(matches!(zap.step(ZapEvent::Tick { now: 600 }), ZapEffect::Tune(_)));
+        assert!(matches!(zap.step(ZapEvent::Tick { now: 600, playing: None }), ZapEffect::Tune(_)));
         // the session still plays 101 (the tune has not landed): the next press steps from the TARGET
         zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now: 700 });
         assert_eq!(zap.target().map(|c| c.vcn.as_str()), Some("103"));
-        assert_eq!(zap.step(ZapEvent::Tick { now: 1_299 }), ZapEffect::None);
-        assert_eq!(zap.step(ZapEvent::Tick { now: 1_300 }), ZapEffect::Tune(ch("103")));
+        assert_eq!(zap.step(ZapEvent::Tick { now: 1_299, playing: None }), ZapEffect::None);
+        assert_eq!(zap.step(ZapEvent::Tick { now: 1_300, playing: None }), ZapEffect::Tune(ch("103")));
     }
 
     #[test]
@@ -339,24 +371,64 @@ mod tests {
         let lineup = lineup();
         let mut zap = Zap::default();
         zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&ch("101")), now: 0 });
-        zap.step(ZapEvent::Tick { now: 600 });
+        zap.step(ZapEvent::Tick { now: 600, playing: None });
         let target = ch("102");
-        zap.step(ZapEvent::Session { playing: Some(&target), framed: false, now: 700 });
+        zap.step(ZapEvent::Session { playing: Some(&target), framed: false });
         assert_eq!(zap.target().map(|c| c.vcn.as_str()), Some("102"), "tuned but no frame yet");
-        zap.step(ZapEvent::Session { playing: Some(&target), framed: true, now: 900 });
+        zap.step(ZapEvent::Session { playing: Some(&target), framed: true });
         assert!(zap.is_idle());
     }
 
     #[test]
-    fn a_tune_the_app_did_not_take_ends_the_zap_a_frame_later() {
+    fn a_tune_the_app_did_not_take_ends_the_zap_on_the_refusal_not_on_timing() {
         let lineup = lineup();
         let old = ch("101");
         let mut zap = Zap::default();
         zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&old), now: 0 });
-        zap.step(ZapEvent::Tick { now: 600 });
-        zap.step(ZapEvent::Session { playing: Some(&old), framed: true, now: 600 });
-        assert!(!zap.is_idle(), "the ask and the session read share a frame: the answer is not in yet");
-        zap.step(ZapEvent::Session { playing: Some(&old), framed: true, now: 617 });
+        zap.step(ZapEvent::Tick { now: 600, playing: Some(&old) });
+        // the session still plays the old channel, frame after frame: nothing ends the zap but the app's word
+        for _ in 0..5 {
+            zap.step(ZapEvent::Session { playing: Some(&old), framed: true });
+        }
+        assert!(matches!(zap, Zap::Tuning { .. }), "no timing inference");
+        zap.step(ZapEvent::Refused);
+        assert!(zap.is_idle());
+        // a refusal when nothing was asked changes nothing
+        zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&old), now: 700 });
+        zap.step(ZapEvent::Refused);
+        assert!(matches!(zap, Zap::Pending { .. }));
+    }
+
+    #[test]
+    fn up_then_down_inside_the_window_retunes_nothing() {
+        let lineup = lineup();
+        let playing = ch("101");
+        let mut zap = Zap::default();
+        zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now: 0 });
+        zap.step(ZapEvent::Step { dir: -1, lineup: &lineup, playing: Some(&playing), now: 100 });
+        assert_eq!(zap.target().map(|c| c.vcn.as_str()), Some("101"), "back on the channel that plays");
+        assert_eq!(zap.step(ZapEvent::Tick { now: 100 + DEBOUNCE_MS, playing: Some(&playing) }), ZapEffect::None);
+        assert!(zap.is_idle(), "the window closed on the playing channel: no tune, no new session");
+        // a full lap of presses lands on it too
+        for now in 1_000..1_004 {
+            zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now });
+        }
+        assert_eq!(zap.step(ZapEvent::Tick { now: 1_004 + DEBOUNCE_MS, playing: Some(&playing) }), ZapEffect::None);
+        assert!(zap.is_idle());
+    }
+
+    #[test]
+    fn cancel_ends_a_pending_or_tuning_zap_and_no_tune_follows() {
+        let lineup = lineup();
+        let playing = ch("101");
+        let mut zap = Zap::default();
+        zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now: 0 });
+        zap.step(ZapEvent::Cancel);
+        assert_eq!(zap.step(ZapEvent::Tick { now: 5_000, playing: Some(&playing) }), ZapEffect::None);
+        assert!(zap.is_idle());
+        zap.step(ZapEvent::Step { dir: 1, lineup: &lineup, playing: Some(&playing), now: 6_000 });
+        zap.step(ZapEvent::Tick { now: 6_600, playing: Some(&playing) });
+        zap.step(ZapEvent::Cancel);
         assert!(zap.is_idle());
     }
 
@@ -364,26 +436,29 @@ mod tests {
     fn the_art_covers_from_the_first_press_and_fades_when_no_longer_wanted() {
         let mut art = Art::default();
         assert_eq!(art.alpha(0), 0.0);
-        art.step(true, false, 10);
+        art.step(ArtEvent::Zapping, 10);
         assert_eq!((art, art.alpha(10)), (Art::Covering, 1.0));
-        art.step(false, false, 100);
+        art.step(ArtEvent::Frame, 100);
         assert_eq!(art, Art::Fading { since: 100 });
         assert!(art.alpha(100 + ART_FADE_MS / 2) > 0.4 && art.alpha(100 + ART_FADE_MS / 2) < 0.6);
-        art.step(false, false, 100 + ART_FADE_MS);
+        art.step(ArtEvent::Frame, 100 + ART_FADE_MS);
         assert_eq!(art, Art::Settled);
         // a stall after the first frame is not the art's: no frame, no zap, still settled
-        art.step(false, true, 5_000);
+        art.step(ArtEvent::NoFrame, 5_000);
         assert_eq!((art, art.alpha(5_000)), (Art::Settled, 0.0));
         // …but a zap covers again
-        art.step(true, false, 6_000);
+        art.step(ArtEvent::Zapping, 6_000);
         assert_eq!(art, Art::Covering);
         // wanted again mid-fade: back to whole at once
         let mut art = Art::Fading { since: 5 };
-        art.step(true, false, 50);
+        art.step(ArtEvent::Zapping, 50);
         assert_eq!(art, Art::Covering);
-        // a stream that has shown nothing yet is covered for lacking a frame
+        // a stream that has shown nothing yet is covered for lacking a frame; one that shows a frame settles
         let mut art = Art::default();
-        art.step(false, true, 0);
+        art.step(ArtEvent::NoFrame, 0);
         assert_eq!(art, Art::Covering);
+        let mut art = Art::default();
+        art.step(ArtEvent::Frame, 0);
+        assert_eq!(art, Art::Settled);
     }
 }
