@@ -712,6 +712,11 @@ pub fn commit_preplay_pick(
 /// audio-only pick does not turn subtitles off.
 pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::PreplayPick) {
     use plx_data::metadata::SubPick;
+    // A pick on no file (`part_id` unknown) names nothing a retry could play: hold nothing, so the
+    // retry keeps carrying the attempt's own pair.
+    if pick.part_id <= 0 {
+        return;
+    }
     let sub_sid = match pick.sub {
         SubPick::Off => 0,
         SubPick::Track(id) => id,

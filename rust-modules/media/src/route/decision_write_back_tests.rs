@@ -1085,6 +1085,22 @@ fn a_preplay_subtitles_off_on_an_episode_puts_off_and_its_memory_rung_draws_none
     assert_eq!(decision.pick, None, "the viewer's Off outranks PMS's still-selected track");
 }
 
+/// **A pick on no file holds nothing** (`hold_pick_for_retry`): a pick whose part is unknown (`0`) names no
+/// file a retry could play, so the retry keeps carrying the attempt's own pair and nothing is held.
+#[test]
+fn a_pick_on_no_file_is_not_held_for_the_retry() {
+    let mut ps = PlaybackSession::default();
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    for part_id in [0, -1] {
+        memory::hold_pick_for_retry(&mut ps, &plx_data::metadata::PreplayPick { part_id, audio_sid: 21, sub: plx_data::metadata::SubPick::Off });
+        assert!(ps.held_pick.is_none(), "part {part_id}: nothing held");
+        let held = current_retry_context(&ps, 0).selection.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+        assert_eq!(held, Some((PART, 11, 12)), "part {part_id}: the retry carries the attempt's own pair");
+    }
+}
+
 /// **A pick on the failure screen is what Try again plays** (`hold_pick_for_retry`): the retry's
 /// selection is the viewer's pair instead of the failed attempt's, Off included; an audio-only pick keeps
 /// the subtitle the attempt stood on; and the request that consumes it clears the hold, so it never
