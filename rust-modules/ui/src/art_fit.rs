@@ -34,8 +34,10 @@
 //! ARMv7 (the strided reads miss the cache more than the arithmetic costs), once per image.
 //!
 //! **A request asks for the copy** ([`BackdropSpec`], carried by the request that names the art:
-//! [`crate::tex::Source::probe`]), so only art a row declares it will contain pays for one: never a
-//! logo, a still, a backdrop or a headshot, and not a Cover row's poster. The copy rides in
+//! [`crate::tex::Source::probe`]), so only art whose request declares a copy pays for one: a poster
+//! under a fit that contains ([`ArtFit::copy_request`]) and the Live TV art ground's programme still
+//! ([`crate::art_ground::SPEC`], a full-screen copy it draws as one quad). Never a logo or a headshot on a row, a
+//! backdrop, or a Cover row's poster. The copy rides in
 //! [`crate::tex::Decoded::backdrop`], is uploaded with the image and lives and dies in the same
 //! cache entry ([`crate::tex::TexCache`]); drawing a tile is two textured quads (one pass when
 //! focused: [`crate::Painter::tex_carded_inset`]) and no render pass. The GPU upscales the copy

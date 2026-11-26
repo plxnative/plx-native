@@ -547,10 +547,10 @@ pub const CONTROL_CAST_FOCUS: [(f32, f32, f32); 2] = [(5.0, 32.0, 0.34), (1.0, 6
 /// MEDIUM gray, deliberately not near-black: the focused-card drop-shadow only reads against a base
 /// this light (on the old near-black 25,25,29 a black shadow had almost nothing to darken).
 pub const SURFACE_APP: [f32; 4] = NEUTRAL_500;
-/// Opaque sheet drawn over the hardware video plane when a detail page scrolls the hero away.
 /// [`SURFACE_APP`] as the bytes a one-texel ground texture carries (the art ground's flat stand-in for art with a
 /// clear ground, [`crate::art_ground::SPEC`]). Pinned equal by a test.
 pub const SURFACE_APP_RGB8: [u8; 3] = [0x2c, 0x2c, 0x2e];
+/// Opaque sheet drawn over the hardware video plane when a detail page scrolls the hero away.
 /// Same stop as [`SURFACE_APP`] so the rising page and the cover are one surface. Different role:
 /// this hides the plane. It is not atmosphere, so [`scrim`] is the wrong token.
 pub const PLANE_COVER: [f32; 4] = SURFACE_APP;
