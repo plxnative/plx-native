@@ -112,6 +112,15 @@ impl NumberEntry {
         }
     }
 
+    /// What the viewer has typed, for the panel to show: [`Self::digits`], except that the digit the panel
+    /// opened with is already on screen before any event has carried it into the machine.
+    pub fn typed(&self) -> String {
+        match self {
+            NumberEntry::Fresh { first } => char::from(b'0' + (*first).min(9)).to_string(),
+            other => other.digits().to_string(),
+        }
+    }
+
     /// The highlighted lineup index while typing and something matches.
     pub fn highlight(&self) -> Option<usize> {
         match self {

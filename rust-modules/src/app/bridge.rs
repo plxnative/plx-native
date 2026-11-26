@@ -4492,6 +4492,26 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor:
     d.request(MachineId::Nav, NavOp::Present(arg));
 }
 
+/// **Present number entry over the live player** (`PlayerReq::OpenChannelEntry`): a `Style::PlayerPanel`, which leaves
+/// the player page live (`surface_policy`: host Live, panel Live), so the video plane keeps presenting under the panel
+/// where a `Sheet` or an `Alert` would freeze the host into the transparent hole. The pick comes back to the player
+/// instance as `AppMsg::LiveChannelPicked`. A second copy of the panel is refused.
+pub(crate) fn open_channel_entry(
+    first: u8,
+    playing: Option<plx_screens::channel_entry_panel::PlayingKey>,
+    d: &mut Dispatcher<AppHost>,
+) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::ChannelEntry(plx_screens::channel_entry_panel::ChannelEntryArg { host, first, playing });
+    let id = plx_ui::screen::ScreenArg::id(&arg);
+    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        return;
+    }
+    d.nav.next_style = Style::PlayerPanel { survives_failure: false };
+    d.request(MachineId::Nav, NavOp::Present(arg));
+}
+
 /// Which player panel owns input right now, if one does.
 pub(crate) fn player_overlay_kind(
     d: &Dispatcher<AppHost>,
