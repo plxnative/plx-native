@@ -89,17 +89,17 @@ use crate::registry::{AppLike, AppMsg, ContentArg, PageMemory};
 use plx_ui::a11y::{A11y, A11yPath};
 use plx_ui::frame::Budget;
 use plx_machine::machine::{
-    Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind,
-    InstanceId, Key, LogicalState, Machine, MachineId, NavOp,
+    Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine,
+    MachineId, NavOp,
 };
 use plx_ui::screen::{
-    Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind,
-    GroupSpec, Hover, HitSource, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step,
-    Stop,
+    At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen,
+    ScreenEvent, Scrim, Step,
 };
-use plx_ui::form::{Form, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::form::{Form, FormSection, RowKey, RowKind};
+use plx_ui::menu::{Class, Event, Host, Keyed, Menu, Out, Page};
 use plx_ui::table::{Badge, Row, TableView};
-use plx_ui::{theme, Rect};
+use plx_ui::Rect;
 
 /// The fields [`AltSourcesScreen::write`] canonicalises, for the recorder's shape pin (§5.4). The
 /// selected ROW is in it deliberately: this panel's UP/DOWN changes nothing else in the app, so
@@ -136,16 +136,6 @@ impl LogicalState for AltSourcesArg {
         out.push_str("alt_sources_arg");
     }
 }
-
-// ---- geometry --------------------------------------------------------------------------------
-
-/// The pinned ~20px corner radius, the item menu's.
-const PANEL_RAD: f32 = 20.0;
-/// How far the panel rises into place, matching those same chip menus. The container's appear
-/// spring drives it now (`DrawFrame::page_alpha` IS `Surface::motion.appear`), so the translate is
-/// applied here rather than by `Popover::painter`; at rest it contributes nothing, which is what
-/// makes a settled capture of this panel byte-identical across the conversion.
-const RISE: f32 = plx_ui::popover::Popover::RISE;
 
 // ---- the model (pure) ------------------------------------------------------------------------
 
@@ -337,25 +327,36 @@ enum Sel {
     Keep,
 }
 
+/// A page-less menu: its root is the only page there is, so no push or pop ever asks for another.
+type AltMenu = Menu<Infallible, AltId, Action>;
+
+/// This panel has no pages: a step that wants one (none can: no row is a Nav row) gets none.
+fn no_pages(_: Option<Infallible>) -> Option<Page<AltId, Action, Infallible>> {
+    None
+}
+
 pub struct AltSourcesScreen {
     entry: EntryId,
     arg: AltSourcesArg,
-    /// The rows the `TableView` and `dests` were built from — the rebuild stamp (module doc).
+    /// The rows the table and its actions were built from — the rebuild stamp (module doc).
     rows: Vec<AltRow>,
-    /// The table and what each row does, replaced together ([`form_for`]).
-    pub form: FormTable<AltId, Action, Infallible>,
+    /// The panel: a sheet hung under or above the pill that opened it, one root page, declared from
+    /// the resolved rows alone ([`form_for`]).
+    menu: AltMenu,
 }
 
 impl AltSourcesScreen {
     pub fn new(entry: EntryId, arg: AltSourcesArg, meta: plx_data::metadata::MetadataView<'_>) -> Self {
-        let mut screen = Self {
-            entry,
-            arg,
-            rows: Vec::new(),
-            form: FormTable::new(plx_ui::table_screen::BAND_BASE),
-        };
+        // rows carry a sub-line — the track menu's size class, not the account popover's
+        let menu = Menu::new(Host::Sheet { anchor: arg.anchor }, Class::Picker, plx_ui::table_screen::BAND_BASE);
+        let mut screen = Self { entry, arg, rows: Vec::new(), menu };
         screen.rebuild(Sel::OnTheCopyYouAreOn, meta);
         screen
+    }
+
+    /// The panel's table and cursor.
+    pub fn form(&self) -> &plx_ui::form::FormTable<AltId, Action, Infallible> {
+        self.menu.form()
     }
 
     /// The rows the store would produce right now, marked against **the server the open PAGE
@@ -389,26 +390,25 @@ impl AltSourcesScreen {
         if matches!(sel_mode, Sel::OnTheCopyYouAreOn) {
             self.rows = self.live_rows(meta);
         }
-        let form = form_for(&self.rows, self.arg.sid, &self.arg.rk);
-        // rows carry a sub-line — the track menu's size class, not the account popover's
-        self.form.table.compact = false;
+        let (rows, sid, rk) = (&self.rows, self.arg.sid, &self.arg.rk);
         match sel_mode {
             // leave the cursor where the user put it — on the same copy, found by identity
             Sel::Keep => {
-                let held = self.form.selected_id().cloned();
-                self.form.set(form, held.as_ref());
+                let mut build = |page: Option<Infallible>| page.is_none().then(|| Page::root(form_for(rows, sid, rk)));
+                self.menu.step(Event::Refresh { keep: None }, &mut build);
             }
             // on the copy you are on (the tick), else the first row
             Sel::OnTheCopyYouAreOn => {
-                let here = self.rows.iter().position(|r| r.checked).map(|pos| AltId::of(&self.rows, pos));
-                self.form.set(form, here.as_ref());
+                let here = rows.iter().position(|r| r.checked).map(|pos| AltId::of(rows, pos));
+                let mut build =
+                    |page: Option<Infallible>| page.is_none().then(|| Page::root(form_for(rows, sid, rk)).initial(here.clone()));
+                self.menu.step(Event::ReplaceRoot { slide: None }, &mut build);
             }
         }
     }
 
     pub fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
-        plx_ui::popover::under_or_above(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
+        self.menu.panel_rect(measure)
     }
 
     fn dismiss<H: AppLike>(&self, fx: &mut Effects<'_, H>) {
@@ -423,8 +423,8 @@ impl AltSourcesScreen {
     /// which need not be the row the cursor was already resting on — the same distinction
     /// `AccountMenuScreen::activate` draws.
     fn commit<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let action = match self.form.index_of_key(RowKey(elem)).and_then(|i| self.form.activate(i)) {
-            Some(plx_ui::form::Activation::Action(action)) => action,
+        let action = match self.menu.step(Event::Ok(elem), &mut no_pages) {
+            Out::Picked(action) => action,
             _ => Action::None,
         };
         self.dismiss(fx);
@@ -439,6 +439,11 @@ impl AltSourcesScreen {
                 ))),
             ));
         }
+    }
+
+    /// The row the focus engine holds on this panel, if any.
+    fn focused<H: AppLike<Memory = PageMemory>>(&self, cx: &Cx<'_, H>) -> Option<u32> {
+        cx.focus.current.filter(|key| key.entry == self.entry).map(|key| key.elem)
     }
 }
 
@@ -461,19 +466,12 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Machine<H>
                 // exactly as `AccountMenuScreen::step` does — `FocusMoved` already keeps the two
                 // in step, this is the belt to its suspenders for a focus change this screen was
                 // not told about directly (a remembered-cursor seat on `Enter`, say).
-                self.form.table.sel = cx
-                    .focus
-                    .current
-                    .filter(|key| key.entry == self.entry)
-                    .and_then(|key| self.form.index_of_key(RowKey(key.elem)))
-                    .map_or(self.form.table.sel, |i| i as i32);
-                self.form.table.update(tick.dt(), self.frame(cx.measure).h);
+                let focus = self.focused(cx);
+                self.menu.step(Event::Tick { dt: tick.dt(), measure: cx.measure, focus }, &mut no_pages);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {
-                if let Some(i) = self.form.index_of_key(RowKey(to.elem)) {
-                    self.form.table.sel = i as i32;
-                }
+                self.menu.step(Event::Focused(to.elem), &mut no_pages);
                 fx.invalidate(plx_machine::present::Provenance::Input);
                 Handled::Yes
             }
@@ -496,17 +494,17 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Machine<H>
             // worked example this module follows). A click BESIDE every registered row stop is a
             // HIT-MAP MISS, and `Style::Compact`'s `on_miss` (`OnMiss::Dismiss`) is what closes
             // the panel — the same "click outside a popover dismisses it" rule this arm used to
-            // implement by hand against raw pointer coordinates.
-            ScreenEvent::Input(input) => match input.kind {
-                InputKind::Key {
-                    key: Key::Back,
-                    edge: Edge::Down,
-                    ..
-                } => {
-                    self.dismiss(fx);
+            // implement by hand against raw pointer coordinates. BACK is the menu's: at its one
+            // page it closes; LEFT is inert here (there is no page to pop) and never closes it.
+            ScreenEvent::Input(input) => match plx_ui::menu::keyed(&input.kind, self.focused(cx)) {
+                Keyed::Event(ev) => {
+                    if self.menu.step(ev, &mut no_pages) == Out::Dismiss {
+                        self.dismiss(fx);
+                    }
                     Handled::Yes
                 }
-                _ => Handled::No,
+                Keyed::Swallow => Handled::Yes,
+                Keyed::Pass => Handled::No,
             },
             _ => Handled::No,
         }
@@ -516,64 +514,26 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Machine<H>
 /// **A single-column `Focusable` over the table's own cursor** (phase 12, D2) — the same shape
 /// `AccountMenuScreen::groups` uses for its own `TableView`: one `GroupKind::Column` of
 /// one `Bare` element per row (OK/click activates on the down edge, never arms a hold —
-/// there is nothing here to hold), `EdgeRule::Stop` on every side since this is a standalone
-/// surface with no page to escape onto, and `place`/`neighbour` read straight off `TableView`'s
-/// own row geometry (`row_frame`, `next_selectable`) rather than a second copy of it.
+/// there is nothing here to hold), UP/DOWN stopping at the ends, and `place`/`neighbour` reading
+/// straight off the menu's own row geometry rather than a second copy of it.
 impl<H: AppLike<Memory = PageMemory>> Focusable<H> for AltSourcesScreen {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        out.push(GroupSpec {
-            id: GroupId(0),
-            kind: GroupKind::Column,
-            seat: Seat::Remembered,
-            reachable: AxisMask::BOTH,
-            edge: [EdgeRule::Stop; 4],
-            extent: self.frame(cx.measure),
-            len: self.form.focusable_len(),
-            elem: ElemKind::Bare,
-        });
+        self.menu.groups(GroupId(0), cx.measure, out);
     }
     fn group_of(&self, elem: &u32, _cx: &Cx<'_, H>) -> Option<GroupId> {
-        self.form.index_of_key(RowKey(*elem)).map(|_| GroupId(0))
+        self.menu.group_of(elem, GroupId(0))
     }
     fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, H>) -> Step<u32> {
-        let delta = match dir {
-            Dir::Up => -1,
-            Dir::Down => 1,
-            _ => return Step::Edge,
-        };
-        match self.form.step_key(RowKey(key.elem), delta) {
-            Some(next) => Step::Move(FocusKey {
-                entry: self.entry,
-                elem: next.0,
-            }),
-            None => Step::Edge,
-        }
+        self.menu.neighbour(self.entry, key, dir)
     }
     fn place(&self, elem: &u32, cx: &Cx<'_, H>, _at: At) -> Option<Placed> {
-        let index = self.form.index_of_key(RowKey(*elem))?;
-        let rect = self.form.table.row_frame(self.frame(cx.measure), index as i32)?;
-        Some(Placed {
-            rect,
-            rest_rect: rect,
-            clip: self.frame(cx.measure),
-            index: Some(index as u32),
-        })
+        self.menu.place(elem, cx.measure)
     }
-    fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
-        if self.group_of(&want.elem, cx).is_some() {
-            want
-        } else {
-            FocusKey {
-                entry: self.entry,
-                elem: self.form.opening_key().map_or(0, |k| k.0),
-            }
-        }
+    fn reconcile(&self, want: FocusKey<u32>, _cx: &Cx<'_, H>) -> FocusKey<u32> {
+        self.menu.reconcile(self.entry, want, GroupId(0))
     }
     fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, H>) -> FocusKey<u32> {
-        FocusKey {
-            entry: self.entry,
-            elem: self.form.selected_key().or_else(|| self.form.opening_key()).map_or(0, |k| k.0),
-        }
+        self.menu.seat(self.entry)
     }
 
     /// **Row `n` is `row.<n>`**, the shared table convention
@@ -581,21 +541,24 @@ impl<H: AppLike<Memory = PageMemory>> Focusable<H> for AltSourcesScreen {
     /// count `GroupSpec::len` states), so a separator or note never shifts an id. The label is the
     /// row's own text, for the state file only. The elements and the inverse are the shared ones.
     fn a11y(&self, elem: &u32, _cx: &Cx<'_, H>) -> Option<A11y<'_>> {
-        let slot = self.form.index_of_key(RowKey(*elem))?;
-        plx_ui::geom::table_a11y(&self.form.table, Some(&self.form), slot)
+        let form = self.menu.form();
+        let slot = form.index_of_key(RowKey(*elem))?;
+        plx_ui::geom::table_a11y(&form.table, Some(form), slot)
     }
     fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<u32>) {
         if g == GroupId(0) {
+            let form = self.menu.form();
             out.extend(
-                plx_ui::geom::table_elems(&self.form.table, Some(&self.form))
-                    .filter_map(|i| self.form.key_at(i))
+                plx_ui::geom::table_elems(&form.table, Some(form))
+                    .filter_map(|i| form.key_at(i))
                     .map(|k| k.0),
             );
         }
     }
     fn a11y_find(&self, path: &A11yPath, _cx: &Cx<'_, H>) -> Option<u32> {
-        let slot = plx_ui::geom::table_a11y_find(&self.form.table, Some(&self.form), path)?;
-        self.form.key_at(slot).map(|k| k.0)
+        let form = self.menu.form();
+        let slot = plx_ui::geom::table_a11y_find(&form.table, Some(form), path)?;
+        form.key_at(slot).map(|k| k.0)
     }
 }
 
@@ -616,8 +579,9 @@ impl LogicalState for AltSourcesScreen {
                 })
                 .bool(r.checked);
         }
-        c.u32(self.form.table.sel as u32);
-        self.form.table.write_motion(c);
+        let table = &self.menu.form().table;
+        c.u32(table.sel as u32);
+        table.write_motion(c);
     }
     fn probe(&self, out: &mut String) {
         out.push_str("alt");
@@ -634,7 +598,9 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Screen<H> 
     fn crumb(&self, _cx: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
     }
-    fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
+    fn prepare(&mut self, _b: &mut Budget, cx: &Cx<'_, H>) {
+        self.menu.prepare(cx.measure);
+    }
     /// The modal dim, asked for rather than drawn. Nothing is lifted back out of it: this picker
     /// hangs under the detail page's Source chip, and the chip is a control that says which copy
     /// is playing rather than the subject of the panel — unlike the card menu's tile or the
@@ -647,52 +613,17 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Screen<H> 
     /// head of the dims from the undimmed page. `ModalStack::draw_scrims` draws it at the end of the PAGE pass,
     /// which is strictly earlier than the surface pass this `draw` runs in, and multiplies by the
     /// appear spring and by `nav::page_alpha` — the second of which the in-`draw` version could
-    /// not reach, `DrawFrame::page_alpha` being the surface's own spring alone.
+    /// not reach, `DrawFrame::page_alpha` being the surface's own spring alone. The weight is the
+    /// menu's: the PANEL role (a picker in the middle of the frame; the page recedes, it is not
+    /// blanked, and the hero behind stays readable).
     fn scrim(&self) -> Scrim {
-        // The PANEL role (`theme::underlay::DIM_PANEL`): a picker in the middle of the frame. The
-        // page recedes; it is not blanked, and the hero behind stays readable.
-        Scrim::dim(theme::underlay::DIM_PANEL)
+        self.menu.scrim()
     }
+    /// The card, its rows and the hit map's stops, all the menu's. Named for `/tmp/plxnative-cpuprof`
+    /// beside the page's own phases, so a slow frame while this panel is up can be read as the PANEL
+    /// or as the host under it.
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        let appear = f.page_alpha;
-        let r = self.frame(f.measure);
-        let p = f.painter.alpha(appear).translate(0.0, RISE * (1.0 - appear));
-        let measure = f.measure;
-        // Named for `/tmp/plxnative-cpuprof` beside the page's own phases, so a slow frame while
-        // this panel is up can be read as the PANEL or as the host under it.
-        let field = f.underlay;
-        plx_ui::profile::phase("dt.alt", || {
-            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
-            self.form.table.draw(p, r, measure);
-        });
-        // The hit map's stops are registered against the SETTLED geometry (`self.frame()`, what
-        // `Focusable::place` answers) rather than the transient slide `p` draws with — at rest
-        // (`appear == 1`) the two coincide exactly (`RISE * (1.0 - appear)` is 0), and only during
-        // the open/close fade would they differ; `ui/hit.rs`'s own module doc already carries the
-        // wider version of this gap (no container feeds a fading surface's alpha into the map
-        // yet), so this keeps the one known edge rather than inventing a second.
-        let hit_p = f.painter.alpha(appear);
-        for index in 0..self.form.table.n_rows() as usize {
-            let Some(elem) = self.form.key_at(index).map(|k| k.0) else {
-                continue;
-            };
-            if let Some(placed) = <Self as Focusable<H>>::place(self, &elem, f.cx, At::Drawn) {
-                f.stop(
-                    hit_p,
-                    Stop {
-                        key: FocusKey {
-                            entry: self.entry,
-                            elem,
-                        },
-                        rect: placed.rect,
-                        rest_rect: placed.rest_rect,
-                        clip: placed.clip,
-                        hover: Hover::Focus,
-                        activate: Activate::Immediate,
-                    },
-                );
-            }
-        }
+        plx_ui::profile::phase("dt.alt", || self.menu.draw(f, self.entry));
     }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page

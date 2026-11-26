@@ -83,6 +83,18 @@ pub fn hero_panel_over(pill: Rect, actions_y: f32, size: (f32, f32)) -> Rect {
     super::popover::cover_opener_clear(pill, size, super::consts::SAFE, actions_y - SYNOPSIS_FOOT_ABOVE_ACTIONS)
 }
 
+/// **The host of every menu or panel that grows out of a Detail hero control** (`menu::Host::Grows`): the
+/// control's focused pill is the glass it morphs from and into, the panel stands OVER it clear of the
+/// synopsis above the action row whenever it fits ([`hero_panel_over`]'s rule), and the close's blob
+/// whitens toward the control's focused face. `anchor` is the control's drawn rect (`[x, y, w, h]` bits).
+pub fn hero_host(anchor: [u32; 4]) -> super::menu::Host {
+    super::menu::Host::Grows {
+        pill: hero_pill(anchor),
+        clear_y: Some(f32::from_bits(anchor[1]) - SYNOPSIS_FOOT_ABOVE_ACTIONS),
+        fill: theme::ACCENT,
+    }
+}
+
 /// **The ONE sizing and placing rule of every panel that grows out of a hero control**: the `…` menu with
 /// its pages, Select Version and Audio & Subtitles. The width is the table's own menu width, never
 /// narrower than the control's pill ([`TableView::menu_panel_width_from`], which honours

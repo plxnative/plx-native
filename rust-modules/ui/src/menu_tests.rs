@@ -456,3 +456,32 @@ fn focus_seats_on_the_cursor_and_the_header_is_never_a_row() {
     let live = plx_machine::machine::FocusKey { entry, elem: Id::Leaf(2).key().0 };
     assert_eq!(m.reconcile(entry, live, g), live);
 }
+
+fn key(key: plx_machine::machine::Key, edge: plx_machine::machine::Edge, at_edge: bool) -> plx_machine::machine::InputKind<()> {
+    plx_machine::machine::InputKind::Key { key, sym: 0, wcode: 0, edge, at_edge }
+}
+
+/// `keyed`: BACK's down edge is `Back`; LEFT and RIGHT are acted on only when re-delivered at the edge and on the
+/// down edge, and swallowed on the up edge; RIGHT with no row focused is swallowed; every other input passes.
+#[test]
+fn keyed_maps_back_left_right_and_passes_the_rest() {
+    use plx_machine::machine::{Edge::*, Key};
+    let ev = |k: Keyed<Id>| match k {
+        Keyed::Event(Event::Back) => "back",
+        Keyed::Event(Event::Left) => "left",
+        Keyed::Event(Event::Right(_)) => "right",
+        Keyed::Event(_) => "other",
+        Keyed::Swallow => "swallow",
+        Keyed::Pass => "pass",
+    };
+    let k = |key_: Key, edge, at_edge, focus| ev(keyed::<(), Id>(&key(key_, edge, at_edge), focus));
+    assert_eq!(k(Key::Back, Down, false, None), "back");
+    assert_eq!(k(Key::Back, Up, false, None), "pass", "only the down edge of BACK is the menu's");
+    assert_eq!(k(Key::Left, Down, true, Some(1)), "left");
+    assert_eq!(k(Key::Right, Down, true, Some(1)), "right");
+    assert_eq!(k(Key::Right, Down, true, None), "swallow", "no row to enter: answered, not dead");
+    assert_eq!(k(Key::Left, Up, true, Some(1)), "swallow");
+    assert_eq!(k(Key::Right, Up, true, Some(1)), "swallow");
+    assert_eq!(k(Key::Left, Down, false, Some(1)), "pass", "a LEFT the engine moved focus with is not ours");
+    assert_eq!(k(Key::Up, Down, true, Some(1)), "pass");
+}

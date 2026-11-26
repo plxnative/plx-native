@@ -70,7 +70,7 @@ use crate::screen::{Activate, DrawFrame, GroupSpec, Hover, Scrim, Stop};
 use crate::table::{TableView, MENU_MAX_W, MENU_MIN_W};
 use crate::widgets::{panel_ground, Ground};
 use crate::{theme, Rect};
-use plx_machine::machine::{EntryId, FocusKey, GroupId, Host as MachineHost, Measure};
+use plx_machine::machine::{Edge, EntryId, FocusKey, GroupId, Host as MachineHost, InputKind, Key, Measure};
 
 /// The ONE corner radius of a menu, whatever its host or class (it was 28, 24, 20 and a per-screen
 /// constant; the Detail hosts all stood on 20, which is the value the Library's menus already have).
@@ -246,6 +246,32 @@ pub enum Event<'a, Id> {
     /// The data a page was built from changed: rebuild it in place, the cursor kept by identity (`keep`,
     /// else where it stands).
     Refresh { keep: Option<Id> },
+}
+
+/// **What a key means to a menu**: BACK, and LEFT / RIGHT (the menu's one group hands both to its host,
+/// [`EdgeRule::Screen`](crate::screen::EdgeRule), so they arrive re-delivered with `at_edge` set). The
+/// ONE place a host reads them: it answers `Handled::Yes` for [`Keyed::Event`] and [`Keyed::Swallow`]
+/// (an unhandled re-delivery is a dead press), and passes [`Keyed::Pass`] on.
+pub enum Keyed<Id> {
+    /// Step the menu with this.
+    Event(Event<'static, Id>),
+    /// Consumed with no effect: a held LEFT or RIGHT must not walk through every page (only the press
+    /// acts), and RIGHT with no row focused has nothing to enter.
+    Swallow,
+    /// Not the menu's key.
+    Pass,
+}
+
+/// Read `kind` for a menu whose focused row key is `focus`.
+pub fn keyed<K, Id>(kind: &InputKind<K>, focus: Option<u32>) -> Keyed<Id> {
+    let InputKind::Key { key, edge, at_edge, .. } = kind else { return Keyed::Pass };
+    match (key, at_edge) {
+        (Key::Back, _) if *edge == Edge::Down => Keyed::Event(Event::Back),
+        (Key::Left | Key::Right, true) if *edge != Edge::Down => Keyed::Swallow,
+        (Key::Left, true) => Keyed::Event(Event::Left),
+        (Key::Right, true) => focus.map_or(Keyed::Swallow, |row| Keyed::Event(Event::Right(row))),
+        _ => Keyed::Pass,
+    }
 }
 
 /// What a step asks of the host.
