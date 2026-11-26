@@ -1,4 +1,6 @@
-//! The What's on page (Live TV's landing page, the handoff's `SPEC-1` / `SPEC-2`): the profile's Recent
+//! Live TV's two pages, one screen: **What's on** (the landing page, the handoff's `SPEC-1` / `SPEC-2`) and **the
+//! Guide** (`SPEC-3`), chosen by the scope row both wear ([`Scope`], the Library's header row: What's on | Guide,
+//! the chosen one on the selected plate). What's on is the profile's Recent
 //! channels on top, the programmes airing now below, and the channels with neither under them: three adjacent
 //! shared card shelves over the store's one lineup. A Recent tile, a programme poster and a Channels tile all ask
 //! the content owner to play their channel. A channel is drawn as one thing wherever it stands, the handoff's
@@ -14,7 +16,19 @@
 //! Which rows the page shows is decided once, by [`Mode`] in `Page::sync`, and matched everywhere after.
 //! The page reads the frame's wall time ([`LiveTvLike::wall`]) for its captions and progress bars, and asks
 //! for a frame when the words of any airing change.
+//!
+//! **The Guide** is one board ([`plx_ui::time_grid::TimeGrid`]) under the scope row: six channels a page against a
+//! 90-minute window that starts at the last half hour, each channel's programmes laid along the time ruler with the
+//! now line down through them. It is one focusable `Custom` section of the page's stack: the board owns the cells,
+//! their travel (LEFT and RIGHT along a row, UP and DOWN to the cell that shares the most time) and the page of
+//! six, and this screen owns what they mean. **OK on what is airing tunes the channel; OK on a later programme
+//! does nothing**; a channel the guide has nothing for is one cell across the window that tunes it. **CH+ and CH-
+//! turn the page by six** (CH+ the next page: it is the next channel, as the live player's is); a digit opens
+//! number entry as on What's on; BACK from the player returns to the left channel's row (`Enter::Restored`).
+//! The window and the page are state of the screen (`Page::board`, rebuilt by `Page::sync` from the store's
+//! revision, the scope and the half hour the frame's wall time is in), never read from a clock at draw.
 use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView};
+use plx_plex::plex::livetv::{window_start, WINDOW_SECONDS};
 use plx_data::stores::{StoreCmd, StoreId};
 use plx_data::stores::livetv::LiveTvCmd;
 use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, Enter, EntryId, FocusKey, FocusTarget,
@@ -27,6 +41,9 @@ use plx_ui::page_regions::{Arrival, BackStep, PageRegions};
 use plx_ui::screen::{AxisMask, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind,
     GroupSpec, HitSource, Link, RenderStrategy, Screen, ScreenEvent, Seat};
 use plx_ui::theme;
+use plx_ui::a11y::A11y;
+use plx_ui::time_grid::{self, Axis, Cell, Span, TimeGrid, Words};
+use plx_ui::widgets::channel_tile;
 use plx_ui::fmt::{self, Airing, AiringPhase, Wall};
 use plx_ui::tile::Resume;
 use plx_ui::widgets::{AmbientWash, Art, PageGround, StatusKind, StatusOverlay};
@@ -43,6 +60,15 @@ const NOW_GROUP: GroupId = GroupId(1);
 const HEAD_GROUP: GroupId = GroupId(2);
 const STATUS_GROUP: GroupId = GroupId(3);
 const CHANNELS_GROUP: GroupId = GroupId(4);
+const GUIDE_GROUP: GroupId = GroupId(5);
+/// The scope row's two stops: What's on, then the Guide.
+const WHATS_ON_ELEM: u32 = 2;
+const GUIDE_ELEM: u32 = 3;
+/// The Guide board's first element: above every card (`FIRST_CARD_ELEM` + two a channel), below the bar's.
+const GUIDE_FIRST_ELEM: u32 = 0x0010_0000;
+/// The Guide section's height: from the ruler to the bottom safe edge, so the document is one screen and
+/// never scrolls (the board's rows end at 932).
+const GUIDE_H: f32 = SCR_H - MARGIN_Y - time_grid::RULER_Y;
 /// A shelf's heading to its tiles as the handoff has it, from the top of the heading's line box (a Home
 /// shelf keeps `TITLE_DY + CARD_DY`, 60). The page's shelves draw their heading at the cap-top, which is
 /// [`heading_ink_drop`] below that line box's top, so each gives its heading that much less.
@@ -59,13 +85,14 @@ const NOW_STYLE: RowStyle = RowStyle::PROGRAMME;
 const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: plx_ui::page_header::GRID_TOP, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - plx_ui::page_header::GRID_TOP - MARGIN_Y };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Sec { Head, Recent, Now, Channels, Status }
+enum Sec { Head, Guide, Recent, Now, Channels, Status }
 
 impl Sec {
     /// The focus group the section's cards (or its retry read-out) stand in.
     const fn group(self) -> GroupId {
         match self {
             Sec::Head => HEAD_GROUP,
+            Sec::Guide => GUIDE_GROUP,
             Sec::Recent => RECENT_GROUP,
             Sec::Now => NOW_GROUP,
             Sec::Channels => CHANNELS_GROUP,
@@ -78,8 +105,38 @@ impl Sec {
         match self {
             Sec::Recent | Sec::Channels => Some(&PLATE_STYLE),
             Sec::Now => Some(&NOW_STYLE),
-            Sec::Head | Sec::Status => None,
+            Sec::Head | Sec::Guide | Sec::Status => None,
         }
+    }
+}
+
+/// **Which of Live TV's two pages shows**: the scope row's selection, the one explicit state a press on the row
+/// changes (`LiveTvScreen::commit`). It is the screen's, not the store's: leaving the page and coming back
+/// keeps it, a fresh page opens on What's on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope { WhatsOn, Guide }
+
+impl Scope {
+    /// The row's stops, left to right.
+    const ALL: [Scope; 2] = [Scope::WhatsOn, Scope::Guide];
+
+    /// The stop's element.
+    const fn elem(self) -> u32 {
+        match self { Scope::WhatsOn => WHATS_ON_ELEM, Scope::Guide => GUIDE_ELEM }
+    }
+
+    fn of_elem(elem: u32) -> Option<Scope> {
+        Self::ALL.into_iter().find(|scope| scope.elem() == elem)
+    }
+
+    /// The stop's accessibility name (`livetv.header.whats_on`).
+    const fn name(self) -> &'static str {
+        match self { Scope::WhatsOn => "whats_on", Scope::Guide => "guide" }
+    }
+
+    /// The canon's discriminant.
+    const fn code(self) -> u32 {
+        match self { Scope::WhatsOn => 0, Scope::Guide => 1 }
     }
 }
 
@@ -110,6 +167,8 @@ enum Mode {
     NowChannels,
     /// Nothing recent and nothing on: the lineup as its Channels shelf, the page's only row.
     ChannelsOnly,
+    /// The Guide's board under the scope row ([`Scope::Guide`] with a lineup and a wall time to lay it against).
+    Guide,
 }
 
 impl Mode {
@@ -140,6 +199,7 @@ impl Mode {
             Mode::RecentNowChannels => &[Sec::Recent, Sec::Now, Sec::Channels],
             Mode::NowChannels => &[Sec::Now, Sec::Channels],
             Mode::ChannelsOnly => &[Sec::Channels],
+            Mode::Guide => &[Sec::Guide],
         }
     }
 
@@ -163,8 +223,94 @@ impl Mode {
     }
 }
 
+/// **Where a Guide cell's words come from**: the channel's airing now, or one of its later programmes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellSrc { Now, Later(usize) }
+
+/// **The Guide's board and what its cells are**: the [`TimeGrid`] (one row a lineup channel, in the lineup's order, so
+/// a row is a channel's index) and, per row, the source of each of its cells. A row with no cell is a channel the
+/// guide has nothing for in the window (the grid's one unscheduled cell).
+struct Board {
+    grid: TimeGrid,
+    cells: Vec<Vec<CellSrc>>,
+}
+
+impl Board {
+    /// The board for `channels` over `axis`, on page `page` (clamped): each channel's airing now and its later
+    /// programmes that stand in the window, in time order.
+    fn build(channels: &[Channel], axis: Axis, page: usize) -> Self {
+        fn push(axis: Axis, span: Span, src: CellSrc, spans: &mut Vec<Span>, cells: &mut Vec<CellSrc>) {
+            if axis.cell(span).is_some() {
+                spans.push(span);
+                cells.push(src);
+            }
+        }
+        let (mut rows, mut cells) = (Vec::with_capacity(channels.len()), Vec::with_capacity(channels.len()));
+        for channel in channels {
+            let (mut spans, mut srcs) = (Vec::new(), Vec::new());
+            if !channel.now.is_empty() {
+                push(axis, Span::new(channel.begins_at, channel.ends_at), CellSrc::Now, &mut spans, &mut srcs);
+            }
+            for (i, later) in channel.later.iter().enumerate() {
+                push(axis, Span::new(later.begins_at, later.ends_at), CellSrc::Later(i), &mut spans, &mut srcs);
+            }
+            rows.push(spans);
+            cells.push(srcs);
+        }
+        Self { grid: TimeGrid::new(axis, rows, GUIDE_FIRST_ELEM).at_page(page), cells }
+    }
+
+    /// The cell's words: its programme's title, or the channel's name for the unscheduled cell.
+    fn title<'a>(&self, channels: &'a [Channel], at: Cell) -> &'a str {
+        let Some(channel) = channels.get(at.row) else { return "" };
+        match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
+            Some(CellSrc::Now) => &channel.now,
+            Some(CellSrc::Later(i)) => channel.later.get(*i).map_or("", |later| later.title.as_str()),
+            None => &channel.name,
+        }
+    }
+
+    /// Does pressing the cell tune the channel? What is airing does, and so does the unscheduled cell; a later
+    /// programme does not. "Airing" is the wall time's, not the read's: a programme that has begun since the read is on.
+    fn tunes(&self, at: Cell, now: i64) -> bool {
+        match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
+            None => self.grid.is_unscheduled(at.row),
+            Some(CellSrc::Now) => true,
+            Some(CellSrc::Later(_)) => self.grid.span(at).is_some_and(|span| span.begins <= now && now < span.ends),
+        }
+    }
+}
+
+/// What a Guide row's sticky cell and cells say: the board's [`time_grid::Content`] over the lineup.
+struct Faces<'a> {
+    channels: &'a [Channel],
+    board: &'a Board,
+}
+
+impl time_grid::Content for Faces<'_> {
+    fn channel(&self, p: plx_ui::Painter, row: usize, at: Rect, _focused: bool) {
+        let Some(channel) = self.channels.get(row) else { return };
+        channel_tile::draw_guide_face(p, at, &channel_tile::Face { sid: channel.sid.raw(), logo: &channel.thumb, number: &channel.vcn, name: &channel.name });
+    }
+
+    fn title(&self, row: usize, index: usize) -> &str {
+        self.board.title(self.channels, Cell { row, index })
+    }
+}
+
+/// What a sync was made from: the store's revision, the scope, and the half hour of the window (only while the
+/// Guide shows: What's on does not rebuild every thirty minutes).
+type SyncKey = (u32, Scope, Option<i64>);
+
 struct Page {
     entry: EntryId,
+    /// Which page shows ([`Scope`]).
+    scope: Scope,
+    /// The Guide's board while [`Mode::Guide`] shows, else `None`.
+    board: Option<Board>,
+    /// How many times a sync or a page turn changed what the sections read: mixed into the stack's revision, so a
+    /// page the board turned is laid out again.
+    epoch: u32,
     /// The lineup, one `(server, key)` per channel in the store's order (the cards' stable identities).
     channels: Vec<(plx_plex::plex::ServerId, String)>,
     /// The channels with a programme on, as indexes into the lineup, in On now's one order: the most recent
@@ -179,7 +325,7 @@ struct Page {
     mode: Mode,
     /// The focus groups of the rows, top to bottom, from [`Mode::rows`].
     content: Vec<GroupId>,
-    synced: Option<u32>,
+    synced: Option<SyncKey>,
     /// What the airings' words and bars were last drawn from ([`Page::clock_stamp`]); not state, a
     /// frame's reason.
     clock: u64,
@@ -190,9 +336,13 @@ struct Page {
 }
 
 impl Page {
-    fn sync(&mut self, view: LiveTvView<'_>) {
-        if self.synced == Some(view.revision()) { return; }
-        self.synced = Some(view.revision());
+    fn sync(&mut self, view: LiveTvView<'_>, wall: Option<Wall>) {
+        // The Guide's window is the half hour the wall time is in; a frame with no clock has none to lay it against.
+        let window = wall.filter(|_| self.scope == Scope::Guide).map(|w| window_start(w.unix_s()));
+        let key = (view.revision(), self.scope, window);
+        if self.synced == Some(key) { return; }
+        self.synced = Some(key);
+        self.epoch = self.epoch.wrapping_add(1);
         self.channels = view.tiles.iter().map(|m| (m.sid, m.rk.clone())).collect();
         self.airings = on_now_order(view.channels);
         // An empty Recent is a row to hide, whatever else the page holds.
@@ -204,16 +354,44 @@ impl Page {
             LiveTvStatus::Loading => Mode::Loading,
             LiveTvStatus::Empty => Mode::Empty,
             LiveTvStatus::Failed => Mode::Failed,
-            LiveTvStatus::Ready if !view.channels.is_empty() => Mode::of(!self.recent.is_empty(), !self.airings.is_empty(), !self.rest.is_empty()),
-            LiveTvStatus::Ready => Mode::Empty,
+            LiveTvStatus::Ready if view.channels.is_empty() => Mode::Empty,
+            // the Guide without a clock is still loading: its window has nothing to start from
+            LiveTvStatus::Ready if self.scope == Scope::Guide => if window.is_some() { Mode::Guide } else { Mode::Loading },
+            LiveTvStatus::Ready => Mode::of(!self.recent.is_empty(), !self.airings.is_empty(), !self.rest.is_empty()),
         };
         self.content = self.mode.rows().iter().map(|k| k.group()).collect();
+        // a rebuilt board keeps the page the reader was on
+        let page = self.board.as_ref().map_or(0, |board| board.grid.page());
+        self.board = window.filter(|_| self.mode == Mode::Guide)
+            .map(|start| Board::build(view.channels, Axis::new(start, WINDOW_SECONDS), page));
+    }
+
+    /// **The page follows the focus**: show the page `elem`'s row is on. `true` when that turned the page.
+    fn follow(&mut self, elem: u32) -> bool {
+        let Some(board) = self.board.as_mut() else { return false };
+        let Some(cell) = board.grid.locate(elem) else { return false };
+        let turned = board.grid.follow(cell.row);
+        self.epoch = self.epoch.wrapping_add(u32::from(turned));
+        turned
+    }
+
+    /// The page indicator's words, "Channels 1-6 of 16".
+    fn indicator(&self) -> String {
+        let Some(board) = &self.board else { return String::new() };
+        let (first, last, total) = board.grid.indicator();
+        let locale = plx_os::i18n::current();
+        plx_os::i18n::msg::browse_livetv_guide_range(&locale.number(first as i64), &locale.number(last as i64), &locale.number(total as i64))
     }
 
     /// One number that moves exactly when the words or the bar of any airing the page shows does
-    /// ([`AiringPhase::stamp`]): what the page asks a frame for. `0` without a wall time.
+    /// ([`AiringPhase::stamp`]), or, on the Guide, the minute (its now line and chip): what the page asks a frame
+    /// for. `0` without a wall time.
     fn clock_stamp(&self, view: LiveTvView<'_>, wall: Option<Wall>) -> u64 {
         let Some(wall) = wall else { return 0 };
+        // The Guide's now line and chip move with the minute
+        if self.mode == Mode::Guide {
+            return wall.unix_s().div_euclid(60) as u64 | 1 << 63;
+        }
         self.recent.iter().chain(&self.airings).filter_map(|&i| view.channels.get(i))
             .fold(0xcbf2_9ce4_8422_2325_u64, |acc, c| {
                 (acc ^ fmt::phase(c.begins_at, c.ends_at, wall.unix_s()).stamp()).wrapping_mul(0x0100_0000_01b3)
@@ -227,17 +405,36 @@ impl Page {
         self.mode.head().and_then(Sec::style).map_or(0.0, RowStyle::pitch_fixed)
     }
 
+    /// **The page's column**: the scope row, then the rows the mode shows. The page arrives in its content; while the
+    /// lineup is still loading it seats nothing (the row is one Up away, as on the Library and the Watchlist).
     fn regions(&self) -> PageRegions<'_> {
-        PageRegions { header: None, content: &self.content, rail: None, back_walks_header: false, arrival: Arrival::Content, pending: None }
+        PageRegions {
+            header: Some(HEAD_GROUP),
+            content: &self.content,
+            rail: None,
+            back_walks_header: false,
+            arrival: Arrival::Content,
+            pending: (self.mode == Mode::Loading).then_some(RECENT_GROUP),
+        }
     }
 
     fn header_row(&self, measure: &dyn plx_machine::machine::Measure) -> std::rc::Rc<HeaderRow> {
-        let key = std::ptr::from_ref(plx_os::i18n::current()) as usize as u64;
+        // one row per locale and scope: the chosen scope wears the selected plate
+        let key = (std::ptr::from_ref(plx_os::i18n::current()) as usize as u64).wrapping_mul(2) + u64::from(self.scope == Scope::Guide);
         self.header_rows.get(key, || {
-            let left = vec![HeaderItem { label: plx_os::i18n::msg::browse_livetv_whats_on().to_owned(), title: true, ..Default::default() }];
+            use plx_os::i18n::msg;
+            let item = |scope: Scope, label: &str| HeaderItem { label: label.to_owned(), selected_plate: self.scope == scope, focusable: true, ..Default::default() };
+            let left = vec![item(Scope::WhatsOn, msg::browse_livetv_whats_on()), item(Scope::Guide, msg::browse_livetv_guide())];
             let page = PageHeader::new(PageHeaderSpec { left, ..Default::default() }, &[], measure);
             let layout = page.layout(SCR_W, measure);
-            HeaderRow::new(page, layout, Vec::new())
+            // the n-th laid-out left item is the n-th scope
+            let stops = layout.items.iter().enumerate()
+                .filter_map(|(index, rect)| match rect.slot {
+                    plx_ui::page_header::Slot::Left(n) => Scope::ALL.get(n).map(|scope| (scope.elem(), index)),
+                    _ => None,
+                })
+                .collect();
+            HeaderRow::new(page, layout, stops)
         })
     }
 
@@ -353,25 +550,41 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
     }
 
     fn subject(&self, i: usize) -> Option<std::borrow::Cow<'_, str>> {
-        use std::fmt::Write as _;
-        let tile = self.view.tiles.get(self.channel(i)?.0)?;
-        // Two servers may advertise the same DVR and channel. A press names the exact source.
-        // Hex preserves that key without punctuation the remote subject grammar rejects.
-        let mut subject = format!("live-{}-", tile.sid.raw());
-        for byte in tile.rk.bytes() {
-            write!(subject, "{byte:02x}").expect("writing to a String succeeds");
-        }
-        Some(subject.into())
+        channel_subject(self.view, self.channel(i)?.0).map(Into::into)
     }
+}
+
+/// **The accessibility subject of lineup channel `index`**, which every card and Guide cell of it acts on. Two servers
+/// may advertise the same DVR and channel, so a press names the exact source; hex preserves the key without
+/// punctuation the remote subject grammar rejects.
+fn channel_subject(view: LiveTvView<'_>, index: usize) -> Option<String> {
+    use std::fmt::Write as _;
+    let tile = view.tiles.get(index)?;
+    let mut subject = format!("live-{}-", tile.sid.raw());
+    for byte in tile.rk.bytes() {
+        write!(subject, "{byte:02x}").expect("writing to a String succeeds");
+    }
+    Some(subject)
 }
 
 impl<H: LiveTvLike> StackPage<H> for Page {
     type Key = Sec;
     type Cards<'a> = Cards<'a>;
-    fn revision(&self, cx: &Cx<'_, H>) -> u64 { u64::from(H::livetv(cx).revision()) }
+    fn revision(&self, cx: &Cx<'_, H>) -> u64 { u64::from(H::livetv(cx).revision()) | u64::from(self.epoch) << 32 }
+    /// A focus whose cell a refresh took away stays on its channel: the last cell of its row.
+    fn recover(&self, _cx: &Cx<'_, H>, want: &u32) -> Option<u32> {
+        let board = self.board.as_ref()?;
+        let row = board.grid.row_of(*want)?;
+        board.grid.elem(Cell { row, index: board.grid.cells(row).checked_sub(1)? })
+    }
     fn sections(&self, cx: &Cx<'_, H>, out: &mut Vec<SectionSpec<Sec>>) {
         let heading = BOARD_HEADING - heading_ink_drop(cx.measure);
-        out.push(SectionSpec::new(Sec::Head, Kind::Custom { height: plx_ui::page_header::GRID_TOP + heading_ink_drop(cx.measure), focusable: false }, Sec::Head.group()));
+        let guide = self.mode == Mode::Guide;
+        // The scope row is on every page and is focusable on every one; the Guide's ruler follows it directly,
+        // What's on's first shelf under the air its heading keeps.
+        let head = if guide { time_grid::RULER_Y } else { plx_ui::page_header::GRID_TOP + heading_ink_drop(cx.measure) };
+        out.push(SectionSpec::new(Sec::Head, Kind::Custom { height: head, focusable: true }, Sec::Head.group()).ranked(1).named("header"));
+        out.push(SectionSpec::new(Sec::Guide, Kind::Custom { height: if guide { GUIDE_H } else { 0.0 }, focusable: guide }, Sec::Guide.group()).named("guide"));
         // Each row is its own section, with its own style: a shelf keeps its style from the body it was made
         // with, so a key never stands for two row styles. The head of the content is seated by its own rule
         // (`CONTENT_HEAD_SEAT`): the first row there is.
@@ -395,7 +608,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     /// The air under a shelf is the room of the heading of the shelf below, which that shelf's own reveal brings
     /// on: focusing a shelf scrolls for its tiles and open label band only.
     fn reveal_foot(&self, _k: Sec) -> bool { false }
-    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
+    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
     fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
         let (order, row) = match k { Sec::Recent => (&self.recent, Row::Plates), Sec::Now => (&self.airings, Row::Now), Sec::Channels => (&self.rest, Row::Plates), _ => return None };
         self.mode.has(k).then(|| Cards { view: H::livetv(cx), order, row, wall: H::wall(cx) })
@@ -405,17 +618,120 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         matches!(k, Sec::Recent | Sec::Now | Sec::Channels).then(captions::live_tv_policy)
     }
     fn elem_of(&self, k: Sec) -> Option<u32> { (k == Sec::Status).then_some(RETRY_ELEM) }
-    fn plain_name(&self, k: Sec, i: usize) -> Option<&'static str> { (k == Sec::Status && i == 0).then_some("retry") }
-    fn plain_group(&self, _cx: &Cx<'_, H>, _k: Sec, id: GroupId, extent: Rect) -> GroupSpec {
-        GroupSpec { id, kind: GroupKind::Free, seat: Seat::First, reachable: AxisMask::VERTICAL,
-            edge: [EdgeRule::Geometric, EdgeRule::Geometric, EdgeRule::Stop, EdgeRule::Stop], extent, len: 1, elem: ElemKind::Bare }
+    /// The scope row has its two stops, the Guide its board's cells, the status read-out its retry.
+    fn plain_len(&self, k: Sec) -> usize {
+        match k {
+            Sec::Head => Scope::ALL.len(),
+            Sec::Guide => self.board.as_ref().map_or(0, |board| board.grid.len()),
+            _ => usize::from(k == Sec::Status),
+        }
     }
+    fn plain_elem(&self, k: Sec, n: usize) -> Option<u32> {
+        match k {
+            Sec::Head => Scope::ALL.get(n).map(|scope| scope.elem()),
+            Sec::Guide => self.board.as_ref().and_then(|board| board.grid.elem(board.grid.nth(n)?)),
+            _ => (k == Sec::Status && n == 0).then_some(RETRY_ELEM),
+        }
+    }
+    fn plain_name(&self, k: Sec, i: usize) -> Option<&'static str> {
+        match k {
+            Sec::Head => Scope::ALL.get(i).map(|scope| scope.name()),
+            Sec::Status => (i == 0).then_some("retry"),
+            _ => None,
+        }
+    }
+    /// A cell says what it is (its programme, or its channel's name) and acts on its channel, as a card does: the
+    /// subject is the channel's, the one `press` plays.
+    fn plain_a11y<'a>(&'a self, cx: &Cx<'_, H>, k: Sec, n: usize, a11y: A11y<'a>) -> A11y<'a> {
+        let Some(board) = self.board.as_ref().filter(|_| k == Sec::Guide) else { return a11y };
+        let Some(cell) = board.grid.nth(n) else { return a11y };
+        let view = H::livetv(cx);
+        let mut a11y = a11y;
+        let title = board.title(view.channels, cell);
+        if !title.is_empty() {
+            a11y = a11y.with_label(title.to_owned());
+        }
+        match channel_subject(view, cell.row) {
+            Some(subject) => a11y.with_subject(subject),
+            None => a11y,
+        }
+    }
+    fn plain_step(&self, k: Sec, at: usize, dir: plx_ui::screen::Dir) -> Option<usize> {
+        use plx_ui::screen::Dir;
+        match k {
+            Sec::Head => match dir {
+                Dir::Left => at.checked_sub(1),
+                Dir::Right => Some(at + 1).filter(|next| *next < Scope::ALL.len()),
+                Dir::Up | Dir::Down => None,
+            },
+            Sec::Guide => {
+                let board = self.board.as_ref()?;
+                board.grid.position(board.grid.step(board.grid.nth(at)?, dir)?)
+            }
+            _ => None,
+        }
+    }
+    /// The scope stops are the row's plates; a Guide cell is the board's rect, set where the section stands (the
+    /// board is laid out on the frame, its ruler at [`time_grid::RULER_Y`], which is the section's top).
+    fn element_rect(&self, cx: &Cx<'_, H>, k: Sec, n: usize, section: Rect) -> Rect {
+        match k {
+            Sec::Head => {
+                let plate = Scope::ALL.get(n).and_then(|scope| self.header_row(cx.measure).plate(scope.elem())).unwrap_or_default();
+                Rect::new(plate.x, plate.y + section.y, plate.w, plate.h)
+            }
+            Sec::Guide => {
+                let cell = self.board.as_ref().and_then(|board| Some(board.grid.rect(board.grid.nth(n)?))).unwrap_or_default();
+                Rect::new(cell.x, cell.y + section.y - time_grid::RULER_Y, cell.w, cell.h)
+            }
+            _ => section,
+        }
+    }
+    /// The scope row seats the scope on view; the Guide's board seats the airing on now of the first row showing.
+    fn seat_override(&self, cx: &Cx<'_, H>, k: Sec, _from: plx_ui::screen::Placed) -> Option<u32> {
+        match k {
+            Sec::Head => Some(self.scope.elem()),
+            Sec::Guide => {
+                let board = self.board.as_ref()?;
+                board.grid.elem(board.grid.entry(H::wall(cx)?.unix_s())?)
+            }
+            _ => None,
+        }
+    }
+    fn plain_group(&self, cx: &Cx<'_, H>, k: Sec, id: GroupId, extent: Rect) -> GroupSpec {
+        match k {
+            // the row's own group: a Control row, Left and Right stopping at its ends; the section's top places it
+            Sec::Head => match self.header_row(cx.measure).focus(self.entry, id, (0.0, 0.0), Rect::FULL).group_spec() {
+                Some(spec) => GroupSpec { extent: Rect { y: spec.extent.y + extent.y, ..spec.extent }, ..spec },
+                None => GroupSpec { id, kind: GroupKind::Free, seat: Seat::First, reachable: AxisMask::VERTICAL, edge: [EdgeRule::Stop; 4], extent, len: 0, elem: ElemKind::Control },
+            },
+            // the board: its own cells move focus (`plain_step`); Up from the first row is the header's link, every
+            // other edge stops. Down from the header seats the cell the last Up left from, else the airing on now.
+            Sec::Guide => GroupSpec {
+                id, kind: GroupKind::Free, seat: plx_ui::page_regions::CONTENT_HEAD_SEAT, reachable: AxisMask::VERTICAL,
+                edge: [EdgeRule::Stop; 4], extent, len: StackPage::<H>::plain_len(self, k), elem: ElemKind::Control,
+            },
+            _ => GroupSpec { id, kind: GroupKind::Free, seat: Seat::First, reachable: AxisMask::VERTICAL,
+                edge: [EdgeRule::Geometric, EdgeRule::Geometric, EdgeRule::Stop, EdgeRule::Stop], extent, len: 1, elem: ElemKind::Bare },
+        }
+    }
+    /// While the lineup loads the content's head has no group yet: the page declares it empty (the shared rule),
+    /// which an arrival names, so a page that has nothing to seat seats nothing.
+    fn extra_groups(&self, _cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) { self.regions().declare_pending(out); }
     fn draw_heading(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, lift: f32) {
         let title = match k { Sec::Recent => plx_os::i18n::msg::browse_livetv_recent_c(), Sec::Now => plx_os::i18n::msg::browse_livetv_on_now_c(), Sec::Channels => plx_os::i18n::msg::browse_livetv_channels_c(), _ => return };
         plx_ui::cards::draw_heading_c(f.painter.alpha(f.page_alpha).translate(0.0, r.y), title, c"", c"", MARGIN_X, -lift, 1.0, f.measure);
     }
     fn custom_draw(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, _scroll: f32) {
-        if k == Sec::Head {
+        if k == Sec::Guide {
+            let (Some(board), Some(wall)) = (self.board.as_ref(), H::wall(f.cx)) else { return };
+            let channels = H::livetv(f.cx).channels;
+            let focus = f.focus.current.filter(|key| key.entry == self.entry).and_then(|key| board.grid.locate(key.elem));
+            let indicator = self.indicator();
+            let words = Words { indicator: &indicator, unscheduled: plx_os::i18n::msg::browse_livetv_no_guide() };
+            // the board is laid out on the frame, its ruler at the section's top
+            let p = f.painter.alpha(f.page_alpha).translate(0.0, r.y - time_grid::RULER_Y);
+            board.grid.draw(p, f.measure, wall, words, &Faces { channels, board }, focus);
+        } else if k == Sec::Head {
             let p = f.painter.alpha(f.page_alpha).alpha(self.handoff.head_alpha(r.y));
             self.header_row(f.measure).draw(p, r.y, &self.header_capsules, self.header_pop.scale_with(0, f.press), None);
         } else if k == Sec::Status && self.mode.reads_out() {
@@ -446,12 +762,15 @@ impl LiveTvScreen {
     /// The heartbeat word, byte-identical to the route word.
     pub const WORD: &'static str = "livetv";
 
-    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32},left:Option<(u32,str,str)>}";
+    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,scope:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],guide:Option<(page:u32,window:u64)>,stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32},left:Option<(u32,str,str)>}";
 
     pub fn new(entry: EntryId) -> Self {
         Self {
             page: Page {
                 entry,
+                scope: Scope::WhatsOn,
+                board: None,
+                epoch: 0,
                 channels: Vec::new(),
                 airings: Vec::new(),
                 recent: Vec::new(),
@@ -476,8 +795,13 @@ impl LiveTvScreen {
     }
 
     /// Every shelf names the channel that supplies its card (Recent's tiles and the Channels shelf's on the even
-    /// elements, On now's poster on the odd ones).
+    /// elements, On now's poster on the odd ones); a Guide cell names its row's channel, and plays it only where it
+    /// tunes ([`Board::tunes`]).
     fn press<H: LiveTvLike>(&self, elem: u32, cx: &Cx<'_, H>) -> Option<ContentReq> {
+        if let Some((board, cell)) = self.page.board.as_ref().and_then(|board| Some((board, board.grid.locate(elem)?))) {
+            let tunes = board.tunes(cell, H::wall(cx)?.unix_s());
+            return tunes.then(|| H::livetv(cx).channels.get(cell.row)).flatten().map(Self::play);
+        }
         let index = elem.checked_sub(FIRST_CARD_ELEM)? as usize / 2;
         let view = H::livetv(cx);
         let channel = view.channels.get(index)?;
@@ -490,6 +814,40 @@ impl LiveTvScreen {
         ContentReq::Play { play: PlayIntent::Live {
             sid: channel.sid, dvr: channel.dvr.clone(), channel: channel.channel.clone(), title: channel.name.clone(),
         }, resume_ns: 0 }
+    }
+
+    /// **A press on an element the page owns beyond its cards**: a stop of the scope row chooses that page (the
+    /// row stays under focus, the page under it is rebuilt), a Guide cell tunes its channel where it tunes. `false`
+    /// for any other element.
+    fn commit<H: LiveTvLike>(&mut self, elem: u32, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> bool {
+        if let Some(scope) = Scope::of_elem(elem) {
+            if self.page.scope != scope {
+                self.page.scope = scope;
+                self.page.sync(H::livetv(cx), H::wall(cx));
+                fx.invalidate(Provenance::Input);
+            }
+            return true;
+        }
+        if !self.page.board.as_ref().is_some_and(|board| board.grid.locate(elem).is_some()) {
+            return false;
+        }
+        if let Some(out) = self.press(elem, cx) {
+            fx.push(Fx::App(AppFx::Content(out)));
+            fx.invalidate(Provenance::Input);
+        }
+        true
+    }
+
+    /// **CH+ and CH- on the Guide**: the page `step` pages over (+1 the next six channels), the focus on the cell of the
+    /// same place there. The board does not wrap, and a press with focus off the board does nothing here.
+    fn turn<H: LiveTvLike>(&mut self, step: isize, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
+        let Some(board) = self.page.board.as_ref() else { return };
+        let Some(at) = cx.focus.current.filter(|key| key.entry == self.page.entry).and_then(|key| board.grid.locate(key.elem)) else { return };
+        let Some(elem) = board.grid.turn(at, step).and_then(|to| board.grid.elem(to)) else { return };
+        // the page is showing before focus lands on it
+        self.page.follow(elem);
+        self.seat_own(FocusTarget::Elem(FocusKey { entry: self.page.entry, elem }), fx);
+        fx.invalidate(Provenance::Input);
     }
 
     fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
@@ -536,10 +894,20 @@ impl LiveTvScreen {
     }
 
     /// **The card of the channel the player left**: its Recent tile (a tuned channel joins Recent at admission), else the
-    /// row it belongs to, On now's poster or the Channels shelf's tile. `None` for a channel the lineup no longer lists.
+    /// row it belongs to, On now's poster or the Channels shelf's tile; on the Guide its row's cell. `None` for a
+    /// channel the lineup no longer lists.
     fn left_elem<H: LiveTvLike>(&mut self, left: &(plx_plex::plex::ServerId, String, String), cx: &Cx<'_, H>) -> Option<u32> {
-        self.page.sync(H::livetv(cx));
+        self.page.sync(H::livetv(cx), H::wall(cx));
         let index = H::livetv(cx).channels.iter().position(|c| c.sid == left.0 && c.dvr == left.1 && c.channel == left.2)?;
+        // On the Guide the channel's own row: the cell of what was airing (the one the reader pressed), else its
+        // first. That row's page is the one showing when focus lands.
+        if let Some(board) = self.page.board.as_ref() {
+            let row = board.cells.get(index)?;
+            let at = Cell { row: index, index: row.iter().position(|src| *src == CellSrc::Now).unwrap_or(0) };
+            let elem = board.grid.elem(at)?;
+            self.page.follow(elem);
+            return Some(elem);
+        }
         let base = FIRST_CARD_ELEM + index as u32 * 2;
         if self.page.recent.contains(&index) || self.page.rest.contains(&index) {
             Some(base)
@@ -621,12 +989,15 @@ impl LogicalState for LiveTvScreen {
         c.u32(self.page.entry.0);
         // the store's status as the mode reads it: any row is `Ready` (1); a `Ready` store with no channel is the empty read-out (2)
         c.u32(match self.page.mode { Mode::Loading => 0, Mode::Empty => 2, Mode::Failed => 3, _ => 1 });
+        c.u32(self.page.scope.code());
         c.seq(self.page.channels.len());
         for (sid, rk) in &self.page.channels { c.u32(u32::from(sid.raw())).str(rk); }
         c.seq(self.page.airings.len());
         for &i in &self.page.airings { c.u32(i as u32); }
         c.seq(self.page.recent.len());
         for &i in &self.page.recent { c.u32(i as u32); }
+        // the board's page and the half hour its window starts at
+        c.option(self.page.board.as_ref(), |c, board| { c.u32(board.grid.page() as u32).u64(board.grid.axis().start() as u64); });
         self.stack.write(c);
         self.page.handoff.write(c);
         c.option(self.left.as_ref(), |c, (sid, dvr, channel)| { c.u32(u32::from(sid.raw())).str(dvr).str(channel); });
@@ -642,10 +1013,14 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
 
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
-            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.page.sync(H::livetv(cx)),
+            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.page.sync(H::livetv(cx), H::wall(cx)),
             ScreenEvent::StoreChanged(ord, _) if *ord == StoreId::LiveTv.ord() => {
                 self.page.synced = None;
-                self.page.sync(H::livetv(cx));
+                self.page.sync(H::livetv(cx), H::wall(cx));
+            }
+            // the board's page follows the focus, before the stack lays out for it
+            ScreenEvent::FocusMoved { to, .. } if to.entry == self.page.entry => {
+                self.page.follow(to.elem);
             }
             _ => {}
         }
@@ -709,6 +1084,14 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
                 }
                 Handled::Yes
             }
+            // CH+ and CH- turn the Guide's page by six; CH+ is the next channels (the live player's own reading)
+            ScreenEvent::Input(InputEvent { kind: InputKind::Key { sym, wcode, edge: Edge::Down, at_edge: false, .. }, .. })
+                if self.page.mode == Mode::Guide && page_dir(*sym, *wcode).is_some() =>
+            {
+                let step = page_dir(*sym, *wcode).map_or(0, |dir| -dir as isize);
+                self.turn(step, cx, fx);
+                Handled::Yes
+            }
             // a digit opens number entry over the page (PR5); a page with no lineup has no number to type
             ScreenEvent::Input(InputEvent { kind: InputKind::Key { sym, wcode, edge: Edge::Down, at_edge: false, .. }, .. })
                 if pin_digit(*sym, *wcode).is_some() && !H::livetv(cx).channels.is_empty() =>
@@ -731,7 +1114,7 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
                     fx.push(Fx::App(AppFx::Store(StoreId::LiveTv, StoreCmd::LiveTv(LiveTvCmd::Retry))));
                     fx.invalidate(Provenance::Input);
                     Handled::Yes
-                } else { self.activate(*elem, fx) }
+                } else if self.commit(*elem, cx, fx) { Handled::Yes } else { self.activate(*elem, fx) }
             },
             ScreenEvent::PressCommit(_) => {
                 if let Some(CardEvent::Activate(elem)) = card {
@@ -743,7 +1126,7 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
                     if key.elem == RETRY_ELEM && self.page.mode == Mode::Failed {
                         fx.push(Fx::App(AppFx::Store(StoreId::LiveTv, StoreCmd::LiveTv(LiveTvCmd::Retry))));
                         fx.invalidate(Provenance::Input);
-                    } else { self.activate(key.elem, fx); }
+                    } else if !self.commit(key.elem, cx, fx) { self.activate(key.elem, fx); }
                 }
                 Handled::Yes
             }
@@ -757,7 +1140,7 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
 
 impl<H: LiveTvLike> Screen<H> for LiveTvScreen {
     fn focused_card_rect(&self, cx: &Cx<'_, H>, focus: Option<FocusKey<u32>>, at: plx_ui::screen::At) -> Option<Rect> {
-        let key = focus.filter(|k| k.entry == self.page.entry && k.elem >= FIRST_CARD_ELEM)?;
+        let key = focus.filter(|k| k.entry == self.page.entry && (FIRST_CARD_ELEM..GUIDE_FIRST_ELEM).contains(&k.elem))?;
         Focusable::<H>::place(self, &key.elem, cx, at).map(|placed| placed.rect)
     }
     fn redraw_focused(&self, f: &mut DrawFrame<'_, '_, H>, focus: Option<FocusKey<u32>>) {

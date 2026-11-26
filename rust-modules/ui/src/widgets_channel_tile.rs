@@ -103,6 +103,36 @@ fn draw_name(p: Painter, rest: Rect, name: &str) {
     hero_logo::draw_title(p, LogoRung::Channel, name, band, HAlign::Center, &measure);
 }
 
+/// **A channel's face in the Guide's channel cell** (`SPEC-3` item 5): the number (CAPTION, bold) at
+/// [`time_grid::number_at`](crate::time_grid::number_at), and the logo the Recent tile draws at 70% in the cell's
+/// 175 x 98 box ([`time_grid::logo_rect`](crate::time_grid::logo_rect)), sized by its ink as the tile's is
+/// ([`hero_logo::fit_ink`] at [`LogoRung::Channel`], the mark's window of the texture) from the same texture
+/// ([`LOGO_RES`], so a logo the What's on page warmed is the one drawn). The plate under it is the board's. A channel
+/// with no logo (or an entirely clear one) says its name in the box, as a tile does; a logo still on its way shows
+/// the cell alone, counted as a wait like a tile's.
+pub fn draw_guide_face(p: Painter, cell: Rect, face: &Face<'_>) {
+    let art = super::Art::Channel { sid: face.sid, logo: face.logo, number: face.number, name: face.name };
+    let ArtImage { tex, w: tw, h: th, ink, shown, .. } = super::resolve_card_art(p, cell, &art);
+    let waiting = tex == 0 && !face.logo.is_empty() && !crate::tex::failed_on(face.sid, face.logo, LOGO_RES.0, LOGO_RES.1, true);
+    if waiting {
+        placeholder::note(p, Reason::CardGround, face.logo);
+    }
+    let boxed = crate::time_grid::logo_rect(cell, None);
+    if tex != 0 && ink != Some(Ink::Clear) {
+        let ink = if let Some(Ink::Box(b)) = ink { Some(b) } else { None };
+        let ((w, h), uv) = hero_logo::fit_ink(LogoRung::Channel, tw, th, ink, theme::logo::CHANNEL_W_MAX);
+        p.alpha(shown).tex_uv(tex, uv, crate::time_grid::logo_rect(cell, Some((w, h))), 0.0, theme::TINT_WHITE);
+    } else if !waiting {
+        draw_name(p, boxed, face.name);
+    }
+    if !face.number.is_empty() {
+        let (x, cy) = crate::time_grid::number_at(cell);
+        let cap = plx_machine::machine::Measure::cap_h(&LegacyMeasure, theme::size::CAPTION);
+        TextView::new(face.number, theme::size::CAPTION, theme::TEXT_SECONDARY).bold()
+            .draw(p, Rect::new(x, cy - cap * 0.5, boxed.x - x, 0.0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

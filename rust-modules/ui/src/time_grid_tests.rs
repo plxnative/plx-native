@@ -84,25 +84,39 @@ fn cell(row: usize, index: usize) -> Cell {
 }
 
 #[test]
-fn every_cell_is_an_element_in_row_then_time_order_and_a_row_with_nothing_has_one() {
+fn an_element_is_its_row_and_its_place_in_it() {
     let g = board();
-    // 2 + 1 + 1 + 5 * 2
+    // 2 + 1 + 1 + 5 * 2 cells in all
     assert_eq!(g.len(), 14);
     assert_eq!(g.elem(cell(0, 0)), Some(100));
     assert_eq!(g.elem(cell(0, 1)), Some(101));
-    assert_eq!(g.elem(cell(1, 0)), Some(102));
-    assert_eq!(g.elem(cell(2, 0)), Some(103));
-    assert_eq!(g.elem(cell(3, 0)), Some(104));
-    assert_eq!(g.elem(cell(3, 1)), Some(105));
-    assert_eq!(g.elem(cell(3, 2)), None);
+    assert_eq!(g.elem(cell(1, 0)), Some(100 + ROW_STRIDE));
+    assert_eq!(g.elem(cell(2, 0)), Some(100 + 2 * ROW_STRIDE));
+    assert_eq!(g.elem(cell(3, 1)), Some(100 + 3 * ROW_STRIDE + 1));
+    assert_eq!(g.elem(cell(3, 2)), None, "a row has no cell it does not hold");
+    assert_eq!(g.elem(cell(8, 0)), None);
     for n in 0..g.len() {
-        let elem = g.nth(n).unwrap();
-        let at = g.locate(elem).unwrap();
-        assert_eq!(g.elem(at), Some(elem));
-        assert_eq!(g.index_of(elem), Some(n));
+        let at = g.nth(n).unwrap();
+        assert_eq!(g.position(at), Some(n));
+        assert_eq!(g.locate(g.elem(at).unwrap()), Some(at));
     }
+    assert_eq!(g.nth(14), None);
     assert_eq!(g.locate(99), None);
-    assert_eq!(g.locate(114), None);
+    assert_eq!(g.locate(102), None, "row 0 has two cells");
+    assert_eq!(g.locate(100 + 8 * ROW_STRIDE), None);
+}
+
+#[test]
+fn a_row_gaining_a_programme_moves_no_other_rows_elements() {
+    let before = board();
+    let mut rows = vec![vec![span(0, 30), span(30, 60), span(60, 90)], vec![span(-30, 90)], vec![]];
+    rows.extend((3..8).map(|_| vec![span(0, 30), span(30, 90)]));
+    let after = TimeGrid::new(AXIS, rows, 100);
+    for row in 1..8 {
+        for index in 0..before.cells(row) {
+            assert_eq!(before.elem(cell(row, index)), after.elem(cell(row, index)), "row {row} cell {index}");
+        }
+    }
 }
 
 #[test]

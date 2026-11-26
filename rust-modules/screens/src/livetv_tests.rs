@@ -136,8 +136,8 @@ fn own_store_supplies_adjacent_recent_and_on_now_shelves_with_distinct_art() {
     let context = cx(view, None);
     let mut sections = Vec::new();
     StackPage::<TestHost>::sections(&screen.page, &context, &mut sections);
-    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status]);
-    assert!(sections[1..4].iter().all(|s| matches!(s.kind, Kind::Shelf { .. })));
+    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status]);
+    assert!(sections[2..5].iter().all(|s| matches!(s.kind, Kind::Shelf { .. })));
     assert_eq!(screen.page.mode, Mode::RecentNowChannels, "the silent channel is in neither row above");
     // the air under a shelf that has another under it: the handoff's 48 from the tiles to the next heading's line
     // box at rest, less the 18 of the collapsed label band, plus the 8 of ink drop (38); with a tile focused the
@@ -223,7 +223,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
         let context = cx(store.view(), None);
         let mut specs = Vec::new();
         StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
-        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status], "{case}");
+        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status], "{case}");
         let len = |k: Sec| StackPage::<TestHost>::cards(&screen.page, &context, k).map_or(0, |c| CardSource::<TestHost>::len(&c));
         let first = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels);
         assert_eq!(len(Sec::Recent), 0, "{case}: no Recent shelf");
@@ -238,7 +238,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 2), "{case}: the lineup shelf");
                 assert_eq!(screen.page.regions().content, &[CHANNELS_GROUP], "{case}");
                 assert_eq!(screen.page.mode, Mode::ChannelsOnly, "{case}");
-                assert!(matches!(specs[3].kind, Kind::Shelf { style, .. } if *style == PLATE_STYLE), "{case}: the plate style, Recent's");
+                assert!(matches!(specs[4].kind, Kind::Shelf { style, .. } if *style == PLATE_STYLE), "{case}: the plate style, Recent's");
                 let cards = first.as_ref().expect("lineup cards");
                 assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Channel { .. }), "{case}: a channel plate, not a poster tile");
                 assert!(CardSource::<TestHost>::progress(cards, 0).is_none(), "{case}");
@@ -765,4 +765,420 @@ fn the_chrome_tucks_at_the_channels_rest_under_a_plate_first_page_and_stands_at_
     let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
     assert!((scroll - 219.0).abs() < 0.1, "back on On now: {scroll}");
     assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "still tucked (it returns below 102)");
+}
+
+// ---- the Guide (SPEC-3) ------------------------------------------------------------------------------------------
+
+use plx_data::livetv::LiveAiring;
+use plx_ui::screen::{By, Dir};
+
+/// The Guide's wall time: ten minutes into the half hour that starts at [`NOW`] (20:30), so the window is 20:30 to
+/// 22:00 and a minute is 15.47 px along the ruler.
+const GUIDE_NOW: i64 = NOW + 10 * MIN;
+
+fn later(title: &str, from: i64, to: i64) -> LiveAiring {
+    LiveAiring { title: title.into(), begins_at: NOW + from * MIN, ends_at: NOW + to * MIN }
+}
+
+/// A channel airing `from`..`to` minutes after [`NOW`], with the programmes that follow it.
+fn guide_channel(vcn: &str, from: i64, to: i64, after: Vec<LiveAiring>) -> Channel {
+    Channel { begins_at: NOW + from * MIN, ends_at: NOW + to * MIN, later: after, ..channel(vcn, &format!("Station {vcn}")) }
+}
+
+/// Eight channels: 101 began before the window and has two programmes after it (the second runs past the window's
+/// end); 102 is on with nothing after it; 103 has no guide data at all; 104 to 108 split the window in two.
+fn guide_lineup() -> Vec<Channel> {
+    let mut lineup = vec![
+        guide_channel("101", -30, 30, vec![later("News at Nine", 30, 60), later("Late Film", 60, 120)]),
+        guide_channel("102", 0, 60, Vec::new()),
+    ];
+    let mut dark = guide_channel("103", 0, 0, Vec::new());
+    dark.now.clear();
+    lineup.push(dark);
+    lineup.extend((4..=8).map(|n| guide_channel(&format!("10{n}"), 0, 30, vec![later("Second Half", 30, 90)])));
+    lineup
+}
+
+/// A screen on the Guide over [`guide_lineup`], at [`GUIDE_NOW`].
+fn guide() -> (LiveTvStore, LiveTvScreen) {
+    WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
+    let mut store = LiveTvStore::default();
+    store.install_for_test(guide_lineup());
+    let mut screen = LiveTvScreen::new(ENTRY);
+    step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
+    choose(&mut screen, store.view(), GUIDE_ELEM);
+    (store, screen)
+}
+
+/// Press the scope row's stop `elem`.
+fn choose(screen: &mut LiveTvScreen, view: LiveTvView<'_>, elem: u32) -> Vec<Stamped<TestHost>> {
+    let focus = FocusKey { entry: ENTRY, elem };
+    step(screen, view, Some(elem), &ScreenEvent::FocusMoved { from: None, to: focus, by: By::Dir });
+    let out = step(screen, view, Some(elem), &ScreenEvent::PressCommit(PressId(1)));
+    // the next frame lays the page out for the scope the press chose
+    step(screen, view, Some(elem), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    out
+}
+
+fn board(screen: &LiveTvScreen) -> &Board {
+    screen.page.board.as_ref().expect("the Guide's board")
+}
+
+/// The element of the Guide's cell `row`, `index`.
+fn cell_elem(screen: &LiveTvScreen, row: usize, index: usize) -> u32 {
+    board(screen).grid.elem(Cell { row, index }).expect("a cell")
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+/// The rect the stack stands a Guide cell at, with the page at rest (the section's top is the ruler's).
+fn rect_of(screen: &LiveTvScreen, view: LiveTvView<'_>, row: usize, index: usize) -> Rect {
+    let elem = cell_elem(screen, row, index);
+    let context = cx(view, Some(elem));
+    Focusable::<TestHost>::place(screen, &elem, &context, At::Drawn).expect("placed").rect
+}
+
+fn move_from(screen: &LiveTvScreen, view: LiveTvView<'_>, from: u32, dir: Dir) -> Option<u32> {
+    let context = cx(view, Some(from));
+    match Focusable::<TestHost>::neighbour(screen, FocusKey { entry: ENTRY, elem: from }, dir, &context) {
+        plx_ui::screen::Step::Move(key) => Some(key.elem),
+        plx_ui::screen::Step::Edge => None,
+    }
+}
+
+/// **The scope row chooses the page, and focus stays on its stop.** A fresh page is What's on, with the row's
+/// What's on stop on the selected plate; pressing Guide shows the board (and nothing of What's on's shelves),
+/// pressing What's on brings the shelves back.
+#[test]
+fn the_scope_row_switches_between_whats_on_and_the_guide() {
+    let _language = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
+    WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
+    let (store, mut screen) = seeded();
+    assert_eq!((screen.page.scope, screen.page.mode), (Scope::WhatsOn, Mode::NowChannels));
+    let context = cx(store.view(), None);
+    assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(WHATS_ON_ELEM));
+    assert!(screen.page.board.is_none(), "What's on lays out no board");
+
+    choose(&mut screen, store.view(), GUIDE_ELEM);
+    assert_eq!((screen.page.scope, screen.page.mode), (Scope::Guide, Mode::Guide));
+    assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(GUIDE_ELEM), "the Guide wears the selected plate");
+    assert_eq!(screen.page.regions().content, &[GUIDE_GROUP]);
+    let mut sections = Vec::new();
+    StackPage::<TestHost>::sections(&screen.page, &context, &mut sections);
+    let guide = sections.iter().find(|s| s.key == Sec::Guide).expect("the Guide section");
+    assert!(matches!(guide.kind, Kind::Custom { height, focusable: true } if near(height, GUIDE_H)));
+    assert!(matches!(sections[0].kind, Kind::Custom { height, focusable: true } if near(height, time_grid::RULER_Y)), "the scope row, then the ruler");
+    for k in [Sec::Recent, Sec::Now, Sec::Channels] {
+        assert!(StackPage::<TestHost>::cards(&screen.page, &context, k).is_none(), "{k:?} is not on the Guide");
+    }
+
+    choose(&mut screen, store.view(), WHATS_ON_ELEM);
+    assert_eq!((screen.page.scope, screen.page.mode), (Scope::WhatsOn, Mode::NowChannels));
+    assert!(screen.page.board.is_none());
+    assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(WHATS_ON_ELEM));
+}
+
+#[test]
+fn the_scope_stops_are_named_and_the_row_walks_between_them() {
+    let (store, screen) = guide();
+    let context = cx(store.view(), None);
+    let a11y = |elem: u32| Focusable::<TestHost>::a11y(&screen, &elem, &context).map(|a| a.path.to_string());
+    assert_eq!(a11y(WHATS_ON_ELEM).as_deref(), Some("header.whats_on"));
+    assert_eq!(a11y(GUIDE_ELEM).as_deref(), Some("header.guide"));
+    assert_eq!(move_from(&screen, store.view(), WHATS_ON_ELEM, Dir::Right), Some(GUIDE_ELEM));
+    assert_eq!(move_from(&screen, store.view(), GUIDE_ELEM, Dir::Left), Some(WHATS_ON_ELEM));
+    assert_eq!(move_from(&screen, store.view(), GUIDE_ELEM, Dir::Right), None);
+    assert_eq!(move_from(&screen, store.view(), WHATS_ON_ELEM, Dir::Left), None);
+    // the stops are the row's plates: 96 x 148 of the Library's own row
+    let one = Focusable::<TestHost>::place(&screen, &WHATS_ON_ELEM, &context, At::Drawn).unwrap().rect;
+    let two = Focusable::<TestHost>::place(&screen, &GUIDE_ELEM, &context, At::Drawn).unwrap().rect;
+    assert!(one.x < two.x && near(one.y, two.y) && one.y >= 140.0 && one.y < 160.0, "{one:?} {two:?}");
+}
+
+/// **The window starts at the last half hour and the page shows six channels from row 1.**
+#[test]
+fn the_guide_is_a_90_minute_window_from_the_last_half_hour_six_channels_a_page() {
+    let (_, screen) = guide();
+    let axis = board(&screen).grid.axis();
+    assert_eq!((axis.start(), axis.end()), (NOW, NOW + 90 * MIN), "20:30 to 22:00 at 20:40");
+    assert_eq!(board(&screen).grid.rows(), 8, "a row a lineup channel");
+    assert_eq!(board(&screen).grid.indicator(), (1, 6, 8));
+    // the now line stands ten minutes in
+    assert!(near(axis.x_of(GUIDE_NOW), 432.0 + 10.0 * 1_392.0 / 90.0));
+}
+
+/// Without a wall time the Guide has no window to start from: it is the loading read-out, not a board at the wrong time.
+#[test]
+fn a_guide_with_no_clock_is_loading_not_a_board() {
+    let (store, mut screen) = guide();
+    WALL.with(|w| w.set(None));
+    step(&mut screen, store.view(), Some(GUIDE_ELEM), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    assert_eq!((screen.page.scope, screen.page.mode), (Scope::Guide, Mode::Loading));
+    assert!(screen.page.board.is_none());
+    WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
+    step(&mut screen, store.view(), Some(GUIDE_ELEM), &ScreenEvent::Tick(Tick { ms: 32, dt_us: 16_667 }));
+    assert_eq!(screen.page.mode, Mode::Guide, "the clock came back");
+}
+
+/// **A cell stands from where its programme begins (or the window does) to where it ends, less the 8 px gap,
+/// 100 tall, on the rows at 292 + 108 r.**
+#[test]
+fn guide_cells_stand_at_their_times_on_rows_108_apart() {
+    let (store, screen) = guide();
+    let view = store.view();
+    let px = 1_392.0 / 90.0;
+    // 101 began 30 minutes before the window and ends 30 minutes in: it starts at the axis' left edge
+    let a = rect_of(&screen, view, 0, 0);
+    assert!(near(a.x, 432.0) && near(a.w, 30.0 * px - 8.0) && near(a.y, 292.0) && near(a.h, 100.0), "{a:?}");
+    // its next, 30 to 60 minutes
+    let b = rect_of(&screen, view, 0, 1);
+    assert!(near(b.x, 432.0 + 30.0 * px) && near(b.w, 30.0 * px - 8.0), "{b:?}");
+    // and the one after, which runs past the window's end: cut at the right edge
+    let c = rect_of(&screen, view, 0, 2);
+    assert!(near(c.x + c.w + 8.0, 1_824.0), "{c:?}");
+    for row in 0..6 {
+        assert!(near(rect_of(&screen, view, row, 0).y, 292.0 + 108.0 * row as f32), "row {row}");
+    }
+    // the second page's rows are not on the frame
+    assert!(rect_of(&screen, view, 6, 0).y < 0.0);
+}
+
+/// **The next programme is the airing after the current one; a channel with none has one cell.**
+#[test]
+fn a_channel_with_nothing_after_the_airing_has_one_cell_and_a_channel_with_no_data_has_the_unscheduled_one() {
+    let (store, screen) = guide();
+    let grid = &board(&screen).grid;
+    assert_eq!(grid.cells(0), 3, "the airing and the two after it");
+    assert_eq!(grid.cells(1), 1, "no next on 102");
+    assert!(!grid.is_unscheduled(1));
+    assert_eq!(move_from(&screen, store.view(), cell_elem(&screen, 1, 0), Dir::Right), None, "nothing to the right of the only cell");
+    assert!(grid.is_unscheduled(2), "103 has no guide data");
+    let full = rect_of(&screen, store.view(), 2, 0);
+    assert!(near(full.x, 432.0) && near(full.x + full.w + 8.0, 1_824.0), "one cell across the window: {full:?}");
+}
+
+/// **UP and DOWN land on the cell that shares the most time; LEFT and RIGHT walk the row.**
+#[test]
+fn up_and_down_follow_the_time_and_left_and_right_walk_the_row() {
+    let (store, screen) = guide();
+    let view = store.view();
+    let e = |row, index| cell_elem(&screen, row, index);
+    // 101's cell 1 (30-60) down to 102's only cell (0-60)
+    assert_eq!(move_from(&screen, view, e(0, 1), Dir::Down), Some(e(1, 0)));
+    // from 102's cell to 103's whole-window cell and on to 104's first half (0-30 shares 30 of the 60)
+    assert_eq!(move_from(&screen, view, e(1, 0), Dir::Down), Some(e(2, 0)));
+    assert_eq!(move_from(&screen, view, e(2, 0), Dir::Down), Some(e(3, 1)), "the whole window shares most with the longer second half");
+    assert_eq!(move_from(&screen, view, e(3, 0), Dir::Down), Some(e(4, 0)));
+    assert_eq!(move_from(&screen, view, e(3, 1), Dir::Up), Some(e(2, 0)));
+    assert_eq!(move_from(&screen, view, e(0, 0), Dir::Right), Some(e(0, 1)));
+    assert_eq!(move_from(&screen, view, e(0, 1), Dir::Left), Some(e(0, 0)));
+    assert_eq!(move_from(&screen, view, e(0, 0), Dir::Left), None);
+    // the board's last row has nothing below it
+    assert_eq!(move_from(&screen, view, e(7, 0), Dir::Down), None);
+}
+
+/// **UP from the first row is the scope row (a link), and DOWN from it seats the airing on now.**
+#[test]
+fn up_from_the_first_row_goes_to_the_scope_row_and_down_comes_back() {
+    let (store, screen) = guide();
+    let view = store.view();
+    assert_eq!(move_from(&screen, view, cell_elem(&screen, 0, 0), Dir::Up), None, "the board's own edge: the link decides");
+    let mut links = Vec::new();
+    Screen::<TestHost>::links(&screen, &mut links);
+    assert!(links.contains(&Link { from: GUIDE_GROUP, dir: Dir::Up, to: HEAD_GROUP }));
+    assert!(links.contains(&Link { from: HEAD_GROUP, dir: Dir::Down, to: GUIDE_GROUP }));
+    // the Guide group declares the board's cells, a Control group the board seats the airing on now in
+    let context = cx(view, None);
+    let mut groups = Vec::new();
+    Focusable::<TestHost>::groups(&screen, &context, &mut groups);
+    let spec = groups.iter().find(|g| g.id == GUIDE_GROUP).expect("the Guide's group");
+    assert_eq!(spec.len, board(&screen).grid.len());
+    assert_eq!(spec.elem, ElemKind::Control);
+    // first row's airing on now at 20:40: 101's first cell (began 20:00, ends 21:00)
+    let from = Focusable::<TestHost>::place(&screen, &GUIDE_ELEM, &context, At::Drawn).unwrap();
+    let seated = Focusable::<TestHost>::seat(&screen, GUIDE_GROUP, from, &context);
+    assert_eq!(seated.elem, cell_elem(&screen, 0, 0));
+}
+
+/// **CH+ and CH- turn the page by six, keeping the slot, and the page follows focus.**
+#[test]
+fn ch_plus_and_ch_minus_turn_the_page_by_six() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    let ch_up = ScreenEvent::Input(InputEvent { at: Tick::default(), source: plx_machine::machine::Source::Script,
+        kind: InputKind::Key { key: Key::Other, sym: 0, wcode: plx_ui::consts::WCODE_CH_UP_KEY, edge: Edge::Down, at_edge: false } });
+    let ch_down = ScreenEvent::Input(InputEvent { at: Tick::default(), source: plx_machine::machine::Source::Script,
+        kind: InputKind::Key { key: Key::Other, sym: 0, wcode: plx_ui::consts::WCODE_CH_DOWN_KEY, edge: Edge::Down, at_edge: false } });
+    let from = cell_elem(&screen, 1, 0);
+    let (handled, out) = step_handled(&mut screen, view, Some(from), &ch_up);
+    assert_eq!(handled, Handled::Yes);
+    // row 1 + 6 = 7, the last of 8 channels
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 0)]);
+    assert_eq!(board(&screen).grid.page(), 1, "the page is showing before focus lands on it");
+    assert_eq!(board(&screen).grid.indicator(), (7, 8, 8));
+    // and back
+    let (_, out) = step_handled_at(&mut screen, view, 7, 0, &ch_down);
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 1, 0)]);
+    assert_eq!(board(&screen).grid.page(), 0);
+    // the first page has none before it, the last none after it
+    let (handled, out) = step_handled_at(&mut screen, view, 1, 0, &ch_down);
+    assert_eq!(handled, Handled::Yes);
+    assert!(seated_elems(&out).is_empty());
+}
+
+/// **The page follows a move of focus** (DOWN past the sixth row, UP back): the board shows the page focus is on.
+#[test]
+fn the_page_follows_focus_down_and_up() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    let (last, next) = (cell_elem(&screen, 5, 0), cell_elem(&screen, 6, 0));
+    assert_eq!(move_from(&screen, view, last, Dir::Down), Some(next));
+    step(&mut screen, view, Some(next), &ScreenEvent::FocusMoved { from: Some(FocusKey { entry: ENTRY, elem: last }), to: FocusKey { entry: ENTRY, elem: next }, by: By::Dir });
+    assert_eq!(board(&screen).grid.page(), 1);
+    assert!(near(rect_of(&screen, view, 6, 0).y, 292.0), "the seventh channel is the first row of the second page");
+    step(&mut screen, view, Some(last), &ScreenEvent::FocusMoved { from: Some(FocusKey { entry: ENTRY, elem: next }), to: FocusKey { entry: ENTRY, elem: last }, by: By::Dir });
+    assert_eq!(board(&screen).grid.page(), 0);
+}
+
+fn press_cell(screen: &mut LiveTvScreen, view: LiveTvView<'_>, row: usize, index: usize) -> Vec<Stamped<TestHost>> {
+    step_at(screen, view, row, index, &ScreenEvent::PressCommit(PressId(7)))
+}
+
+/// [`step`] with focus on the Guide's cell `row`, `index`.
+fn step_at(screen: &mut LiveTvScreen, view: LiveTvView<'_>, row: usize, index: usize, ev: &ScreenEvent<TestHost>) -> Vec<Stamped<TestHost>> {
+    let elem = cell_elem(screen, row, index);
+    step(screen, view, Some(elem), ev)
+}
+
+/// [`step_handled`] with focus on the Guide's cell `row`, `index`.
+fn step_handled_at(screen: &mut LiveTvScreen, view: LiveTvView<'_>, row: usize, index: usize, ev: &ScreenEvent<TestHost>) -> (Handled, Vec<Stamped<TestHost>>) {
+    let elem = cell_elem(screen, row, index);
+    step_handled(screen, view, Some(elem), ev)
+}
+
+/// **OK on what is airing tunes the channel; OK on a later programme does nothing; the unscheduled cell tunes.**
+#[test]
+fn ok_tunes_what_is_airing_and_ignores_a_later_programme() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    let tune = |channel: &str, title: &str| PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into(), title: title.into() };
+    let airing = press_cell(&mut screen, view, 0, 0);
+    assert_eq!(asked_plays(&airing), [tune("C101", "Station 101")]);
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 1)).is_empty(), "a later programme is not on");
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 2)).is_empty());
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 1, 0)), [tune("C102", "Station 102")]);
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 2, 0)), [tune("C103", "Station 103")], "no guide data: the cell tunes the channel");
+    // the same programme once its time has come is on: a clock past 21:00 makes 101's second cell the airing
+    WALL.with(|w| w.set(Some(Wall::from_secs(NOW + 35 * MIN, 0))));
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 1)), [tune("C101", "Station 101")]);
+}
+
+/// **A cell has an id, a label and the channel's subject, like a card.**
+#[test]
+fn guide_cells_are_addressable_with_a_label_and_the_channels_subject() {
+    let _language = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
+    let (store, screen) = guide();
+    let context = cx(store.view(), None);
+    let a11y = |row, index| Focusable::<TestHost>::a11y(&screen, &cell_elem(&screen, row, index), &context).expect("an element");
+    let first = a11y(0, 1);
+    assert!(first.path.to_string().starts_with("guide."), "{}", first.path);
+    assert_eq!(first.label.as_deref(), Some("News at Nine"));
+    let subject = first.subject.as_deref().expect("a subject").to_owned();
+    assert!(subject.starts_with("live-"), "{subject}");
+    // every cell of a channel acts on that channel
+    assert_eq!(a11y(0, 0).subject.as_deref(), Some(subject.as_str()));
+    assert_ne!(a11y(1, 0).subject.as_deref(), Some(subject.as_str()));
+    assert_eq!(a11y(2, 0).label.as_deref(), Some("Station 103"), "the unscheduled cell says its channel");
+    // the id finds the element back
+    let id = a11y(1, 0).path.clone();
+    assert_eq!(Focusable::<TestHost>::a11y_find(&screen, &id, &context), Some(cell_elem(&screen, 1, 0)));
+}
+
+/// **A digit on the Guide opens number entry**, as on What's on.
+#[test]
+fn a_digit_on_the_guide_opens_number_entry() {
+    let (store, mut screen) = guide();
+    let (handled, out) = step_handled_at(&mut screen, store.view(), 0, 0, &digit_key(50, Edge::Down));
+    assert_eq!(handled, Handled::Yes);
+    assert!(out.iter().any(|s| matches!(&s.fx, Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::ChannelEntry { first: 2 }))))));
+}
+
+/// **BACK from the player returns to the left channel's row**, on its page.
+#[test]
+fn the_restored_guide_seats_the_row_of_the_channel_the_player_left() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    step(&mut screen, view, None, &left("C108"));
+    let out = step_at(&mut screen, view, 0, 0, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 0)], "the channel's row, its airing cell");
+    assert_eq!(board(&screen).grid.page(), 1, "and its page is the one showing");
+    // 101 was left: its airing cell (the first), on the first page again
+    step(&mut screen, view, None, &left("C101"));
+    let out = step_at(&mut screen, view, 7, 0, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)]);
+    assert_eq!(board(&screen).grid.page(), 0);
+}
+
+/// **A refresh keeps the page and the focus on its channel**: the board is rebuilt from the store's revision keeping the
+/// page, and a focused cell the refresh took away goes to the last cell of its row.
+#[test]
+fn a_refresh_keeps_the_page_and_the_focus_on_its_channel() {
+    let (mut store, mut screen) = guide();
+    let seventh = cell_elem(&screen, 6, 0);
+    step(&mut screen, store.view(), Some(seventh), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: seventh }, by: By::Dir });
+    assert_eq!(board(&screen).grid.page(), 1);
+    // 101 loses its programmes after the airing: a refresh
+    let mut lineup = guide_lineup();
+    lineup[0].later.clear();
+    store.install_for_test(lineup);
+    step(&mut screen, store.view(), Some(seventh), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
+    assert_eq!(board(&screen).grid.page(), 1, "the page the reader was on");
+    assert_eq!(board(&screen).grid.cells(0), 1);
+    // a focus on 101's third cell, which no longer exists, stays on its row
+    let gone = FocusKey { entry: ENTRY, elem: GUIDE_FIRST_ELEM + 2 };
+    let context = cx(store.view(), Some(gone.elem));
+    assert_eq!(Focusable::<TestHost>::reconcile(&screen, gone, &context).elem, GUIDE_FIRST_ELEM);
+}
+
+/// **The now line and chip move with the minute**: the page asks for a frame when the minute changes, and not within it.
+#[test]
+fn the_guide_asks_for_a_frame_each_minute_for_its_now_line() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    let tick = |screen: &mut LiveTvScreen, ms: u32| -> Option<Provenance> {
+        let context = cx(view, None);
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        {
+            let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(InstanceId(9)), &mut present);
+            Machine::<TestHost>::step(screen, &ScreenEvent::Tick(Tick { ms, dt_us: 16_667 }), &context, &mut fx);
+        }
+        present.why()
+    };
+    tick(&mut screen, 16);
+    tick(&mut screen, 32);
+    assert_eq!(tick(&mut screen, 48), None, "the same minute: nothing to draw");
+    WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW + 30, 0))));
+    assert_eq!(tick(&mut screen, 64), None, "thirty seconds on: still the same minute");
+    WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW + MIN, 0))));
+    assert_eq!(tick(&mut screen, 80), Some(Provenance::Input), "the next minute: the line and the chip move");
+}
+
+/// **The canon says the scope and the board's page and window**, so a replay that differs in either differs in state.
+#[test]
+fn the_canon_carries_the_scope_the_page_and_the_window() {
+    let (store, mut screen) = guide();
+    let canon = |screen: &LiveTvScreen| { let mut c = Canon::new(); screen.write(&mut c); c.finish() };
+    let before = canon(&screen);
+    let seventh = cell_elem(&screen, 6, 0);
+    step(&mut screen, store.view(), Some(seventh), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: seventh }, by: By::Dir });
+    assert_ne!(canon(&screen), before, "the page");
+    let on_page = canon(&screen);
+    WALL.with(|w| w.set(Some(Wall::from_secs(NOW + 40 * MIN, 0))));
+    step(&mut screen, store.view(), Some(seventh), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    assert_ne!(canon(&screen), on_page, "the window rolled to the next half hour");
+    choose(&mut screen, store.view(), WHATS_ON_ELEM);
+    assert_ne!(canon(&screen), on_page, "the scope");
 }

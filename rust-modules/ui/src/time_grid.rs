@@ -22,6 +22,10 @@
 //! neither pointed at nor drawn), which makes UP and DOWN between pages ordinary moves; the page follows the
 //! focus ([`TimeGrid::follow`]).
 //!
+//! **An element is its row and its place in the row** ([`ROW_STRIDE`] apart), not its place in the whole board,
+//! so a refresh that gives one channel another programme moves no other channel's elements, and the focus that
+//! stands on a row stays on that row.
+//!
 //! **A row with no programme in the window** (a channel the guide has nothing for) is one cell across the whole
 //! window, so it can be focused and pressed like any other ([`TimeGrid::is_unscheduled`]).
 use std::ops::Range;
@@ -77,6 +81,9 @@ const LOGO_H: f32 = 98.0;
 pub const LOGO_SCALE: f32 = 0.7;
 /// A cell narrower than this draws no text: a title that is all ellipsis says nothing.
 const MIN_TEXT_W: f32 = 64.0;
+/// How far apart the elements of two rows are: more than the seconds in any window the board has, so no row runs
+/// into the next whatever the guide sends.
+pub const ROW_STRIDE: u32 = 8_192;
 /// Where a cell that is not on the page is parked: above the frame, so it is neither drawn nor hit.
 const PARKED_Y: f32 = -10_000.0;
 
@@ -185,9 +192,9 @@ pub struct TimeGrid {
     axis: Axis,
     /// Per row, its programmes in time order; empty is an unscheduled row.
     rows: Vec<Vec<Span>>,
-    /// The first element of each row, and one past the last (`rows.len() + 1` entries): a cell's element is its
-    /// row's first plus its index, so no row is capped at some number of cells.
-    firsts: Vec<u32>,
+    /// How many cells come before each row, and the total last (`rows.len() + 1` entries): the board's cells in
+    /// row then time order, which is the order [`nth`](Self::nth) walks.
+    starts: Vec<usize>,
     /// The element of row 0, cell 0: the screen's namespace for the board.
     base: u32,
     /// Which page of [`PAGE_ROWS`] rows shows.
@@ -195,21 +202,35 @@ pub struct TimeGrid {
 }
 
 impl TimeGrid {
-    /// A board of `rows` over `axis` on its first page. `base` is the element of the first cell and every other
-    /// cell's follows it, so the screen keeps [`len`](Self::len) elements from `base` for the board.
+    /// A board of `rows` over `axis` on its first page. `base` is the element of the first cell; row `r`'s cells
+    /// are `base + r * ROW_STRIDE + n`, so the screen keeps the range from `base` for the board.
     pub fn new(axis: Axis, rows: Vec<Vec<Span>>, base: u32) -> Self {
-        let mut firsts = Vec::with_capacity(rows.len() + 1);
-        let mut next = base;
+        let mut starts = Vec::with_capacity(rows.len() + 1);
+        let mut total = 0;
         for row in &rows {
-            firsts.push(next);
-            next += row.len().max(1) as u32;
+            starts.push(total);
+            total += row.len().max(1);
         }
-        firsts.push(next);
-        Self { axis, rows, firsts, base, page: 0 }
+        starts.push(total);
+        Self { axis, rows, starts, base, page: 0 }
+    }
+
+    /// This board on page `page`, or on its last page when it has fewer: a board rebuilt from a refresh keeps
+    /// the page the reader was on.
+    pub fn at_page(mut self, page: usize) -> Self {
+        self.page = page.min(self.pages().saturating_sub(1));
+        self
     }
 
     pub fn axis(&self) -> Axis {
         self.axis
+    }
+
+    /// The row an element is in, whether or not that row still has a cell at the element's place (a refresh that
+    /// gave the row fewer programmes): where a focus that lost its cell goes to stay on its channel.
+    pub fn row_of(&self, elem: u32) -> Option<usize> {
+        let row = (elem.checked_sub(self.base)? / ROW_STRIDE) as usize;
+        (row < self.rows.len()).then_some(row)
     }
 
     /// How many rows the board has.
@@ -217,9 +238,9 @@ impl TimeGrid {
         self.rows.len()
     }
 
-    /// How many cells the board has, in all: the length of its element run.
+    /// How many cells the board has, in all.
     pub fn len(&self) -> usize {
-        (self.firsts.last().copied().unwrap_or(self.base) - self.base) as usize
+        self.starts.last().copied().unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -266,26 +287,30 @@ impl TimeGrid {
 
     /// A cell's element.
     pub fn elem(&self, at: Cell) -> Option<u32> {
-        (at.index < self.cells(at.row)).then(|| self.firsts[at.row] + at.index as u32)
+        let row = u32::try_from(at.row).ok()?;
+        (at.index < self.cells(at.row)).then(|| self.base + row * ROW_STRIDE + at.index as u32)
     }
 
     /// The cell an element is, `None` for one that is not the board's.
     pub fn locate(&self, elem: u32) -> Option<Cell> {
-        if elem < self.base || elem >= *self.firsts.last()? {
+        let offset = elem.checked_sub(self.base)?;
+        let at = Cell { row: (offset / ROW_STRIDE) as usize, index: (offset % ROW_STRIDE) as usize };
+        (at.index < self.cells(at.row)).then_some(at)
+    }
+
+    /// The `n`th cell of the board, in row then time order (`len()` of them): the order a stack walks a section's
+    /// elements in.
+    pub fn nth(&self, n: usize) -> Option<Cell> {
+        if n >= self.len() {
             return None;
         }
-        let row = self.firsts.partition_point(|first| *first <= elem) - 1;
-        Some(Cell { row, index: (elem - self.firsts[row]) as usize })
+        let row = self.starts.partition_point(|start| *start <= n) - 1;
+        Some(Cell { row, index: n - self.starts[row] })
     }
 
-    /// The nth element of the board's run, in row then time order (`len()` of them).
-    pub fn nth(&self, n: usize) -> Option<u32> {
-        (n < self.len()).then(|| self.base + n as u32)
-    }
-
-    /// The position of element `elem` in the board's run.
-    pub fn index_of(&self, elem: u32) -> Option<usize> {
-        self.locate(elem).map(|_| (elem - self.base) as usize)
+    /// The position of `at` in the board's run (the inverse of [`nth`](Self::nth)).
+    pub fn position(&self, at: Cell) -> Option<usize> {
+        (at.index < self.cells(at.row)).then(|| self.starts[at.row] + at.index)
     }
 
     /// **The page follows the focus**: show the page `row` is on. `true` when that turned the page.
