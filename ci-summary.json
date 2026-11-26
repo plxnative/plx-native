@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T18:57:50Z",
+ "generated": "2026-11-26T18:58:37Z",
  "metrics": [
   {
-   "change30_pct": 39.8,
-   "change7_pct": 35.1,
+   "change30_pct": 41.3,
+   "change7_pct": 36.5,
    "d30": 201,
-   "delta30": 80.0,
-   "delta7": 73.0,
+   "delta30": 83,
+   "delta7": 76,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 64,
+   "n_now": 65,
    "n_prev": 47,
-   "now": 281.0,
+   "now": 284,
    "prev7": 208,
    "shown": true,
    "state": "worse",
@@ -340,18 +340,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 22.0,
-   "change7_pct": 2.2,
+   "change30_pct": 21.8,
+   "change7_pct": 2.1,
    "d30": 341.0,
-   "delta30": 75.0,
-   "delta7": 9,
+   "delta30": 74.5,
+   "delta7": 8.5,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 71,
+   "n_now": 72,
    "n_prev": 63,
-   "now": 416,
+   "now": 415.5,
    "prev7": 407,
    "shown": true,
    "state": "flat",
@@ -583,18 +583,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 33.1,
-   "change7_pct": 0.4,
+   "change30_pct": 32.6,
+   "change7_pct": 0.0,
    "d30": 265.5,
-   "delta30": 88.0,
-   "delta7": 1.5,
+   "delta30": 86.5,
+   "delta7": 0,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 64,
+   "n_now": 65,
    "n_prev": 47,
-   "now": 353.5,
+   "now": 352,
    "prev7": 352,
    "shown": true,
    "state": "flat",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 38.0,
-   "change7_pct": 1.8,
+   "change30_pct": 40.5,
+   "change7_pct": 3.6,
    "d30": 163.0,
-   "delta30": 62.0,
-   "delta7": 4.0,
+   "delta30": 66.0,
+   "delta7": 8,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 64,
+   "n_now": 65,
    "n_prev": 47,
-   "now": 225.0,
+   "now": 229,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -820,14 +820,14 @@
    "change7_pct": 0.0,
    "d30": 18.0,
    "delta30": 2.0,
-   "delta7": 0.0,
+   "delta7": 0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 64,
+   "n_now": 65,
    "n_prev": 47,
-   "now": 20.0,
+   "now": 20,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -923,13 +923,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 35.1,
+   "change_pct": 36.5,
    "commits": [
-    {
-     "pr": 1559,
-     "sha": "464a6a023",
-     "title": "Open Watch Party: the reconciliation step and matching, as pure functions"
-    },
     {
      "pr": 1566,
      "sha": "ecfadaf76",
@@ -974,6 +969,11 @@
      "pr": 1547,
      "sha": "91c523a7c",
      "title": "Auto plays a 7.1 DTS-HD MA as its 5.1 core on a DTS-capable set"
+    },
+    {
+     "pr": 1562,
+     "sha": "0f22f7455",
+     "title": "Playback: stopping a play or trailer frees the stream slots its decision reserved"
     }
    ],
    "from": 208,
@@ -981,7 +981,7 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-26",
    "threshold_pct": 20.0,
-   "to": 281.0
+   "to": 284
   }
  ],
  "schema": 2,
@@ -1008,7 +1008,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 353.5
+   "now": 352
   },
   {
    "group": "ci",
