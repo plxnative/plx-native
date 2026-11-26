@@ -564,27 +564,77 @@ fn a_start_needs_the_staged_source_of_its_own_attempt_and_one_attempt_at_a_time(
     assert_eq!(dispatch(&mut driver, attempt(4), 4, start), DispatchResult::Refused(Failure::Busy));
 }
 
+/// **The selected audio stream is asked of the host and settles on its answer.** The source's track map names the
+/// stream at its native index; the driver sends `VERB_AUDIO_TRACK` with that index and the command id, and the
+/// selection settles only when the host's `PLAYER_TRACK` echoes the command with the index it selected (evidence
+/// from the player, not by construction). A refusal (`b = -1`), an unanswered request and a refused verb are the
+/// command's typed refusal; a stream the map does not name is `Unsupported` and asks nothing.
 #[test]
-fn only_the_first_audio_stream_is_selectable_and_the_driver_says_so() {
+fn the_selected_audio_stream_is_asked_of_the_host_and_settles_on_its_answer() {
     let (mut driver, fake) = rig();
-    let first = TrackSelection { kind: TrackKind::Audio, id: 31342 };
+    let unmapped = TrackSelection { kind: TrackKind::Audio, id: 31342 };
     let second = TrackSelection { kind: TrackKind::Audio, id: 31343 };
     let a = attempt(1);
-    stage_and_start(&mut driver, a, vec![NativeTrackIndex { selection: first, index: 0 }, NativeTrackIndex { selection: second, index: 1 }]);
-    fake.post(fake.epoch(), PlayerKind::Prepared, 1_000, 0);
-    poll(&mut driver);
-    assert!(driver.maps_track(first) && !driver.maps_track(second));
+    stage_and_start(&mut driver, a, vec![NativeTrackIndex { selection: second, index: 1 }]);
+    let epoch = fake.epoch();
     let pick = |id| Operation::SelectTrack { kind: TrackKind::Audio, choice: TrackChoice::Selected(id) };
-    assert_eq!(dispatch(&mut driver, a, 2, pick(31342)), DispatchResult::Queued);
+    assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Refused(Failure::Busy), "not before PREPARED");
+    fake.post(epoch, PlayerKind::Prepared, 1_000, 0);
+    poll(&mut driver);
+    assert!(driver.maps_track(second) && !driver.maps_track(unmapped));
+
+    assert_eq!(dispatch(&mut driver, a, 3, pick(31343)), DispatchResult::Queued);
+    assert_eq!(fake.verbs(), [Verb::AudioTrack { index: 1, command: 3 }]);
+    assert!(poll(&mut driver).is_empty(), "nothing settles before the host answers");
+    fake.post(epoch, PlayerKind::Track, 3, 1);
     assert_eq!(poll(&mut driver), [
-        observation(a, Observation::TrackSelected(seen(first))),
-        DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Audio, choice: TrackChoice::Selected(31342) },
+        observation(a, Observation::TrackSelected(seen(second))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Audio, choice: TrackChoice::Selected(31343) },
     ]);
-    assert_eq!(dispatch(&mut driver, a, 3, pick(31343)), DispatchResult::Refused(Failure::Unsupported));
-    assert_eq!(dispatch(&mut driver, a, 4, Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Selected(1) }),
+
+    // The host refused it: the command's refusal, and the attempt keeps playing.
+    assert_eq!(dispatch(&mut driver, a, 4, pick(31343)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 4, -1);
+    assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(4), operation: pick(31343),
+        failure: Failure::Refused }]);
+
+    // No answer by the control deadline.
+    assert_eq!(dispatch(&mut driver, a, 5, pick(31343)), DispatchResult::Queued);
+    fake.advance(TIMING.control_timeout_ms);
+    assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(5), operation: pick(31343),
+        failure: Failure::TimedOut }]);
+
+    // The host refused the verb at the door.
+    fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+    assert_eq!(dispatch(&mut driver, a, 6, pick(31343)), DispatchResult::Refused(Failure::Busy));
+    fake.with(|s| s.refuse_verb = None);
+    assert!(poll(&mut driver).is_empty(), "a refused verb leaves nothing pending");
+
+    // A stream the map does not name, and a subtitle, ask nothing of the host.
+    let asked = fake.verbs().len();
+    assert_eq!(dispatch(&mut driver, a, 7, pick(31342)), DispatchResult::Refused(Failure::Unsupported));
+    assert_eq!(dispatch(&mut driver, a, 8, Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Selected(1) }),
         DispatchResult::Refused(Failure::Unsupported));
-    assert!(poll(&mut driver).is_empty(), "a refused selection is the planner's typed answer: it fails and tears down nothing");
-    assert!(fake.verbs().is_empty(), "no track verb exists on the host: nothing was asked of it");
+    assert_eq!(fake.verbs().len(), asked);
+}
+
+/// A track request the host still holds when the player closes is answered as refused before the release.
+#[test]
+fn a_track_request_unanswered_at_the_close_is_refused_before_the_release() {
+    let (mut driver, fake) = rig();
+    let second = TrackSelection { kind: TrackKind::Audio, id: 31343 };
+    let a = attempt(1);
+    stage_and_start(&mut driver, a, vec![NativeTrackIndex { selection: second, index: 1 }]);
+    let epoch = fake.epoch();
+    fake.post(epoch, PlayerKind::Prepared, 1_000, 0);
+    poll(&mut driver);
+    let pick = Operation::SelectTrack { kind: TrackKind::Audio, choice: TrackChoice::Selected(31343) };
+    assert_eq!(dispatch(&mut driver, a, 2, pick), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Closed, 0, 0);
+    assert_eq!(poll(&mut driver), [
+        DriverEvent::ControlRefused { attempt: a, command: cmd(2), operation: pick, failure: Failure::Refused },
+        DriverEvent::Release { attempt: a, status: ReleaseStatus::Released },
+    ]);
 }
 
 #[test]
