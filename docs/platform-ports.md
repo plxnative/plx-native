@@ -1168,7 +1168,8 @@ Ecore names to `remote_token_key` pairs".
   running. The watchdog is disarmed before `on_stopped` and across `OnPause` (`watchdog::disarm`/`arm`, new in
   W3c, F42; `arm` re-captures the loop thread id).
 - The hosted contract is private to the Tizen platform (review M4, critic M6):
-  - `plx_host_start(const PlxHostApi *, const char *launch_json)`, `plx_host_post(const PlxHostEvent *)` and
+  - `plx_host_start(const PlxHostApi *, const char *launch_json)`, `plx_host_post(const PlxHostEvent *)`,
+    `plx_host_post_cue(const PlxHostCue *)` (a selected subtitle's cues, on a bounded lossy queue of their own) and
     `plx_host_stop()`. `PlxHostApi` starts with `size` and `abi_version`; the library reads a later field only
     when `size` covers it and refuses a table smaller than version 1.
   - Threads. `plx_host_start` runs on the host's main thread inside `OnCreate`: it creates the Ecore_Wl2 window and
@@ -2007,7 +2008,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   MediaView, an ElmSharp window or a NUI window), so the host calls the native player directly (D1 = P1).
 - As landed (PR A, the host ABI and the C# player): `plx_host.h` is version 2: `player_open` and `player_verb`
   appended to `PlxHostApi` (size-gated, both or neither), player events through `plx_host_post` carrying an epoch
-  (still exactly three exports), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
+  (three exports then; `plx_host_post_cue` came later for subtitle cues, `docs/tizen.md`, "Selected text subtitles"), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
   own in `Hosted` (lossless but for position and buffering). A v1 host or NULL pointers is "no playback", never a
   refused start. The host is `PlxPlayer.cs` over `libcapi-media-player.so.0` (`PlayerNative.cs`): one video thread, a
   host-side position poll, events posted straight from native callbacks. The window is found host-side
@@ -2027,7 +2028,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   and never a converted PMS output. `subtitle_choice = Off` (any subtitle stream, none selected) is carried: the driver states
   `subtitle_off` (the host gives the player no subtitle, and the emulator run in `docs/tizen.md`, "Subtitles off", showed
   none drawn from a default-flagged embedded track), so `SubtitleOff` is refused only on evidence without it. A selected
-  embedded subtitle still fails `subtitle_track`, a sidecar is `requires_client_subtitle`, and Boost Dialog, Auto on a
+  embedded TEXT subtitle (every embedded subtitle stream SubRip or ASS) is drawn by the app from the host player's cues
+  (`plx_host_post_cue`, `docs/tizen.md`, "Selected text subtitles"), a picture or unmeasured one still fails `subtitle_track`, a sidecar is `requires_client_subtitle`, and Boost Dialog, Auto on a
   non-local link and a relay are refused before the qualifier is asked; with no Feed and `qualify_pms` Unknown each ends as
   `NoQualifiedBackend` (the resolver tests pin them); a track pick
   the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title (and a Quality rung, which only a Feed or a converting provider can carry, is neither offered nor applied: `PlaybackSession::quality_pick_carriable`); a stall or failure of the original is not re-resolved on a composition with no Feed and no converting provider (`can_retry_uri_after_release`), so the viewer reads the stall and not a refusal; the parked attempt's `stopped` timeline goes out at the restore's retire and at an exit, at its own position; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
