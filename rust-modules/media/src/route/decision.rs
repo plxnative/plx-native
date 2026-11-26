@@ -91,8 +91,9 @@ struct HeldSelection {
 /// item than the failed attempt's), so the item is what says which failure screen it belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeldPick {
-    /// The `(server, ratingKey)` of the request in force when it was held ([`attempt_item`]).
-    item: Option<(ServerId, String)>,
+    /// The `(server, ratingKey)` of the request in force when it was held ([`attempt_item`]); a pick
+    /// is never held without a request, so there is always one.
+    item: (ServerId, String),
     selection: HeldSelection,
 }
 
@@ -447,13 +448,16 @@ pub struct PlaybackSession {
     carried_selection: Option<HeldSelection>,
     /// **The pair the viewer chose on the failure screen** (`memory::hold_pick_for_retry`): the
     /// pick the next retry carries INSTEAD of the standing selection, which describes the attempt that
-    /// just failed. One owner of 'what Try again plays': [`current_retry_context`] reads it first. Same
-    /// rule as [`Self::pick_spend_on_start`]: a REQUEST does not clear it (a retry's request cancelled before
-    /// it lands, BACK or Home during the resolve, leaves the failure screen's pick standing); only the
-    /// LANDING that consumes it does ([`apply_plan`] installs the next playback with none held).
-    /// **Read only through [`held_pick`]**, which returns it only while the request in force is for the
-    /// item it was held on: a request for another item that fails before landing must not show, or
-    /// retry, the pick made on the previous item's failure.
+    /// just failed. One owner of 'what Try again plays': [`current_retry_context`] reads it first.
+    /// **Lifetime: ONE player visit.** It survives retry requests and [`cancel_playback_request`]
+    /// (BACK, Home or a background suspend during a retry's resolve leave the failure screen's pick
+    /// standing), and ends at exactly three places: the LANDING that consumes it ([`apply_plan`]
+    /// installs the next playback with none held); the full stop or exit
+    /// ([`retire_stopped_playback`], beside [`Self::pick_spend_on_start`]); and a fresh, non-retry
+    /// request ([`begin_track_selection`] with no retry), so a pick from an earlier visit never
+    /// outranks a newer one made elsewhere.
+    /// **Read only through [`held_pick`]**, which also returns it only while the request in force is
+    /// for the item it was held on.
     held_pick: Option<HeldPick>,
     /// Is [`Self::cur_sub_sid`] an external sidecar (`metadata::Stream::sidecar_renderable`) rather
     /// than an embedded (in-container) track? Meaningless when `cur_sub_sid == 0`. Issue #266 I6:
@@ -2379,6 +2383,8 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession) {
     ps.request = None;
     // an abandoned playback never spends: nothing will start under the plan that held the pick
     ps.pick_spend_on_start = None;
+    // the player visit is over: so is the failure screen's pick
+    ps.held_pick = None;
     if ps.engine_failure == Some(crate::player::RuntimeFailure::ServerStopped) {
         ps.engine_failure = None;
     }
@@ -11589,7 +11595,8 @@ fn request_play_with_queue(
 
 /// What a play REQUEST clears of the outgoing item's live track selection (the landing installs
 /// the incoming item's own). Not [`PlaybackSession::held_pick`]: a request cancelled before it lands
-/// restores the failed attempt, whose screen still shows the viewer's pick; the landing clears it.
+/// restores the failed attempt, whose screen still shows the viewer's pick; its lifetime is
+/// [`begin_track_selection`]'s (a fresh request), the landing's and the full stop's.
 fn clear_track_selection(s: &mut PlaybackSession) {
     s.cur_audio = None;
     s.source_selection = None;
@@ -11603,8 +11610,12 @@ fn clear_track_selection(s: &mut PlaybackSession) {
 
 /// What a play request does to the live track selection: clear it, and keep the pair a RETRY
 /// carried ([`PlaybackSession::carried_selection`]) so a retry built before this one lands still
-/// finds it. A new item (`None`) carries nothing.
+/// finds it. A new item (`None`) carries nothing, and ends the failure screen's held pick
+/// ([`PlaybackSession::held_pick`]): a fresh request is a new player visit, a retry is the same one.
 fn begin_track_selection(s: &mut PlaybackSession, retry: Option<RetryContext>) {
+    if retry.is_none() {
+        s.held_pick = None;
+    }
     let source_selection = retry.and(s.source_selection);
     clear_track_selection(s);
     s.source_selection = source_selection;
@@ -11690,7 +11701,8 @@ fn attempt_item(ps: &PlaybackSession) -> Option<(ServerId, String)> {
 /// failed) shows its own failure, never the previous item's pick. The pick's file may differ from the
 /// failed attempt's (another version of the item), so the rule keys the ITEM, not the part.
 fn held_pick(ps: &PlaybackSession) -> Option<HeldSelection> {
-    ps.held_pick.as_ref().filter(|h| h.item == attempt_item(ps)).map(|h| h.selection)
+    let item = attempt_item(ps)?;
+    ps.held_pick.as_ref().filter(|h| h.item == item).map(|h| h.selection)
 }
 
 fn current_retry_context(ps: &PlaybackSession, resume_ns: i64) -> RetryContext {

@@ -1090,6 +1090,10 @@ fn a_preplay_subtitles_off_on_an_episode_puts_off_and_its_memory_rung_draws_none
 #[test]
 fn a_pick_on_no_file_is_not_held_for_the_retry() {
     let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
     ps.source_selection = Some(SourceSelection {
         server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
     });
@@ -1106,6 +1110,10 @@ fn a_pick_on_no_file_is_not_held_for_the_retry() {
 #[test]
 fn a_server_pick_on_another_file_does_not_inherit_the_attempts_subtitle() {
     let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
     ps.source_selection = Some(SourceSelection {
         server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
     });
@@ -1123,6 +1131,10 @@ fn a_server_pick_on_another_file_does_not_inherit_the_attempts_subtitle() {
 #[test]
 fn a_pick_held_on_the_failure_screen_is_the_selection_the_retry_carries() {
     let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
     ps.source_selection = Some(SourceSelection {
         server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
     });

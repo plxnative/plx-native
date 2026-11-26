@@ -708,15 +708,18 @@ pub fn commit_preplay_pick(
 /// viewer's. The session's copy of the ONE pick value ([`plx_data::metadata::PreplayPick`], written by
 /// the picker's `Selection`): derived here and nowhere else, written only by the loop's
 /// `CommitPreplayPick` on the failure screen. Held until the LANDING that consumes it clears it
-/// (`apply_plan`), never by a request: a retry's request cancelled before it lands (BACK or Home during
-/// the resolve) leaves it held, like [`PlaybackSession::pick_spend_on_start`]; and only the item it was
-/// made on reads it back ([`super::held_pick`]). A
+/// (`apply_plan`), the full stop ([`super::retire_stopped_playback`]) or a fresh, non-retry request
+/// ([`super::begin_track_selection`]): a retry's request cancelled before it lands (BACK, Home or a
+/// background suspend during the resolve) leaves it held, so it lives one player visit; and only the item
+/// it was made on reads it back ([`super::held_pick`]). A
 /// [`plx_data::metadata::SubPick::Server`] subtitle half keeps the subtitle the attempt stood on, so an
 /// audio-only pick does not turn subtitles off.
 pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::PreplayPick) {
     use plx_data::metadata::SubPick;
     // A pick on no file (`part_id` unknown) names nothing a retry could play: hold nothing, so the
     // retry keeps carrying the attempt's own pair.
+    // Nor with no request in force: there is no item the pick could belong to.
+    let Some(item) = super::attempt_item(ps) else { return };
     if pick.part_id <= 0 {
         return;
     }
@@ -730,7 +733,7 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
             .map_or(0, |held| held.sub_sid),
     };
     let selection = super::HeldSelection { part_id: pick.part_id, audio_sid: pick.audio_sid, sub_sid };
-    ps.held_pick = Some(super::HeldPick { item: super::attempt_item(ps), selection });
+    ps.held_pick = Some(super::HeldPick { item, selection });
 }
 
 /// **What the failure screen's picker starts from**: the held pick, else the attempt's standing
