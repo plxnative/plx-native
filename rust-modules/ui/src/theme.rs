@@ -705,7 +705,7 @@ impl Material {
 /// `Ground::Menu` draws `popover_glass`, whose body is the menu's own once-per-snapshot frost of the
 /// host page (`gfx::GlassFrost`; the latched underlay field is its fallback body). That frost is not
 /// [`Material`]'s `deep()`, so a menu spends neither half of `PANEL_MATERIAL` and draws no frost
-/// quad. That is for the MENUS only: a `Ground::Sheet` (the centred alerts, About, Track
+/// quad. That is for the MENUS (and number entry over a page) only: a `Ground::Sheet` (the centred alerts, About, Track
 /// information, the person bio, the decision alert), and a menu with no latched field, takes the
 /// field ground, which spends the `frost()` half alone.
 pub const PANEL_MATERIAL: Material = Material::UltraThick;
