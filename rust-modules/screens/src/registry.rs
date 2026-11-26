@@ -3141,10 +3141,10 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // 32) and `screens::preplay_panel::SHAPE` is appended; the previous pin was 0x17bd_9205_2e59_cd6e. The same
 // bump: the item menu's kind list gains `HeroOverflow{rows:len}` (canon kind tag 6: the hero's ... menu, its
 // row count), which the Detail hero's overflow already presented. The hero row (#1553) then moved it again:
-// `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14), from
-// 0x8e79_1d31_a441_fb57 to 0xde99_c01f_cb88_02a4. The replay fixtures v13-owned-input-content and
-// 13-by-id-filmography were re-recorded against that shape (the app census is 0xc0b2_71bb_16d2_d02f, pinned
-// in `app/recorder.rs`); this screen-half pin only asserts the inventory, it is not a recorded value.
+// `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14). The
+// replay fixtures v13-owned-input-content and 13-by-id-filmography were re-recorded against the shape
+// (the app census, 0xb0b8_437b_410f_aab3, is pinned in `app/recorder.rs`); this screen-half pin only
+// asserts the inventory, it is not a recorded value.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.
@@ -3170,7 +3170,8 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // The Channels shelf keeps every channel reachable: the Live TV screen's stack has three shelves
 // (`Shelf{row,pop}` x 3). Previous pin: 0x6353_575b_3c41_8806. Re-record incompatible replay anchors.
 // The hero row (#1553) adds the Audio & Subtitles panel (`PreplayPanel`) and the item menu's hero
-// overflow (`HeroOverflow{rows:len}`). Previous pins: 0x16f9_ab79_9300_dc0a (main), 0xde99_c01f_cb88_02a4 (this branch before the merge).
+// overflow (`HeroOverflow{rows:len}`). The pin moved from 0x8e79_1d31_a441_fb57 to 0xde99_c01f_cb88_02a4 with the `ctl` field, then to the value below once
+// this branch merged main (previous main pin: 0x16f9_ab79_9300_dc0a).
 const SCREEN_SHAPES_PIN: u64 = 0xa2bc_fa1b_e96e_0118;
 
 #[cfg(test)]
