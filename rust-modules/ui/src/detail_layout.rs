@@ -1,5 +1,6 @@
 //! Shared detail hero geometry, also used by the contrast and safe-area audits.
-use super::{consts::{MARGIN_X, MARGIN_Y}, theme, widgets, Rect};
+use super::{consts::{MARGIN_X, MARGIN_Y}, table::TableView, theme, widgets, Rect};
+use plx_machine::machine::Measure;
 #[cfg(any(test, feature = "test-support"))]
 use super::consts::SCR_W;
 #[cfg(test)]
@@ -67,13 +68,31 @@ pub fn hero_chain(
 /// synopsis's height).
 pub const SYNOPSIS_FOOT_ABOVE_ACTIONS: f32 = theme::hero::FACTS_H + 2.0 * theme::space::MD;
 
+/// **The focused pill of the hero control a menu or panel grows out of**, from the control's drawn rect
+/// (`[x, y, w, h]` as bits, like every panel argument): where the glass grows from and drains back into.
+pub fn hero_pill(anchor: [u32; 4]) -> Rect {
+    let [x, y, w, h] = anchor.map(f32::from_bits);
+    widgets::focus_pill(Rect::new(x, y, w, h))
+}
+
 /// **Where a Detail hero control's menu or panel goes: over the control it grows out of, and clear of
 /// the synopsis above the row whenever it fits** (`popover::cover_opener_clear`). `pill` is the
 /// control's focused pill, `actions_y` the top of the action row it stands in (the control's own
-/// rect's top), `size` the panel's own `(w, h)`. ONE rule for the hero's `…` menu, Select Version and
-/// Audio & Subtitles.
+/// rect's top), `size` the panel's own `(w, h)`.
 pub fn hero_panel_over(pill: Rect, actions_y: f32, size: (f32, f32)) -> Rect {
     super::popover::cover_opener_clear(pill, size, super::consts::SAFE, actions_y - SYNOPSIS_FOOT_ABOVE_ACTIONS)
+}
+
+/// **The ONE sizing and placing rule of every panel that grows out of a hero control**: the `…` menu with
+/// its pages, Select Version and Audio & Subtitles. The width is the table's own menu width, never
+/// narrower than the control's pill ([`TableView::menu_panel_width_from`], which honours
+/// `min_panel_w`); the height is the table's, between 120 px and the safe frame's height; the rect is
+/// [`hero_panel_over`] the pill of the control whose drawn rect is `anchor`.
+pub fn hero_panel_rect(table: &TableView, anchor: [u32; 4], measure: &dyn Measure) -> Rect {
+    let pill = hero_pill(anchor);
+    let actions_y = f32::from_bits(anchor[1]);
+    let size = (table.menu_panel_width_from(measure, pill), table.measured_height().clamp(120.0, super::consts::SAFE.h));
+    hero_panel_over(pill, actions_y, size)
 }
 
 /// Bottom of the credits' full leading boxes, aligned by the last cap band to the facts.

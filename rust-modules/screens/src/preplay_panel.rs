@@ -150,22 +150,33 @@ impl PreplayPanelScreen {
         }
         let Some(id) = self.picker.row_at(RowKey(elem)) else { return };
         if let Outcome::Picked(sel) = self.picker.ok(id) {
-            let tracks = self.picker.tracks().clone();
-            // **The store keeps only what the viewer chose for the item's next start**, and a page's
-            // pick is that. The failure screen's pair is the session's (`route::hold_pick_for_retry`,
-            // run by the loop's commit): its standing half is DERIVED from the failed attempt (a `0`
-            // subtitle reads as `Off`), which is not the viewer's word, so it never reaches the store.
-            if matches!(self.arg.source, Source::Page) {
-                fx.push(Fx::App(AppFx::Store(
-                    StoreId::Metadata,
-                    StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
-                )));
-            }
-            // On the failure screen the loop starts the retry with the commit and closes this panel
-            // only when the retry started (`content_command`), so a refused retry keeps it.
-            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
+            commit_pick(fx, self.picker.tracks().clone(), sel, self.arg.source);
         }
     }
+}
+
+/// **A pick of Audio & Subtitles, as effects: the ONE pair of every surface that lists the tracks** (this
+/// panel, the hero `…` menu's pages). `tracks` is the set after the pick, `sel` what was chosen.
+///
+/// **The store keeps only what the viewer chose for the item's next start**, and a page's pick is that.
+/// The failure screen's pair is the session's (`route::hold_pick_for_retry`, run by the loop's commit):
+/// its standing half is DERIVED from the failed attempt (a `0` subtitle reads as `Off`), which is not
+/// the viewer's word, so it never reaches the store. On the failure screen the loop starts the retry
+/// with the commit and closes the panel only when the retry started (`content_command`), so a refused
+/// retry keeps it.
+pub(crate) fn commit_pick<H: AppLike>(
+    fx: &mut Effects<'_, H>,
+    tracks: PreplayTracks,
+    sel: plx_appkit::preplay_tracks::Selection,
+    source: Source,
+) {
+    if matches!(source, Source::Page) {
+        fx.push(Fx::App(AppFx::Store(
+            StoreId::Metadata,
+            StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
+        )));
+    }
+    fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source })));
 }
 
 impl<H: AppLike<Memory = PageMemory>> Machine<H> for PreplayPanelScreen {
@@ -173,7 +184,7 @@ impl<H: AppLike<Memory = PageMemory>> Machine<H> for PreplayPanelScreen {
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
             ScreenEvent::Mount => {
-                let pill = self.picker.pill();
+                let pill = plx_ui::detail_layout::hero_pill(self.arg.anchor);
                 if let Some(pop) = &mut self.popover {
                     pop.open_from(Some(pill));
                 }
@@ -573,7 +584,7 @@ pub(crate) mod tests {
         );
         step(&mut p, ScreenEvent::Mount);
         let settled = p.picker().panel_rect(&plx_ui::fixture::FixtureMeasure);
-        let pill = p.picker().pill();
+        let pill = plx_ui::detail_layout::hero_pill(p.arg.anchor);
         assert!(
             settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
             "the settled panel {settled:?} covers the control {pill:?}"

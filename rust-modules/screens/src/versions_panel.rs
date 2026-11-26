@@ -116,22 +116,14 @@ impl VersionsPanelScreen {
         Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), form, popover }
     }
 
-    /// The control's focused pill: where the glass grows from and drains back into.
-    fn pill(&self) -> Rect {
-        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
-        plx_ui::widgets::focus_pill(Rect::new(x, y, w, h))
-    }
-
     /// Over the control when it morphs out of one (the shared rule, `popover::cover_opener`: the
     /// opener is consumed, so the glass must stand where it was), under the disc when there is room
     /// and above it when there is not for a panel with no opener.
     pub fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
         if self.popover.is_some() {
-            let w = self.form.table.measured_width(measure).clamp(plx_ui::table::MENU_MIN_W, plx_ui::table::MENU_MAX_W);
-            let h = self.form.table.measured_height().clamp(120.0, plx_ui::consts::SAFE.h);
-            return plx_ui::detail_layout::hero_panel_over(self.pill(), y, (w, h));
+            return plx_ui::detail_layout::hero_panel_rect(&self.form.table, self.arg.anchor, measure);
         }
+        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
         plx_ui::popover::under_or_above(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
     }
 
@@ -167,7 +159,7 @@ impl<H: AppLike<Memory = PageMemory>> Machine<H> for VersionsPanelScreen {
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
             ScreenEvent::Mount => {
-                let pill = self.pill();
+                let pill = plx_ui::detail_layout::hero_pill(self.arg.anchor);
                 if let Some(pop) = &mut self.popover {
                     pop.open_from(Some(pill));
                 }
@@ -689,7 +681,7 @@ pub(crate) mod tests {
         );
         step(&mut p, ScreenEvent::Mount);
         let settled = p.frame(&plx_ui::fixture::FixtureMeasure);
-        let pill = p.pill();
+        let pill = plx_ui::detail_layout::hero_pill(p.arg.anchor);
         assert!(
             settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
             "the settled panel {settled:?} covers the control {pill:?}, which the morph consumes"

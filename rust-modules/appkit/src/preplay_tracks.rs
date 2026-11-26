@@ -364,6 +364,12 @@ impl PickerCore {
         &self.tracks
     }
 
+    /// Does the item offer nothing to pick (no audio, no subtitle)? A page of it would list rows with nothing
+    /// behind them.
+    pub fn is_empty(&self) -> bool {
+        self.tracks.audio.is_empty() && self.tracks.subs.is_empty()
+    }
+
     pub fn now(&self) -> Chosen {
         chosen(self.set(), self.pick.as_ref())
     }
@@ -435,7 +441,7 @@ impl PickerState {
             over_opener: false,
         };
         s.form.table.compact = false;
-        let root = s.page_form(PickPage::Root);
+        let root = s.core.page_form(PickPage::Root);
         s.form.set(root, None);
         s
     }
@@ -448,12 +454,6 @@ impl PickerState {
         self.over_opener = true;
         self.motion = self.motion.spring_all_edges();
         self
-    }
-
-    /// The opener's focused pill: where a morphing panel's glass grows from and drains back into.
-    pub fn pill(&self) -> Rect {
-        let [x, y, w, h] = self.anchor.map(f32::from_bits);
-        plx_ui::widgets::focus_pill(Rect::new(x, y, w, h))
     }
 
     pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
@@ -473,14 +473,6 @@ impl PickerState {
         self.pages.len()
     }
 
-    fn page_form(&self, page: PickPage) -> PickForm {
-        self.core.page_form(page)
-    }
-
-    fn title_of(page: PickPage) -> Option<String> {
-        PickerCore::title_of(page)
-    }
-
     /// OK on the row `id`.
     pub fn ok(&mut self, id: PickRow) -> Outcome {
         match pick_of(id) {
@@ -490,7 +482,7 @@ impl PickerState {
             }
             pick => match self.core.select(pick) {
                 Some(sel) => {
-                    let form = self.page_form(self.page());
+                    let form = self.core.page_form(self.page());
                     self.form.set_sliding(form, Some(&id));
                     Outcome::Picked(sel)
                 }
@@ -499,39 +491,41 @@ impl PickerState {
         }
     }
 
-    /// Open `page` above the current one: remember the opener and its scroll, build the page, snap
-    /// to its checked row and start the slide.
+    /// Open `page` above the current one (the one push, [`page_stack::push_page`]).
     fn push(&mut self, page: PickPage, opener: PickRow) {
-        self.pages.push(page, opener, self.form.table.scroll_pos());
-        let leaving = page_stack::leave_page(&mut self.form);
-        let form = self.page_form(page);
-        self.form.open(form, self.core.page_initial(page).as_ref());
-        self.form.table.set_title(Self::title_of(page));
-        self.motion.begin_slide(leaving, 1.0);
+        let built = self.built(page);
+        let initial = self.core.page_initial(page);
+        page_stack::push_page(&mut self.pages, &mut self.form, &mut self.motion, page, opener, initial.as_ref(), built);
     }
 
     /// BACK: pop a page when there is one, else the host dismisses.
     pub fn back(&mut self) -> Back {
-        let Some(saved) = self.pages.pop() else { return Back::Dismiss };
-        let leaving = page_stack::leave_page(&mut self.form);
-        self.motion.begin_slide(leaving, -1.0);
-        let form = self.page_form(self.page());
-        self.form.restore(form, Some(&saved.return_id), saved.scroll);
-        self.form.table.set_title(Self::title_of(self.page()));
-        Back::Popped
+        let core = &self.core;
+        if page_stack::pop_page(&mut self.pages, &mut self.form, &mut self.motion, |top| Self::built_of(core, top.unwrap_or(PickPage::Root))) {
+            Back::Popped
+        } else {
+            Back::Dismiss
+        }
+    }
+
+    /// `page`, built: its rows and its title band (the standalone panel's size class is always the full one).
+    fn built(&self, page: PickPage) -> page_stack::Built<PickRow, (), PickPage> {
+        Self::built_of(&self.core, page)
+    }
+
+    fn built_of(core: &PickerCore, page: PickPage) -> page_stack::Built<PickRow, (), PickPage> {
+        page_stack::Built { form: core.page_form(page), title: PickerCore::title_of(page), compact: false }
     }
 
     /// The panel's natural rect: under the opener when there is room, above it when there is not;
     /// cached against the table's layout revision (the slide springs toward it).
     pub fn panel_rect(&self, measure: &dyn Measure) -> Rect {
         self.motion.natural(self.form.table.layout_rev(), || {
-            let [x, y, w, h] = self.anchor.map(f32::from_bits);
-            let pw = self.form.table.menu_panel_width(measure);
             if self.over_opener {
-                let h = self.form.table.measured_height().clamp(120.0, plx_ui::consts::SAFE.h);
-                return plx_ui::detail_layout::hero_panel_over(self.pill(), y, (pw, h));
+                return plx_ui::detail_layout::hero_panel_rect(&self.form.table, self.anchor, measure);
             }
-            plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
+            let [x, y, w, h] = self.anchor.map(f32::from_bits);
+            plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), self.form.table.menu_panel_width(measure), self.form.table.measured_height())
         })
     }
 
