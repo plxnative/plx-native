@@ -9695,6 +9695,13 @@ pub(in crate::app) mod lifecycle_regression_tests {
     /// too, and the confirming `Started` (the session's typed effect, drained by `playback_tick`) spends it.
     #[test]
     fn the_loop_spends_the_pick_when_the_engine_confirms_the_start() {
+        /// The loop's playback phase of one iteration (`frame` runs the container only).
+        fn loop_tick(rig: &mut Rig, now: u32) {
+            let mut fr = Frame::begin(&rig.app.player.session, rig.app.runtime.metadata_view());
+            fr.now = now;
+            fr.dt = 0.016;
+            unsafe { playback_tick(&mut rig.app, &mut fr); }
+        }
         use plx_data::metadata::{PreplayPick, SubPick};
         use plx_data::stores::metadata::MetadataCmd;
         let _serial = plx_base::testlock::serial();
@@ -9718,7 +9725,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         rig.request();
         rig.resolve();
         assert!(!plx_media::route::url(&rig.app.player.session).is_empty(), "setup: the plan landed playable");
-        frame(&mut rig.app, 16);
+        loop_tick(&mut rig, 16);
         assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "a landed plan has not started");
         let transaction = plx_media::route::begin_route_start().unwrap();
         assert!(plx_media::route::prepare_route_start(transaction));
@@ -9727,7 +9734,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             &mut rig.app.player.session, attempt, plx_media::route::RouteStartResult::Started,
         ));
         assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "the drain is the loop's, next tick");
-        frame(&mut rig.app, 32);
+        loop_tick(&mut rig, 32);
         assert!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1").is_empty(), "the confirmed start spent the pick");
     }
 
