@@ -3032,9 +3032,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 plan.acodec = "ac3".into();
             } else if remux {
                 // No pick: the server converts the intended track to the profile's first audio target.
-                let achosen = audio_sel
-                    .as_ref()
-                    .map(|(_, c, _)| c.clone())
+                let achosen = session_carried_acodec(&env.caps, tracks, audio_sel.as_ref())
                     .unwrap_or_else(|| if tracks.is_empty() { acodec.to_string() } else { "ac3".to_string() });
                 plan.vcodec = vcodec.to_string();
                 plan.acodec = achosen;
@@ -3121,11 +3119,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     fill_direct_plan(&mut plan, client, part, &session, vcodec, acodec, audio_sel.as_ref(), dovi, dv_decision, sub_pick);
                     return plan;
                 }
-                if let Some((_, c, _)) = audio_sel.as_ref() {
-                    plan.acodec = c.clone();
-                } else {
-                    plan.acodec = acodec.to_string();
-                }
+                plan.acodec = session_carried_acodec(&env.caps, tracks, audio_sel.as_ref())
+                    .unwrap_or_else(|| acodec.to_string());
                 sp = transcode_spec_carrying_burn(
                     &env.caps,
                     rk,
@@ -3919,6 +3914,22 @@ fn pick_source_audio(
     };
     let track = &tracks[selected];
     Some((selected as i32, track.codec.to_lowercase(), track.id))
+}
+
+/// The audio codec an encoder session is GUESSED to deliver for the direct-play pick `sel` when its
+/// `/decision` names none: the pick's own codec when the session profile copies it
+/// (`plex::is_session_audio_track_with`), else the profile's first target, `ac3`. The direct-play
+/// pick can name a track the session converts: a 7.1 DTS-HD MA on a `DTS/6` row is fed to the app's
+/// demuxer as its core, but the session profile bounds DTS by the layout (#1537), and a payload
+/// describing `dca` while the server sends AC3 is silent audio. `None` without a pick; a pick whose
+/// track is not in `tracks` keeps its codec.
+pub(super) fn session_carried_acodec(
+    caps: &plx_os::devcaps::Caps, tracks: &[plx_data::metadata::Stream], sel: Option<&(i32, String, i64)>,
+) -> Option<String> {
+    let (idx, codec, _) = sel?;
+    let track = usize::try_from(*idx).ok().and_then(|i| tracks.get(i));
+    let copied = track.is_none_or(|t| plx_plex::plex::is_session_audio_track_with(caps, &t.codec, t.channels, t.sampling_rate));
+    Some(if copied { codec.clone() } else { "ac3".to_owned() })
 }
 
 fn pick_dp_audio_eligible(

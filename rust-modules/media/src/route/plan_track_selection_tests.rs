@@ -1017,6 +1017,22 @@ fn auto_and_forced_agree_on_the_dca_spelling() {
     assert!(!audio_direct_plays_with(&assumed, DirectPlayMode::Forced, "truehd", 8, 0));
 }
 
+/// #1537: an encoder session's guess follows the SESSION profile, which bounds DTS by the layout:
+/// a 7.1 DTS-HD MA the direct-play pick takes on a `DTS/6` row is converted to `ac3` by a remux, so a
+/// remux whose `/decision` names no codecs must not describe `dca`.
+#[test]
+fn a_remux_of_a_7_1_dts_pick_guesses_the_conversion() {
+    let caps = dts_row_caps();
+    let stream = |codec: &str, channels| plx_data::metadata::Stream {
+        codec: codec.into(), channels, sampling_rate: 48_000, ..Default::default()
+    };
+    let tracks = [stream("dca", 8), stream("dca", 6)];
+    assert!(audio_direct_plays_with(&caps, DirectPlayMode::Auto, "dca", 8, 48_000), "control: the pick takes the 7.1");
+    assert_eq!(session_carried_acodec(&caps, &tracks, Some(&(0, "dca".into(), 1))).as_deref(), Some("ac3"));
+    assert_eq!(session_carried_acodec(&caps, &tracks, Some(&(1, "dca".into(), 2))).as_deref(), Some("dca"));
+    assert_eq!(session_carried_acodec(&caps, &tracks, None), None);
+}
+
 /// **DTS the app decodes** (S4 PR 2): a set with no DTS row direct-plays a DTS track in
 /// BOTH modes, up to 8 channels (the app decodes the core and downmixes), whatever a native
 /// ceiling says; with the policy off nothing changes — no row, no DTS — and the lossless codecs do
