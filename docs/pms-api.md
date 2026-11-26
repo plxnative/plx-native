@@ -1265,7 +1265,7 @@ mirrored in `img.rs`'s decode-budget note.
 | Home hero backdrop | `width=1280&height=720`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Detail backdrop | `width=1920&height=1080`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Hero clearLogo | `width=600&height=240&format=png` | contained in its column (`hero_logo::fit`) |
-| Live TV channel logo (the 250 x 140 plate) | `width=436&height=168&format=png` | contained in the plate's 218 x 84 slot, sized by the mark's INK, not the canvas (a resizer pads a logo with clear texels): the request asks for the picture's ink box (`art_fit::BackdropSpec::INK`), found once at decode, and the plate draws that window of the texture (`hero_logo::fit_ink`) |
+| Live TV channel logo (the 250 x 140 plate) | `width=436&height=168&format=png` (twice its slot, for the focus pop, as the logos are) | contained in the plate's 218 x 84 slot, sized by the mark's INK, not the canvas (a resizer pads a logo with clear texels): the request asks for the picture's ink box (`art_fit::BackdropSpec::INK`), found once at decode, and the plate draws that window of the texture (`hero_logo::fit_ink`) |
 
 ---
 
