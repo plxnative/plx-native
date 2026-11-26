@@ -1,4 +1,4 @@
-{"updated":"2026-11-26T16:19:57Z",
+{"updated":"2026-11-26T16:25:29Z",
 "ci":[
 {"id":33181037225,"at":"2026-08-28T14:36:41Z","sha":"3d06fbe09","title":"lab: add remote command bridge for cloud TVs","jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"pr":null,"conclusion":"success","attempt":1},
 {"id":33192163307,"at":"2026-08-28T16:54:18Z","sha":"d56cf1a71","title":"docs: what a rented webOS 10.3.1 set said, and the bug it found","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6002,7 +6002,7 @@
 {"id":45846352744,"at":"2026-11-26T15:10:12Z","sha":"0af1915a8","title":"docs: art ground copy wording, replay frame count, theme doc order","pr":1564,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":319,"macOS simulator build + launch":326,"Windows launcher syntax":17,"macOS tests against bundled FFmpeg and ASS":232}},
 {"id":45848241570,"at":"2026-11-26T15:21:17Z","sha":"d75cc3b80","title":"Live TV: the player banner, debounced zap and BACK to the channel left","pr":1564,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":220,"Linux simulator build + launch":322,"Windows launcher syntax":15,"macOS simulator build + launch":254}},
 {"id":45851055215,"at":"2026-11-26T15:38:10Z","sha":"ff21a45da","title":"Channels plates: the docs that named the Channels shelf a poster row","pr":1570,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":325,"Windows launcher syntax":25,"macOS tests against bundled FFmpeg and ASS":227,"Linux simulator build + launch":327}},
-{"id":45855325950,"at":"2026-11-26T16:04:44Z","sha":"e8bc2e34e","title":"Live TV: the chrome handoff reads the first row's pitch, not the poster pitch","pr":1570,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"Windows launcher syntax":19,"macOS tests against bundled FFmpeg and ASS":125,"Linux simulator build + launch":403}}
+{"id":45855325950,"at":"2026-11-26T16:20:34Z","sha":"e8bc2e34e","title":"Live TV: the chrome handoff reads the first row's pitch, not the poster pitch","pr":1570,"event":"pull_request","conclusion":"success","attempt":2,"jobs":{"macOS simulator build + launch":278,"Linux simulator build + launch":403,"macOS tests against bundled FFmpeg and ASS":125,"Windows launcher syntax":19},"wall":1234}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
