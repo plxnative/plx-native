@@ -309,7 +309,8 @@ impl GroundShade {
         Self { edge: Some(edge), ..Self::NONE }
     }
 
-    /// The shader's mode/count uniform. The edge field has its own three-vector layout.
+    /// The shader's mode/count uniform. The edge field has its own layout, `u_sc[0..=4]`, with `u_sc[4].z` the side mode
+    /// (0 the box, 1 the ellipse, whose corner is `u_sc[4].xy`).
     pub fn shader_count(&self) -> f32 {
         if self.edge.is_some() { -1.0 } else { self.live() as f32 }
     }

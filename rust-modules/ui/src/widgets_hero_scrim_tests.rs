@@ -164,8 +164,9 @@ fn side_shades() -> [(&'static str, WashScrim, f32); 1] {
 
 /// **The side shade has no edge anywhere: it changes slowly in every direction.** Discussion #1460:
 /// the tester read a crisp fall of the shade as a backlight fault, so the side term may never change
-/// faster than a smoothstep across 400 px would at its steepest (`1.5 * peak / 400`), with a
-/// little room (`1.6`) for the sampling. Graded on the gradient's MAGNITUDE over the whole frame,
+/// faster than a smoothstep across 375 px would at its steepest (`1.5 * peak / 375`, written
+/// `1.6 * peak / 400`): the band is at least ~375 px wide wherever it falls. The central difference
+/// below can only read under a smoothstep's true peak, so the bound is the feather, not sampling slack. Graded on the gradient's MAGNITUDE over the whole frame,
 /// so a band that is wide across the copy but narrow up the left edge (the old box's 280 px
 /// vertical ramp) or narrow normal to a curve (a thin feather between two ellipses) both fail.
 #[test]
