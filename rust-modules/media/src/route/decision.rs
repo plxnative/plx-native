@@ -10254,8 +10254,10 @@ fn mde_verdict(mc: &plx_plex::plex::MediaContainer) -> Option<MdeVerdict> {
         Some(p) => p,
         None => {
             crate::player::log(&format!(
-                "decision: no media (general={:?}) -> no Original",
-                mc.general_decision_code
+                "decision: no media (general={:?} \"{}\" / \"{}\") -> no Original",
+                mc.general_decision_code,
+                mc.general_decision_text.trim(),
+                mc.transcode_decision_text.trim(),
             ));
             return None;
         }
