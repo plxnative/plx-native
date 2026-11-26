@@ -40,6 +40,14 @@
 //! (`loaded_episode`, `from_home`), which is all it was still deciding once the route it named
 //! stopped existing.
 //!
+//! **A menu opened from a HERO control grows out of it.** The Detail hero's `…` ([`ItemMenuKind::HeroOverflow`])
+//! is a control, not a card: the panel is the control's own glass (`Popover::morphing` + `open_from`, the
+//! path every header menu takes), laid over it ([`plx_ui::popover::cover_opener`]), the page leaves the
+//! control out of its pass and the opener lift draws it at the morph's `opener_alpha`, and BACK or a
+//! pick drains the glass back into it. A menu opened from a TILE (every other kind) is none of that and
+//! draws exactly as before: no popover, the panel beside the card, the lift whole. The branch is the
+//! opener, which is `HeroOverflow`'s identity, held as the popover's presence.
+//!
 //! It still only **reports** the chosen [`Action`]: `AppFx::ItemMenu` carries it to
 //! `app::input::apply_item_action`, which does the routing, the server call and the hub refresh.
 //! It never mutates playback or PMS state itself.
@@ -70,6 +78,7 @@ use plx_ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, Focusable, GroupKind, GroupSpec,
     Hover, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step, Stop,
 };
+use plx_ui::popover::Popover;
 use plx_ui::table::{Row, MENU_MAX_W, MENU_MIN_W};
 use plx_ui::widgets::PosterMark;
 use plx_ui::{theme, Rect};
@@ -733,6 +742,9 @@ pub struct ItemMenuScreen {
     /// The Watchlist subject captured when the menu opened; `None` omits the membership row
     /// (plex.tv unreachable, or the item has no catalog guid). See [`watchlist::Face`].
     face: Option<watchlist::Face>,
+    /// The morph a hero control's menu grows out of; `None` for a tile's menu, which keeps the
+    /// container's appear and the card beside it.
+    popover: Option<Popover>,
 }
 
 /// Play Trailer only when the already-loaded Detail is this movie/show and already has a trailer.
@@ -754,6 +766,9 @@ fn cached_trailer(
 
 impl ItemMenuScreen {
     pub fn new(entry: EntryId, arg: ItemMenuArg) -> Self {
+        // the hero control's focused face is a near-white fill: the close's blob whitens toward it
+        let popover = matches!(arg.kind, ItemMenuKind::HeroOverflow { .. })
+            .then(|| Popover::new().morphing().opener_fill(theme::ACCENT));
         Self {
             entry,
             arg,
@@ -761,7 +776,14 @@ impl ItemMenuScreen {
             repeat: RepeatGate::IDLE,
             built: false,
             face: None,
+            popover,
         }
+    }
+
+    /// The opener's focused pill: where a hero control's menu grows from and drains back into.
+    fn pill(&self) -> Rect {
+        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
+        plx_ui::widgets::focus_pill(Rect::new(x, y, w, h))
     }
 
     /// The Watchlist subject the app captured at open (identity and membership as read THEN).
@@ -811,6 +833,12 @@ impl ItemMenuScreen {
 
     fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
         let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
+        if self.popover.is_some() {
+            // over the control it grows out of, which the morph consumes (the shared rule)
+            let width = self.form.table.measured_width(measure).clamp(MENU_MIN_W, MENU_MAX_W);
+            let height = self.form.table.measured_height().clamp(120.0, SCR_H - 2.0 * EDGE);
+            return plx_ui::popover::cover_opener(self.pill(), (width, height), plx_ui::consts::SAFE);
+        }
         panel_at(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
     }
 
@@ -840,6 +868,17 @@ impl ItemMenuScreen {
         // `activate_hero` is the one path (Go to Show, Play from Start, the versions list and the
         // picker are its panels, never a second copy inside this menu).
         if let ItemMenuKind::HeroOverflow { opener, .. } = &self.arg.kind {
+            // **A row that opens a panel HANDS OFF; it does not drain.** The panel grows out of this
+            // same `…` button, so a droplet draining into it first would be the glass leaving and
+            // coming back. `Popover::close` is the instant hide (this surface's subject is leaving
+            // for the panel): the menu is gone on this frame (`handed_back`), its dim and its claim
+            // on the opener lift with it, and the panel's own morph is the only glass left. Any
+            // other row, and BACK, drains as every dismissal does.
+            if matches!(act, Some(Action::Hero(ctl)) if ctl.opens_morphing_panel()) {
+                if let Some(pop) = &mut self.popover {
+                    pop.close();
+                }
+            }
             fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
             if let Some(Action::Hero(ctl)) = act {
                 fx.push(Fx::Deliver(
@@ -925,12 +964,26 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
             ScreenEvent::Mount => {
+                let pill = self.pill();
+                if let Some(pop) = &mut self.popover {
+                    pop.open_from(Some(pill));
+                }
                 self.build_rows(H::metadata(cx), H::screen_inputs(cx).preference::<plx_plex::plex::session::DeckPressPref>());
                 // The menu is the thing the Home hold hint teaches; once ANY card screen has
                 // opened one the lesson retires for this input owner, through its typed effect.
                 fx.push(Fx::HoldHint(plx_machine::machine::HoldHintEvent::Learned));
             }
+            // However the surface was dismissed (BACK, a pick, the host's own press), the glass
+            // runs the morph back into its control.
+            ScreenEvent::Closing => {
+                if let Some(pop) = &mut self.popover {
+                    pop.dismiss();
+                }
+            }
             ScreenEvent::Tick(tick) => {
+                if let Some(pop) = &mut self.popover {
+                    pop.update(tick.dt());
+                }
                 self.form.table.sel = cx
                     .focus
                     .current
@@ -1069,6 +1122,16 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         Some(ItemMenuScreen::opener(self))
     }
+    /// A hero control's menu CONSUMES its opener (`popover_morph`): gone while the glass stands,
+    /// back as it drains. A tile's card stays whole above the dim.
+    fn opener_alpha(&self) -> f32 {
+        self.popover.as_ref().map_or(1.0, Popover::opener_alpha)
+    }
+    /// The droplet has drained into the control (or the menu handed off to a panel): the surface
+    /// and the lift end on this frame. `false` for a tile's menu, whose close is the container's.
+    fn handed_back(&self) -> bool {
+        self.popover.as_ref().is_some_and(Popover::handed_back)
+    }
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -1095,14 +1158,25 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
         // The COMPACT role — the lightest dim in `theme::underlay`: the design's whole point is that
         // the card and the shelf stay legible behind the popover, so this recesses them rather
         // than blanking them.
-        Scrim::dim(theme::underlay::DIM_COMPACT)
+        match &self.popover {
+            Some(pop) => pop.dim(theme::underlay::DIM_COMPACT),
+            None => Scrim::dim(theme::underlay::DIM_COMPACT),
+        }
     }
     fn prepare(&mut self, _: &mut Budget, _: &Cx<'_, H>) {}
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let p = f.painter.alpha(f.page_alpha);
         let r = self.frame(f.measure);
-        plx_ui::widgets::panel_ground(p, r, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
-        self.form.table.draw(p, r, f.measure);
+        if let Some(pop) = &self.popover {
+            // The glass and the rows ride the MORPH (`Popover::panel` / `morph_rows`), not the
+            // container's appear: the panel begins and ends as the control it grows from.
+            let m = pop.content_painter_on(f.painter.alpha(f.nav_page_alpha), 0.0);
+            pop.panel(m, r, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
+            pop.morph_rows(m, r, PANEL_RAD, |m| self.form.table.draw(m, r, f.measure));
+        } else {
+            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
+            self.form.table.draw(p, r, f.measure);
+        }
         for elem in self.focusable().collect::<Vec<_>>() {
             if let Some(placed) = <Self as Focusable<H>>::place(self, &elem, f.cx, At::Drawn) {
                 f.stop(
@@ -2828,5 +2902,153 @@ pub(crate) mod tests {
         for (id, subject) in &rows {
             assert_eq!(*subject, None, "{id}: a Catalog menu has no ratingKey to name");
         }
+    }
+
+    // ---- the hero control's morph ------------------------------------------------------------
+
+    /// The Detail hero's `…` menu, built over a `…` button at `(600, 760)`.
+    fn hero_menu() -> ItemMenuScreen {
+        let rows = vec![HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
+        let mut arg = card_arg(&item(3, PosterMark::None), false);
+        arg.anchor = [600.0f32, 760.0, 64.0, 64.0].map(f32::to_bits);
+        arg.kind = ItemMenuKind::HeroOverflow { rows, opener: plx_machine::machine::InstanceId(4) };
+        let mut menu = ItemMenuScreen::new(EntryId(7), arg);
+        menu.build_rows(test_store().view(), DeckPress::Play);
+        menu
+    }
+
+    /// The glass the surface drew this frame: the panel ground (a `rect_rimmed`, tag 8, on a host with
+    /// no frozen field).
+    fn glass(menu: &mut ItemMenuScreen) -> Rect {
+        with_cx(|cx| {
+            plx_ui::draw_census::capture(|| {
+                let mut f = DrawFrame::new(cx, plx_ui::Painter::recording());
+                Screen::<HostFixture>::draw(menu, &mut f);
+            })
+        })
+        .into_iter()
+        .find_map(|(tag, r)| (tag == 8).then_some(r))
+        .unwrap_or_default()
+    }
+
+    fn tick(menu: &mut ItemMenuScreen, ms: &mut u32, n: usize) {
+        for _ in 0..n {
+            *ms += 16;
+            step_ev(menu, &ScreenEvent::Tick(Tick { ms: *ms, dt_us: 16_667 }));
+        }
+    }
+
+    /// **The hero's `…` menu GROWS out of the button** (`Popover::morphing` + `open_from`, the path
+    /// every header menu takes), and BACK (any dismissal) runs the morph home. Red while the panel
+    /// was laid beside the button at its final rect on its first frame and only appeared: three
+    /// frames in, the glass is still the button's size or a little over; the settled panel is exactly
+    /// `frame()`, and it COVERS the button (the opener is consumed: the lift draws it at the morph's
+    /// `opener_alpha`, gone while the glass stands, whole again once the droplet has drained into it).
+    #[test]
+    fn the_hero_menu_grows_out_of_its_button_settles_on_its_frame_and_runs_home_on_back() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let settled = menu.frame(&FixtureMeasure);
+        let pill = menu.pill();
+        assert!(
+            settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
+            "the settled panel {settled:?} covers the button it grew out of {pill:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "frame 0 is the button whole");
+        assert!(Screen::<HostFixture>::scrim(&menu).ramp.is_some(), "the dim follows the morph");
+        let mut ms = 0;
+        tick(&mut menu, &mut ms, 3);
+        let early = glass(&mut menu);
+        assert!(
+            early.w < settled.w - 20.0 && early.h < settled.h - 20.0,
+            "three frames in the glass is still growing out of the button ({early:?}), not laid at {settled:?}"
+        );
+        tick(&mut menu, &mut ms, 6);
+        assert!(Screen::<HostFixture>::opener_alpha(&menu) < 0.5, "the button is consumed as the glass detaches from it");
+        tick(&mut menu, &mut ms, 90);
+        let end = glass(&mut menu);
+        assert!(
+            (end.x - settled.x).abs() < 0.5 && (end.y - settled.y).abs() < 0.5
+                && (end.w - settled.w).abs() < 0.5 && (end.h - settled.h).abs() < 0.5,
+            "the settled panel is the frame {settled:?}, drew {end:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 0.0, "the button stays consumed while the menu stands");
+        assert!(!Screen::<HostFixture>::handed_back(&menu));
+        // BACK: the dispatcher delivers `Closing`; the glass drains back into the button
+        step_ev(&mut menu, &ScreenEvent::Closing);
+        tick(&mut menu, &mut ms, 3);
+        let closing = glass(&mut menu);
+        assert!(closing.w < settled.w - 20.0, "three frames into the close the glass is narrowing into the button ({closing:?})");
+        assert!(!Screen::<HostFixture>::handed_back(&menu), "the droplet is still draining");
+        tick(&mut menu, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&menu), "the droplet has drained into the button: the surface retires");
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "the button is whole again");
+    }
+
+    /// **A row that opens a panel HANDS OFF; it does not drain.** The panel grows out of this same
+    /// `…` button, so the menu must not drain into it first and then have the glass grow again: the
+    /// menu is gone on the commit frame (`handed_back`, no glass, no dim, the button whole for the
+    /// panel's own morph to take), and the `Closing` that follows does not start a drain. Every other
+    /// row drains as BACK does.
+    #[test]
+    fn a_row_that_opens_a_panel_hands_off_without_a_drain_and_any_other_row_drains() {
+        let _guard = plx_base::testlock::serial();
+        for (ctl, hands_off) in [(HeroCtl::Version, true), (HeroCtl::AudioSubtitles, true), (HeroCtl::GoToShow, false), (HeroCtl::Restart, false)] {
+            let mut menu = hero_menu();
+            step_ev(&mut menu, &ScreenEvent::Mount);
+            let mut ms = 0;
+            tick(&mut menu, &mut ms, 90);
+            assert!(glass(&mut menu).w > 100.0, "rig: the menu stands");
+            let n = (0..menu.form.table.n_rows() as usize)
+                .find(|i| menu.form.binding_at(*i).is_some_and(|b| b.action == Action::Hero(ctl)))
+                .expect("the row is offered");
+            let elem = menu.form.key_at(n).expect("a row").0;
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx = Effects::new(&mut out, MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
+            menu.activate::<HostFixture>(elem, &mut fx);
+            assert_eq!(Screen::<HostFixture>::handed_back(&menu), hands_off, "{ctl:?}");
+            step_ev(&mut menu, &ScreenEvent::Closing);
+            tick(&mut menu, &mut ms, 2);
+            assert_eq!(Screen::<HostFixture>::handed_back(&menu), hands_off, "{ctl:?}: the Closing that follows");
+            if hands_off {
+                assert_eq!(glass(&mut menu), Rect::default(), "{ctl:?}: no glass is left to drain");
+                assert_eq!(Screen::<HostFixture>::scrim(&menu).ramp, Some(0.0), "{ctl:?}: no dim");
+                assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "{ctl:?}: the button is whole for the panel to take");
+            } else {
+                assert!(glass(&mut menu).w > 100.0, "{ctl:?}: the droplet is still draining into the button");
+            }
+        }
+    }
+
+    /// **A tile's hold menu is unchanged**: no morph (the opener is a card, not a hero control), the
+    /// panel BESIDE the card at its final rect on its first frame, the dim the container's own appear
+    /// (no ramp of the menu's), the card's lift whole, and nothing handed back before the container's
+    /// spring says so.
+    #[test]
+    fn a_tile_hold_menu_keeps_the_appear_and_the_card_whole() {
+        let _guard = plx_base::testlock::serial();
+        let anchor = Rect::new(400.0, 300.0, 300.0, 170.0);
+        let mut arg = card_arg(&item(3, PosterMark::None), true);
+        arg.anchor = [anchor.x, anchor.y, anchor.w, anchor.h].map(f32::to_bits);
+        let mut menu = ItemMenuScreen::new(EntryId(7), arg);
+        menu.build_rows(test_store().view(), DeckPress::Play);
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let beside = panel_at(anchor, menu.form.table.measured_width(&FixtureMeasure), menu.form.table.measured_height());
+        assert_eq!(menu.frame(&FixtureMeasure), beside, "the panel is placed beside the card, not over it");
+        let mut ms = 0;
+        for settle in [0, 3, 90] {
+            tick(&mut menu, &mut ms, settle);
+            assert_eq!(glass(&mut menu), beside, "the glass is the panel at its rect from the first frame");
+            assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "the card stays whole above the dim");
+            assert!(!Screen::<HostFixture>::handed_back(&menu));
+            let scrim = Screen::<HostFixture>::scrim(&menu);
+            assert!(scrim.ramp.is_none(), "the dim is the container's own appear");
+            assert_eq!(scrim.alpha, plx_ui::theme::underlay::DIM_COMPACT);
+        }
+        step_ev(&mut menu, &ScreenEvent::Closing);
+        tick(&mut menu, &mut ms, 90);
+        assert!(!Screen::<HostFixture>::handed_back(&menu), "a tile's close is the container's spring, never the droplet's");
     }
 }

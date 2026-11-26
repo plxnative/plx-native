@@ -1382,13 +1382,16 @@ pub enum ContentPanel {
     AltSources { anchor: [u32; 4] },
     /// *Select Version* (`screens::versions_panel`), anchored to the drawn rect of the disc that
     /// opened it, as [`Self::AltSources`] is to its pill.
-    Versions { anchor: [u32; 4] },
+    /// `opener` is the page's entry and the hero control the panel grows out of (the `…` button when
+    /// the menu handed the row over, else the disc itself): the page leaves it out of its own pass and
+    /// the opener lift draws it at the morph's alpha (`Screen::opener`).
+    Versions { anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
     /// *Audio & Subtitles* before playback (`screens::preplay_panel`, #1532), anchored to the drawn
     /// rect of what opened it (the hero's disc, or its `…` menu's row). **The entry point for any
     /// host**: send `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from the Detail
     /// page; the subject is the page's `(sid, rk)` and the panel reads the tracks of the item the
     /// hero PLAYS (`Detail::play_rk`: a show page's hero episode, never the show).
-    PreplayTracks { anchor: [u32; 4] },
+    PreplayTracks { anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
     /// *Track information* (`screens::tracks_panel`), opened at 1-based `page`. Every interactive
     /// opening passes 1; `/tmp/plxnative-tracks=<n>` is the only caller that does not, and it is
     /// what makes a headless capture of page 2 possible at all.
@@ -1440,7 +1443,7 @@ impl ContentPanel {
                     }),
                 )
             }
-            Self::Versions { anchor } => {
+            Self::Versions { anchor, opener } => {
                 let (sid, rk) = subject?;
                 (
                     Style::Compact,
@@ -1449,10 +1452,11 @@ impl ContentPanel {
                         sid,
                         rk: rk.to_string(),
                         anchor,
+                        opener: Some(opener),
                     }),
                 )
             }
-            Self::PreplayTracks { anchor } => {
+            Self::PreplayTracks { anchor, opener } => {
                 let (sid, rk) = subject?;
                 (
                     Style::Compact,
@@ -1461,6 +1465,7 @@ impl ContentPanel {
                         sid,
                         rk: rk.to_string(),
                         anchor,
+                        opener: Some(opener),
                         source: crate::preplay_panel::Source::Page,
                     }),
                 )
@@ -2345,8 +2350,8 @@ impl AppArg {
 pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,LiveTv,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
      PlayerOverlay{Tracks(tab:i32),Info,Chapters,More(page:u8)},\
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
-     VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
-     PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
+     VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>},\
+     PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>,source:{Page,Failed{part_id:u64}}},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
@@ -2841,12 +2846,14 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             sid: plx_plex::plex::ServerId::UNSET,
             rk: "1".into(),
             anchor: [0; 4],
+            opener: None,
         }),
         AppArg::PreplayPanel(crate::preplay_panel::PreplayArg {
             host: plx_machine::machine::InstanceId(1),
             sid: plx_plex::plex::ServerId::UNSET,
             rk: "1".into(),
             anchor: [0; 4],
+            opener: None,
             source: crate::preplay_panel::Source::Page,
         }),
         AppArg::TracksPanel(crate::tracks_panel::TracksPanelArg { page: 1 }),
@@ -3172,7 +3179,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // The hero row (#1553) adds the Audio & Subtitles panel (`PreplayPanel`) and the item menu's hero
 // overflow (`HeroOverflow{rows:len}`). The pin moved from 0x8e79_1d31_a441_fb57 to 0xde99_c01f_cb88_02a4 with the `ctl` field, then to the value below once
 // this branch merged main (previous main pin: 0x16f9_ab79_9300_dc0a).
-const SCREEN_SHAPES_PIN: u64 = 0xa2bc_fa1b_e96e_0118;
+const SCREEN_SHAPES_PIN: u64 = 0x8e9e_7e81_3543_b640;
 
 #[cfg(test)]
 mod arg_tests {

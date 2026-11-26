@@ -352,6 +352,9 @@ pub struct PickerState {
     pub motion: PanelMotion,
     /// The drawn rect of what opened the panel: `[x, y, w, h]` as bits, like every panel argument.
     anchor: [u32; 4],
+    /// The panel stands OVER its opener and grows out of it ([`Self::over_opener`]); otherwise it
+    /// hangs beside it.
+    over_opener: bool,
 }
 
 impl PickerState {
@@ -363,11 +366,28 @@ impl PickerState {
             form: FormTable::new(plx_ui::table_screen::BAND_BASE),
             motion: PanelMotion::new(),
             anchor,
+            over_opener: false,
         };
         s.form.table.compact = false;
         let root = s.page_form(PickPage::Root);
         s.form.set(root, None);
         s
+    }
+
+    /// **The panel grows out of its opener** (a hero control: `Popover::morphing`) and so covers it
+    /// by the shared rule ([`plx_ui::popover::cover_opener`]), the opener being consumed by the
+    /// morph. Without this the panel hangs under or above its opener and never over it (the
+    /// failure screen's).
+    pub fn over_opener(mut self) -> Self {
+        self.over_opener = true;
+        self.motion = self.motion.spring_all_edges();
+        self
+    }
+
+    /// The opener's focused pill: where a morphing panel's glass grows from and drains back into.
+    pub fn pill(&self) -> Rect {
+        let [x, y, w, h] = self.anchor.map(f32::from_bits);
+        plx_ui::widgets::focus_pill(Rect::new(x, y, w, h))
     }
 
     fn set(&self) -> TrackSet<'_> {
@@ -468,6 +488,10 @@ impl PickerState {
         self.motion.natural(self.form.table.layout_rev(), || {
             let [x, y, w, h] = self.anchor.map(f32::from_bits);
             let pw = self.form.table.menu_panel_width(measure);
+            if self.over_opener {
+                let h = self.form.table.measured_height().clamp(120.0, plx_ui::consts::SAFE.h);
+                return plx_ui::popover::cover_opener(self.pill(), (pw, h), plx_ui::consts::SAFE);
+            }
             plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
         })
     }
@@ -486,6 +510,23 @@ impl PickerState {
         let natural = self.panel_rect(measure);
         let p = Painter::root().alpha(appear).translate(0.0, plx_ui::popover::Popover::RISE * (1.0 - appear));
         self.motion.draw(p, natural, 20.0, &self.form.table, measure);
+    }
+
+    /// [`draw`](Self::draw) for a panel that grows out of its opener: the glass and the page(s) ride
+    /// the MORPH (`Popover::panel` / `morph_rows`), as the Library's menu draws, with the glass
+    /// frozen ground (`Ground::Menu`) the droplet's join needs.
+    pub fn draw_morph(
+        &self,
+        pop: &plx_ui::popover::Popover,
+        base: Painter,
+        field: Option<&plx_ui::underlay::UnderlayField>,
+        measure: &dyn Measure,
+    ) {
+        let natural = self.panel_rect(measure);
+        let shown = self.motion.shown(natural);
+        let m = pop.content_painter_on(base, 0.0);
+        pop.panel(m, shown, 20.0, field, plx_ui::widgets::Ground::Menu);
+        pop.morph_rows(m, shown, 20.0, |m| self.motion.draw_rows(m, natural, &self.form.table, measure));
     }
 
     /// The row identity under a focus key.
