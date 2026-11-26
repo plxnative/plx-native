@@ -69,6 +69,22 @@ fn player_request(app: &mut App, now: u32, req: plx_screens::registry::PlayerReq
     );
 }
 
+/// **The screen's zap, as the loop receives it**: the neighbour of the channel playing, by number order and wrapping,
+/// asked as the `Tune` the player's debounce ends in (`PlayerScreen`'s zap machine decides which channel; the app tunes
+/// the one it is named). The lineup is read as the screen would read it, from the store's view.
+fn tune_neighbour(app: &mut App, now: u32, direction: i32) {
+    let tune = {
+        let bridge = app.runtime.bridge(&mut app.bridge);
+        let channels = bridge.livetv_view().channels;
+        let (sid, live) = plx_media::route::live_request(&app.player.session).expect("a live channel is playing");
+        let at = channels.iter().position(|c| c.sid == sid && c.dvr == live.dvr && c.channel == live.channel).expect("it is in the lineup");
+        let next = if direction < 0 { at.checked_sub(1).unwrap_or(channels.len() - 1) } else { (at + 1) % channels.len() };
+        let c = &channels[next];
+        plx_screens::registry::PlayerReq::Tune { sid: c.sid, dvr: c.dvr.clone(), channel: c.channel.clone(), title: c.name.clone() }
+    };
+    player_request(app, now, tune);
+}
+
 fn start_channel(app: &mut App, now: &mut u32) {
     let mut bridge = app.runtime.bridge(&mut app.bridge);
     let ch = &bridge.livetv_view().channels[0];
@@ -99,7 +115,7 @@ fn channel_requests_wrap_the_lineup_and_keep_the_original_return_entry() {
     assert_eq!(origin.entry, origin_entry);
     for (direction, sid, title) in [(1, 0, "Cartoons"), (1, 1, "Other server"), (1, 0, "Family Channel"), (-1, 1, "Other server")] {
         app.repause_at = 50;
-        player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(direction));
+        tune_neighbour(&mut app, now, direction);
         settle(&mut app, &mut now);
         let (actual, _) = plx_media::route::live_request(&app.player.session).unwrap();
         assert_eq!(actual.raw(), sid);
@@ -115,23 +131,308 @@ fn channel_requests_wrap_the_lineup_and_keep_the_original_return_entry() {
     assert!(!plx_media::route::is_live(&app.player.session));
 }
 
+/// The landing's note alone, for a test that exits the player: it needs no server session (`admit`'s marked one would
+/// make the exit retire a live session through the engine).
+fn note_tune(app: &mut App) {
+    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
+}
+
+/// A digit key's press, as the keyboard or a remote delivers it.
+fn digit_press(d: u8, now: u32) -> InputEvent<u32> {
+    InputEvent {
+        at: Tick { ms: now, dt_us: 16_000 },
+        source: plx_machine::machine::Source::Script,
+        kind: plx_machine::machine::InputKind::Key {
+            key: Key::Other,
+            sym: 48 + u32::from(d),
+            wcode: 0,
+            edge: plx_machine::machine::Edge::Down,
+            at_edge: false,
+        },
+    }
+}
+
+/// The number-entry surfaces in the tree, with what each has typed.
+fn entries(app: &App) -> Vec<String> {
+    app.pages.nav.modals.surfaces.iter().filter_map(|s| {
+        let panel = s.entry.inst.as_ref()?.screen.as_any()?.downcast_ref::<plx_screens::channel_entry_panel::ChannelEntryScreen>()?;
+        Some(panel.machine().typed().to_string())
+    }).collect()
+}
+
+/// **Two digits in one frame open ONE number entry, with both digits.** A surface mounts at the commit, once a frame, so
+/// the second key's request cannot see the first panel in the tree: it must be folded into the parked request, not
+/// presented again (two panels would each tune their own highlight, and the lower one would tune after the top one
+/// was dismissed or still reads "No channel").
 #[test]
-fn channel_request_on_nonlive_and_an_empty_or_single_lineup_keeps_the_session() {
+fn two_digits_in_one_frame_open_one_number_entry_over_the_player() {
     let _serial = plx_base::testlock::serial();
-    let _session = plx_plex::plex::session::TempSession::new("livetv-player-no-neighbour");
+    let _session = plx_plex::plex::session::TempSession::new("livetv-entry-two-digits");
     plx_plex::plex::reset_servers_for_test();
     let mut app = app();
     let mut now = 0;
     open_live(&mut app, &mut now);
-    player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(1));
-    assert!(!plx_media::route::is_live(&app.player.session));
     start_channel(&mut app, &mut now);
-    for channels in [vec![channel("101", "Family Channel")], Vec::new()] {
-        app.runtime.bridge(&mut app.bridge).stores.livetv.install_for_test(channels);
-        player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(1));
-        assert_eq!(plx_media::route::live_request(&app.player.session).unwrap().1.channel, "C101.242.ersatztv.org");
+    note_tune(&mut app);
+    let publish = |app: &mut App| app.runtime.bridge(&mut app.bridge).publish_playback(&app.player.session, true, None);
+    publish(&mut app);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(1, at), digit_press(0, at)]);
+    for _ in 0..24 {
+        publish(&mut app);
+        step(&mut app, &mut now, Vec::new());
     }
+    assert_eq!(entries(&app), vec!["10".to_string()], "one surface, typed with both keys");
+    // a third key reaches that one surface as input, not a second panel
+    publish(&mut app);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(2, at)]);
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    assert_eq!(entries(&app).len(), 1);
+}
+
+/// The same over the What's on page, where the panel is a `ContentPanel`.
+#[test]
+fn two_digits_in_one_frame_open_one_number_entry_over_the_page() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-entry-two-digits-page");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(1, at), digit_press(0, at)]);
+    settle(&mut app, &mut now);
+    assert_eq!(entries(&app), vec!["10".to_string()]);
+}
+
+/// The server admits the tune the rig's plan resolution never makes: the session holds a live session
+/// and the landing notes it, as `run`'s `pump_play` arm does for a real tune.
+fn admit(app: &mut App) {
+    plx_media::route::mark_live_for_test(&mut app.player.session);
+    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
+}
+
+/// **Asking for a tune is not noting it.** The rig has no PMS, so no plan ever lands here: a play and
+/// a zap through the real loop's requests note nothing. (A tune the server refuses is the loop test
+/// `a_live_plan_landing_without_an_admitted_tune_notes_nothing`'s, which lands one.)
+#[test]
+fn a_tune_the_server_did_not_admit_joins_no_recent() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-recent-refused");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    start_channel(&mut app, &mut now);
+    app.repause_at = 50;
+    tune_neighbour(&mut app, now, 1);
+    settle(&mut app, &mut now);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing was admitted");
+}
+
+/// A live play and every zap are noted in Recent once admitted: the first tune joins, a channel tuned
+/// again does not move, and the newest is at the front. A run with nobody seated keeps the row for
+/// the session only (the memory door refuses the write).
+/// **The zap ends on the app's answer, through the real loop**: Up on the live page, the debounce, the `Tune` the app
+/// takes (the session is the target; the zap stands until its frame), and the app's word that it took no request
+/// (`AppMsg::LiveTuneRefused`) ends the zap. Nothing infers the end from timing.
+#[test]
+fn a_zap_key_runs_the_debounce_and_the_app_answers_the_tune() {
+    use plx_screens::player::zap::Zap;
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-zap-answer");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    start_channel(&mut app, &mut now);
+    note_tune(&mut app);
+    // the loop publishes the playback picture before every frame: the page reads the session through it
+    let publish = |app: &mut App| app.runtime.bridge(&mut app.bridge).publish_playback(&app.player.session, true, None);
+    let zap = |app: &App| crate::app::bridge::player(&app.pages).expect("the player page is mounted").zap().clone();
+    publish(&mut app);
+    let keys = super::script_key(Key::Up, Tick { ms: now + 16, dt_us: 16_000 });
+    step(&mut app, &mut now, keys);
+    assert!(matches!(zap(&app), Zap::Pending { .. }), "the press opens a window: {:?}", zap(&app));
+    // the window closes; the app takes the tune (or refuses it) and the page is told either way
+    for _ in 0..(plx_screens::player::zap::DEBOUNCE_MS / 16 + 4) {
+        publish(&mut app);
+        step(&mut app, &mut now, Vec::new());
+    }
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    let Zap::Tuning { target } = zap(&app) else { panic!("the app took the tune, so the zap stands until a frame: {:?}", zap(&app)) };
+    assert_eq!(plx_media::route::live_request(&app.player.session).map(|(_, l)| l.channel.clone()), Some(target.channel.clone()),
+        "the session is the channel the debounce closed on");
+    // the app's word that it took no request ends the zap at once, whatever the clock says
+    crate::app::bridge::send_player_message(&mut app.pages, plx_screens::registry::AppMsg::LiveTuneRefused);
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    assert!(zap(&app).is_idle(), "refused: {:?}", zap(&app));
+}
+
+#[test]
+fn an_admitted_live_play_and_every_zap_are_noted_without_moving_a_known_channel() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-recent-noted");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    let mut other = channel("101", "Other server");
+    other.sid = plx_plex::plex::ServerId::from_raw(1);
+    app.runtime.bridge(&mut app.bridge).stores.livetv.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons"), other]);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing tuned yet");
+    start_channel(&mut app, &mut now);
+    admit(&mut app);
+    for direction in [1, 1, 1, -1] {
+        app.repause_at = 50;
+        tune_neighbour(&mut app, now, direction);
+        settle(&mut app, &mut now);
+        admit(&mut app);
+    }
+    let bridge = app.runtime.bridge(&mut app.bridge);
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| (c.sid.raw(), c.name.as_str())).collect();
+    assert_eq!(row, [(1, "Other server"), (0, "Cartoons"), (0, "Family Channel")],
+        "first tuned in the order Family, Cartoons, Other; going back round to Family and Other changes nothing");
+}
+
+/// **The seated profile's Recent survives a restart under another slot assignment.** A tune is
+/// written to the memory door under the server's machine identifier; a later run, whose registry
+/// numbered the servers the other way round, reads the same channel back from the stored list.
+#[test]
+fn recent_is_stored_by_machine_and_read_back_under_another_slot_assignment() {
+    use plx_plex::plex::session::prefs::RecentChannelEntry;
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("livetv-recent-persist");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+
+    plx_plex::plex::reset_servers_for_test();
+    let a = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    {
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        bridge.seat_recent_for_test();
+        bridge.note_recent_for_test(a, "7", "C101");
+    }
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>(""), [RecentChannelEntry::new("machine-a", "7", "C101")],
+        "stored by machine identifier, never by slot");
+
+    // A new run: its registry numbers the servers the other way round, and its store starts empty.
+    plx_plex::plex::reset_servers_for_test();
+    let filler = plx_plex::plex::register_for_test("machine-filler", "127.0.0.1", 10, "synthetic", "fixture");
+    let moved = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    assert_ne!(moved, a, "the same server holds another slot");
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    let mut on_moved = channel("101", "Family Channel");
+    on_moved.sid = moved;
+    on_moved.channel = "C101".into();
+    let mut decoy = on_moved.clone();
+    decoy.sid = filler;
+    bridge.stores.livetv.install_for_test(vec![decoy, on_moved]);
+    bridge.livetv_pump();
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| c.sid).collect();
+    assert_eq!(row, [moved], "the channel is the one on machine-a, not whatever now holds the old slot");
+}
+
+/// **One list, one cap.** The door's list is the only one: `[A1, A2, A3, B1, B2]` is stored (oldest
+/// first) and server B is not registered, so the row is `[A3, A2, A1]`; tuning A4 makes the door
+/// drain A1 (a hidden entry counts toward the door's five), and the row, right then, is what a
+/// restart would show. The store used to keep a second list of the REGISTERED servers' channels
+/// under its own cap, so it still held A1 after the tune and lost it at the next restore.
+#[test]
+fn a_tune_and_a_restart_show_the_same_row_when_a_server_is_hidden() {
+    use plx_plex::plex::session::prefs::{MemoryEntry, RecentChannelEntry};
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("livetv-recent-one-cap");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+    plx_plex::plex::reset_servers_for_test();
+    let a = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    for (machine, channel) in [("a", "1"), ("a", "2"), ("a", "3"), ("b", "1"), ("b", "2")] {
+        let entry = RecentChannelEntry::new(&format!("machine-{machine}"), "7", &format!("C{machine}{channel}"));
+        plx_media::route::remember::<RecentChannelEntry>("", entry.key(), entry.noted());
+    }
+    let lineup = |bridge: &mut crate::app::bridge::Bridge| {
+        let mut channels = Vec::new();
+        for n in ["1", "2", "3", "4"] {
+            let mut ch = channel(n, &format!("Channel a{n}"));
+            ch.sid = a;
+            ch.channel = format!("Ca{n}");
+            channels.push(ch);
+        }
+        bridge.stores.livetv.install_for_test(channels);
+    };
+    let names = |bridge: &crate::app::bridge::Bridge| -> Vec<String> {
+        bridge.livetv_view().recent.iter().map(|c| c.vcn.clone()).collect()
+    };
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    lineup(&mut bridge);
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), ["3", "2", "1"], "server B is hidden, not forgotten");
+    bridge.note_recent_for_test(a, "7", "Ca4");
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), ["4", "3", "2"], "the door's five are [A2, A3, B1, B2, A4]: A1 went at the tune");
+    let tuned = names(&bridge);
+    drop(bridge);
+    drop(owner);
+    // A restart reads the list from the session record, not from this process's mirror: let the queued
+    // write land in the record, forget the mirror and seed it again from the record, as the handoff's
+    // restore does at the next boot.
+    plx_base::storage_worker::drain_for_test();
+    plx_media::route::unseed_memory_for_test::<RecentChannelEntry>();
+    assert!(plx_media::route::recall_all::<RecentChannelEntry>("").is_empty(), "the mirror is forgotten");
+    plx_media::route::restore_install_rows(&plx_plex::plex::session::peek());
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>("").len(), 5, "the record held the door's five");
+
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    lineup(&mut bridge);
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), tuned, "a restart shows the row the tune showed");
+}
+
+/// **BACK from a zapped channel lands on the channel left.** The page the player was launched from was told which
+/// channel the exit leaves (`AppMsg::LiveTvSeat`); on its restore it seats that channel's Recent tile, not the poster that
+/// was pressed to start. (The zap's neighbour rule, the empty and the one-channel lineup are the screen's:
+/// `player::live_tests` and `player::zap`'s.)
+#[test]
+fn leaving_the_player_seats_the_channel_left_on_the_page_it_came_from() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-player-seat-left");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1001), "On now's first poster: the page has no Recent row yet");
+    start_channel(&mut app, &mut now);
+    note_tune(&mut app);
+    // Zapped to 102 and noted (without `admit`'s marked server session: this test exits the player, and that exit must not
+    // retire a live session through the engine's globals): 102 is Recent's newest, the first tile (lineup index 1, element 0x1002).
+    app.repause_at = 50;
+    tune_neighbour(&mut app, now, 1);
+    settle(&mut app, &mut now);
+    note_tune(&mut app);
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Exit);
+    settle(&mut app, &mut now);
+    assert!(app.route() == AppArg::LiveTv);
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1002), "the channel left, in Recent, not the poster pressed");
 }
 
 #[test]
@@ -151,11 +452,10 @@ fn live_banner_uses_the_existing_caption_and_tracks_the_airing() {
         ch.now_summary = format!("About {programme}");
         ch.begins_at = 1_792_523_168;
         ch.ends_at = 1_792_524_417;
-        let wall = plx_ui::fmt::Wall { unix_s: 1_792_523_168 + 2 * 60, utc_offset_s: 7_200 };
-        crate::app::playback::publish_live_banner(&mut app.player.session, &[ch], Some(wall));
+        crate::app::playback::publish_live_banner(&mut app.player.session, &[ch]);
         let info = plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts");
         assert_eq!(info.channel.now_summary, format!("About {programme}"));
-        assert!(info.airing.as_deref().is_some_and(|line| line.contains(&plx_os::i18n::msg::core_airing_started(2))), "{:?}", info.airing);
+        assert_eq!((info.channel.begins_at, info.channel.ends_at), (1_792_523_168, 1_792_524_417), "the raw airing, worded at draw");
         // SAFETY: the session owns the NUL-terminated banner for this assertion.
         assert_eq!(unsafe { std::ffi::CStr::from_ptr(plx_media::route::ctxline_cptr(&app.player.session)) }.to_str().unwrap(), expected);
     }
@@ -163,35 +463,35 @@ fn live_banner_uses_the_existing_caption_and_tracks_the_airing() {
 }
 
 #[test]
-fn the_banner_time_line_is_the_shared_airing_line_of_the_published_wall_time() {
+fn an_unchanged_channel_is_not_republished_and_a_rollover_is() {
     let _serial = plx_base::testlock::serial();
-    let _session = plx_plex::plex::session::TempSession::new("livetv-banner-wall");
+    let _session = plx_plex::plex::session::TempSession::new("livetv-banner-republish");
     plx_plex::plex::reset_servers_for_test();
     let mut app = app();
     let mut now = 0;
     open_live(&mut app, &mut now);
     start_channel(&mut app, &mut now);
-    let (begin, end) = (1_792_523_168, 1_792_526_768);
     let mut ch = channel("101", "Family Channel");
     ch.channel = "C101.242.ersatztv.org".into();
     ch.now = "Family Show".into();
-    ch.begins_at = begin;
-    ch.ends_at = end;
-    let line_at = |app: &App| plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts").airing.clone();
-    let wall = |unix_s| Some(plx_ui::fmt::Wall { unix_s, utc_offset_s: 7_200 });
-    let shared = |now_s| plx_ui::fmt::airing_line(plx_ui::fmt::Airing::Banner, begin, end, now_s, 7_200);
-    // The line is the shared one, wording the published second and zone.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), wall(begin + 120));
-    assert_eq!(line_at(&app), shared(begin + 120));
-    assert!(line_at(&app).is_some());
-    // Later in the programme the same channel is worded again; within the same second it is not.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), wall(begin + 40 * 60));
-    assert_eq!(line_at(&app), shared(begin + 40 * 60));
-    assert_ne!(line_at(&app), shared(begin + 120));
-    // A replay publishes no wall time: the banner has no time line, and does not guess one.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), None);
-    assert_eq!(line_at(&app), None);
-    assert_eq!(plx_media::route::live_info(&app.player.session).unwrap().channel.now, "Family Show");
+    ch.begins_at = 1_792_523_168;
+    ch.ends_at = 1_792_526_768;
+    let info_at = |app: &App| plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts") as *const plx_media::route::LiveInfo;
+    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    let first = info_at(&app);
+    // Frame after frame the same guide row is the same published info: nothing is rebuilt per frame
+    // (the airing's words are the HUD's, from the raw begin and end, at draw).
+    for _ in 0..3 {
+        crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    }
+    assert_eq!(info_at(&app), first, "an unchanged channel keeps its info");
+    // A programme rollover is a different row and is published.
+    ch.now = "Next Show".into();
+    ch.begins_at = ch.ends_at;
+    ch.ends_at += 3_600;
+    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    let info = plx_media::route::live_info(&app.player.session).unwrap();
+    assert_eq!((info.channel.now.as_str(), info.channel.begins_at), ("Next Show", 1_792_526_768));
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Exit);
 }
 
@@ -204,11 +504,11 @@ fn a_channel_ok_reaches_the_real_content_drain_and_live_playback_request() {
     let mut now = 0;
     open_live(&mut app, &mut now);
     assert!(!plx_media::route::is_live(&app.player.session));
-    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1000));
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1001)); // On now's first poster: the page has no Recent row yet
     let keys = super::script_key(Key::Right, Tick { ms: now + 16, dt_us: 16_000 });
     step(&mut app, &mut now, keys);
     settle(&mut app, &mut now);
-    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1002));
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1003));
     let keys = super::script_key(Key::Ok, Tick { ms: now + 16, dt_us: 16_000 });
     let mut observed = step(&mut app, &mut now, keys);
     // The real press machine commits after the release animation, on a later frame.

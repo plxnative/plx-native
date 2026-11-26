@@ -1257,7 +1257,7 @@ mirrored in `img.rs`'s decode-budget note.
 
 | UI element | request (all `minSize=1`) | source aspect differs from the box → |
 |---|---|---|
-| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`) |
+| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::CopySpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
 | Landscape still (episode / shelf) | `width=420&height=236`, still → show art → poster | cropped at draw (`art_uv`) |
 | Person headshot, profile avatar | `width=300&height=300`, `url=thumb` | cropped at draw, headshots riding high (`Crop::Headshot`) |
 | Profile chip avatar | `width=128&height=128` | cropped at draw |
@@ -1265,6 +1265,7 @@ mirrored in `img.rs`'s decode-budget note.
 | Home hero backdrop | `width=1280&height=720`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Detail backdrop | `width=1920&height=1080`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Hero clearLogo | `width=600&height=240&format=png` | contained in its column (`hero_logo::fit`) |
+| Live TV channel logo (the 250 x 140 plate) | `width=436&height=168&format=png` (twice its slot, for the focus pop, as the logos are) | contained in the plate's 218 x 84 slot, sized by the mark's INK, not the canvas (a resizer pads a logo with clear texels): the request asks for the picture's ink box (`art_fit::Derive::Ink`), found once at decode, and the plate draws that window of the texture, a texel or two wider, and never past 2 px a texel (`hero_logo::fit_ink`); a logo with no visible texel draws the channel's name instead |
 
 ---
 
@@ -1945,9 +1946,18 @@ every open and publishes no duration. This is an implemented extension of the li
 resource cleanup for this route still require device or server evidence; the official client's
 sequence above proves only the direct-play route.
 
+**Zapping: one run of presses is one session.** Up, Down, CH+ and CH- in the live player step a target the banner
+follows at once, and the app is asked to tune only 600 ms after the last press (`PlayerReq::Tune`, the player screen's
+`zap` machine), so a run of presses sends steps 1 to 4 above once, for the channel it ended on, and none for the
+channels it passed; a run that ends on the channel already playing (Up then Down, or a full lap of the lineup) sends
+nothing, and the stream is neither stopped nor restarted. The tune retires the playing channel first, with the ritual an exit uses (the `stopped` timeline of
+step 5, which frees the tuner of a one-tuner server before it is asked for another), then starts the new one. Nothing is
+sent while the debounce runs, so the old stream keeps playing under the art and the banner until the tune. How a real
+server answers a retune after a stop is as unmeasured as the rest of this route.
+
 The mock server models this whole sequence for tests without a tuner:
-`tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, five channels including an MPEG-2/AC-3
-and an AC-4 one; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
+`tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3
+and an AC-4 one, whose airings began at different times; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
 Its busy (503) and live-transcode answers follow the inferences above; they are not captures.
 
 ---

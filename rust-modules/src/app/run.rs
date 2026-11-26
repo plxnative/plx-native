@@ -388,13 +388,18 @@ fn poll_player_release(app: &mut App) {
 /// which this call is the one caller of: it answers [`clock::REPLAY_DATE`] under a replay (the
 /// recorded tick is set at the top of the iteration) and the platform's date, read at most once a
 /// minute, otherwise. A screen then receives the date through `AppViews::today` and reads no clock.
-/// The wall-clock time ([`super::bridge::Bridge::publish_wall`], from [`clock::wall`], this call
-/// being that door's one caller too) goes out the same way as `AppViews::wall`: nothing under a replay.
+/// The clock reading ([`super::bridge::Bridge::publish_clock`], from [`clock::reading`], this call
+/// being that door's one caller too) goes out the same way, once: the `AppViews::wall` and the Live TV
+/// store's `now` are both taken from it, and it is nothing under a replay.
+///
+/// Returns whether the bar's clock face changed ([`super::bridge::Bridge::publish_clock`]): a new
+/// minute owes the settled screen one frame, which the caller asks for as present damage, the way a
+/// player-presentation change does. The same minute is `false`, so nothing repaints per frame.
 fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route::PlaybackSession,
-    was_player: bool, viewer_paused: Option<bool>) {
+    was_player: bool, viewer_paused: Option<bool>) -> bool {
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
-    bridge.publish_wall(clock::wall());
+    bridge.publish_clock(clock::reading())
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).
@@ -744,6 +749,7 @@ fn hud_model(
     meta: plx_data::metadata::MetadataView<'_>,
     viewer_paused: bool,
     live_clock_and_lane: bool,
+    wall: Option<plx_ui::fmt::Wall>,
 ) -> plx_appkit::player_hud::model::HudModel {
     let position_ns = plx_media::player::playpos_ns(ps);
     let playpos_ns = position_ns.unwrap_or(0);
@@ -770,11 +776,9 @@ fn hud_model(
         },
     ) {
         let rate = plx_media::player::effective_playback_rate(ps);
-        clock::unix_ms()
-            .and_then(|now| plx_appkit::player_hud::model::projected_end_unix_seconds(
-                now, position_ns?, duration_ns?, rate,
-            ))
-            .and_then(clock::local_end_time)
+        // The frame's published wall time (a replay has none) gives the second; the zone is read AT THE
+        // FINISH (`clock::utc_offset_at`), since a clock change may fall between now and then.
+        wall.and_then(|wall| plx_appkit::player_hud::model::projected_end_clock(wall, position_ns?, duration_ns?, rate, clock::utc_offset_at))
     } else {
         None
     };
@@ -787,8 +791,10 @@ fn hud_model(
         covered: false,
         skip_progress: None,
         is_episode,
-        is_live,
         end_time: projected_end_time,
+        // The frame's published wall time: the live airing line is worded from it at draw, and the
+        // screen's clock fingerprint follows it.
+        wall,
         scrub_ns,
         playpos_ns,
         seek_display_ns: plx_media::player::seek_display_ns(ps).unwrap_or(-1),
@@ -814,8 +820,18 @@ fn publish_product_frame(app: &mut App, was_player: bool) {
     if app.runtime.bridge(&mut app.bridge).publish_player_presentation(&app.player.session) {
         app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
     }
-    publish_frame(&mut app.runtime.bridge(&mut app.bridge), &app.player.session, was_player,
-        app.adapters.player.backend_viewer_paused());
+    let clock_was_shown = app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some();
+    if publish_frame(&mut app.runtime.bridge(&mut app.bridge), &app.player.session, was_player,
+        app.adapters.player.backend_viewer_paused())
+        && (clock_was_shown || app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some())
+    {
+        // The bar's clock reached a new minute (or lost its zone) while the bar shows one: one frame
+        // to show it, however still the screen is, in the scope that owns input (a menu over the page
+        // does not retake the page's frozen snapshot for it). A page that shows no bar owes nothing.
+        let scope = app.pages.input_scope();
+        app.pages.present.note_in_scope(scope,
+            plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Lifecycle));
+    }
     publish_player_model(app);
 }
 
@@ -834,12 +850,13 @@ fn begin_product_frame(app: &mut App) -> Frame {
 /// Current transport/marker facts before the dispatcher's input/Tick, refreshed again for draw.
 fn publish_player_model(app: &mut App) {
     let bridge = app.runtime.bridge(&mut app.bridge);
-    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels, bridge.wall());
+    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels);
     let mut model = hud_model(&app.player.session, bridge.metadata_view(),
         app.adapters.player.backend_viewer_paused().unwrap_or(false),
         matches!(app.rec, super::recorder::Recplay::Off) && !bridge.is_controlled_replay()
             // a HUD with no finish-time lane draws no estimate, so none is projected for it
-            && app.hud.as_ref().is_some_and(|hud| hud.compiled.declares_end_time()));
+            && app.hud.as_ref().is_some_and(|hud| hud.compiled.declares_end_time()),
+        bridge.wall());
     model.marker_prefs = bridge.marker_preferences();
     model.covered = app.pages.surface_up();
     super::bridge::send_player_message(&mut app.pages, plx_screens::registry::AppMsg::PlayerModel(model));
@@ -1126,7 +1143,7 @@ unsafe fn ingress_token(app: &mut App, fr: &mut Frame, token: &str) -> bool {
         // commits frames after it opened.
         if !drained && super::bridge::text_owner(&app.pages) { drain_sdl(app, fr); }
         if super::bridge::text_owner(&app.pages) {
-            let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
+            let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available(app.platform.shell));
             ingest_text(app, &text.replace('+', " "), panel, plx_machine::machine::Source::RemoteFifo);
             return true;
         }
@@ -1247,7 +1264,7 @@ unsafe fn ingest_host_event(app: &mut App, fr: &mut Frame, event: HostEvent,
             HostEvent::Lifecycle(Lifecycle::WillForeground) => {}
             // The tape owns logical ingress; a real key, text commit, pointer or wheel event must not
             // be counted a second time.
-            HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {}
+            HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::KeyboardDismissed | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {}
         }
         return;
     }
@@ -1257,6 +1274,13 @@ unsafe fn ingest_host_event(app: &mut App, fr: &mut Frame, event: HostEvent,
     match event {
         HostEvent::Key(press) => ingest_key(app, press),
         HostEvent::Text(text) => ingest_text_commit(app, text),
+        // The viewer closed the platform's keyboard on its panel: the same keyboard drop the background edge
+        // asks for (`host_background`), behind whatever this batch delivered before it, so the field stops
+        // owning a keyboard that has gone and the next OK raises it again.
+        HostEvent::KeyboardDismissed => app.inputs.push(plx_machine::machine::InputEvent {
+            at: plx_machine::machine::Tick { ms: fr.now, dt_us: 0 }, source: plx_machine::machine::Source::Sdl,
+            kind: plx_machine::machine::InputKind::SystemKeyboard(false),
+        }),
         HostEvent::Pointer { x, y, edge } => ingest_pointer(app, x, y, edge),
         HostEvent::Wheel { dy } => ingest_wheel(app, dy),
         // Nothing is torn down here: the loop ends, then `shutdown` releases what is held.
@@ -1768,7 +1792,7 @@ unsafe fn ingest_key(app: &mut App, press: KeyPress) {
 /// `MAX_PENDING` bounds a queue nobody drains. An empty commit is ignored by both.
 fn ingest_text_commit(app: &mut App, text: String) {
     if super::bridge::text_owner(&app.pages) {
-        let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
+        let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available(app.platform.shell));
         ingest_text(app, &text, panel, plx_machine::machine::Source::Sdl);
     } else {
         crate::textinput::queue(text);
@@ -2316,6 +2340,9 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         #[cfg(feature = "play-feed")]
         park_on_decoder_release(app);
         app.adapters.player.sync_request_metrics(&mut app.player.session);
+        // The starts the engine confirmed (`route::settle_route_start`, whichever backend) spend the pick held
+        // for their file: the session has no handle on the metadata owner, so the effect is drained here.
+        plx_media::route::spend_confirmed_picks(&mut app.player.session, app.runtime.metadata_mut());
         // The subtitle registries' colour fact, delivered to the session's readout for the Subtitles
         // menu to read (a field, not a registry): whichever backend plays.
         plx_media::player::deliver_subtitle_ink(&mut app.player.session);
@@ -2997,6 +3024,10 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
                     finish_landed_play(app, matches!(outcome, plx_media::player::ResumeOutcome::Prepared));
                 }
                 if let Some(r) = plx_media::route::pump_play(&mut app.player.session, app.runtime.metadata_mut()) {
+                    // A live channel's plan landing joins the profile's Recent. `pump_play` hands back a
+                    // start only for a plan the server admitted, so a refused tune (all tuners busy, a
+                    // failed one) never gets here: this arm is the gate, and the note has none of its own.
+                    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
             app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
                     app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
                     // The resolved URI locator is an owned IO result. Install it against the
@@ -3452,7 +3483,7 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                             };
                             plx_gfx::gfx::draw_number(
                                 *fps_shown,
-                                plx_base::surface::LOGICAL_W - 70.0,
+                                fps_counter_right_x(bridge.bar_clock(pages).map(|clock| clock.w)),
                                 64.0,
                                 46.0,
                                 fps_col.as_ptr(),
@@ -3468,6 +3499,16 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                 });
             });
     (vx, vy, vw, vh)
+}
+
+/// **Where the dev fps counter's `draw_number` anchor stands.** The counter (a `devtools` build only;
+/// a release build draws none) has always stood in the bar's band with its right digit on the right
+/// margin, which is where the bar's clock now ends. So it steps LEFT of the clock: by the clock's own
+/// width and one [`plx_ui::theme::space::SM`] of air, the rung the bar keeps between its own parts, and
+/// stays where it was when the bar shows no clock this frame ([`super::bridge::Bridge::bar_clock`]).
+#[cfg(feature = "devtools")]
+fn fps_counter_right_x(clock_w: Option<f32>) -> f32 {
+    plx_base::surface::LOGICAL_W - 70.0 - clock_w.map_or(0.0, |w| w + plx_ui::theme::space::SM)
 }
 
 /// **A screen visit ended: report how the app felt on it (`route.left`) and start the next one
@@ -4726,7 +4767,23 @@ pub(in crate::app) mod lifecycle_regression_tests {
             HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {
                 panic!("a key, a text commit, a pointer event and a wheel tick arrive as their own bytes, not as a type code")
             }
+            HostEvent::KeyboardDismissed => panic!("only a hosted platform reports its keyboard closed; SDL never does"),
         }
+    }
+
+    /// **The platform closing its keyboard on the panel is the keyboard drop the background edge asks for**:
+    /// one `SystemKeyboard(false)` input, queued behind what the batch delivered before it, so a field stops
+    /// owning a keyboard that has gone (else `textinput::start` stays latched and the next OK raises nothing).
+    #[test]
+    fn a_keyboard_the_platform_closed_queues_the_keyboard_drop() {
+        use plx_machine::machine::InputKind;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        let mut fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
+        let before = app.inputs.len();
+        deliver(&mut app, &mut fr, true, HostEvent::KeyboardDismissed);
+        let kinds: Vec<_> = app.inputs[before..].iter().map(|e| e.kind.clone()).collect();
+        assert!(matches!(kinds.as_slice(), [InputKind::SystemKeyboard(false)]), "{kinds:?}");
     }
 
     /// Deliver `event` the SDL way (`hosted` false: its bytes through `ingest_sdl_event`) or the
@@ -5997,6 +6054,72 @@ pub(in crate::app) mod lifecycle_regression_tests {
         assert!(unsafe { ingress_token(&mut app, &mut fr, "hang-raw:1") });
     }
 
+    /// **A settled screen that shows the bar owes its clock one frame a minute, and no more.** The loop's
+    /// publication phase turns a new minute's face into present damage (the way a player-presentation
+    /// change does), and a frame published again within the minute adds none: the idle gate keeps its
+    /// whole saving, with no polling and no per-frame invalidation.
+    #[test]
+    fn a_new_minute_owes_the_settled_bar_one_frame_and_the_same_minute_none() {
+        const AT: i64 = 1_795_649_400;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        clock::pin_for_test(AT * 1_000, 3_600);
+        super::super::bridge::nav_root(&mut app.pages, AppArg::Home);
+        for i in 0..40 { frame(&mut app, i * 16); }
+        publish_product_frame(&mut app, false);
+        assert!(app.route() == AppArg::Home, "premise: Home is on top");
+        assert!(app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some(), "premise: Home shows the bar and its clock");
+        let first = app.pages.present.damage_epoch();
+        for ms in [0, 17, 1_000, 59_999] {
+            clock::pin_for_test(AT * 1_000 + ms, 3_600);
+            publish_product_frame(&mut app, false);
+            assert_eq!(app.pages.present.damage_epoch(), first, "{ms} ms into the same minute: no damage");
+        }
+        clock::pin_for_test((AT + 60) * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        let next = app.pages.present.damage_epoch();
+        assert!(next > first, "the minute edge: one frame owed");
+        publish_product_frame(&mut app, false);
+        assert_eq!(app.pages.present.damage_epoch(), next, "and published again within the minute, none");
+        clock::unpin_for_test();
+    }
+
+    /// **No bar, no frame owed**: while no page shows the bar (nothing mounted here; a detail page, the
+    /// player, a tucked bar answer the same, `chrome_clock_route_tests`), a new minute raises no damage,
+    /// so it can never force a frozen snapshot's retake for a clock nobody can see.
+    #[test]
+    fn a_new_minute_owes_no_frame_while_no_page_shows_the_bar() {
+        const AT: i64 = 1_795_649_400;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        clock::pin_for_test(AT * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        let first = app.pages.present.damage_epoch();
+        assert!(app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_none(), "premise: no bar");
+        clock::pin_for_test((AT + 60) * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        assert_eq!(app.pages.present.damage_epoch(), first, "the minute edge with no bar on screen: no damage");
+        clock::unpin_for_test();
+    }
+
+    /// **The dev fps counter and the bar's clock do not collide.** The counter's right digit ends
+    /// where the clock does (the margin, 1824); with a clock on the bar it steps left of the clock by
+    /// at least the bar's own 16 px rung, whatever the face's width, and with none it has not moved.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn the_dev_fps_counter_steps_left_of_the_bars_clock() {
+        // `draw_digit` lays its digits `1.55 * s` apart, the rightmost starting `1.55 * s` left of the anchor
+        // and `s` wide, so its right edge is `0.55 * s` left of it (s = 46 as `draw` passes).
+        let digit_right = |right_x: f32| right_x - 0.55 * 46.0;
+        assert!((digit_right(fps_counter_right_x(None)) - plx_ui::widgets::TOP_BAR_CLOCK_RIGHT).abs() < 1.0,
+            "no clock: the counter is where it always was, on the margin");
+        for w in [62.0, 76.0, 130.0] {
+            let left = plx_ui::widgets::top_bar_clock_frame(w).x;
+            let right = digit_right(fps_counter_right_x(Some(w)));
+            assert!(right <= left - plx_ui::theme::space::SM + 1.0, "{w}: the counter ends at {right}, the clock begins at {left}");
+        }
+    }
+
     /// **`state:<nonce>` notes no damage and is not recorded** (the a11y-ids plan, D7): the token is
     /// taken before `dispatch_remote_token` (which notes input damage for every token it sees) and
     /// before the recorder's direct-token path, so a read-back leaves the present gate and the
@@ -6653,7 +6776,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
         }
         // A projected attempt alone does not install a common backend runner.
         // Supply the viewer goal explicitly, opposite to the idle physical mailbox.
-        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false);
+        let wall = plx_ui::fmt::Wall::from_secs(1_795_640_400, 3_600);
+        let mut model = hud_model(&app.player.session, app.runtime.metadata_view(), true, false, Some(wall));
         model.marker_prefs = app.runtime.bridge(&mut app.bridge).marker_preferences();
         model.covered = app.pages.surface_up();
         // restore before grading: a failed assertion must not leak a scrub target into the next test
@@ -6663,6 +6787,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         tx.scrub_ns.store(before.0, Relaxed);
         shared.desired_sub_idx.store(before.1, Relaxed);
         assert!(model.paused, "the common viewer pause goal");
+        assert_eq!(model.wall, Some(wall), "the frame's published wall time rides the model; the screen adds nothing");
         assert_eq!(model.scrub_ns, 42_000_000_000, "TX.scrub_ns");
         assert_eq!(model.playpos_ns, 7_000_000_000, "playpos_ns()");
         assert_eq!(model.seek_display_ns, 9_000_000_000, "seek_display_ns()");
@@ -7090,6 +7215,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                 markers: Vec::new(),
                 chapters: (1..=2).map(chapter).collect(),
                 hdr: false,
+                sub_choice: Default::default(),
             }))));
             super::super::bridge::nav_push(&mut app.pages, AppArg::Player);
             frame(&mut app, 16);
@@ -9651,6 +9777,54 @@ pub(in crate::app) mod lifecycle_regression_tests {
             ("Remote Show", "Next", 2, 20),
         );
         assert_eq!(meta.current().unwrap().sid, rig.sid);
+    }
+
+    /// **The loop spends the viewer's pick when the engine confirms the start**, the only sender of
+    /// `SpendPick`: the plan's landing and the frames after it leave the pick held, a failed start leaves it
+    /// too, and the confirming `Started` (the session's typed effect, drained by `playback_tick`) spends it.
+    #[test]
+    fn the_loop_spends_the_pick_when_the_engine_confirms_the_start() {
+        /// The loop's playback phase of one iteration (`frame` runs the container only).
+        fn loop_tick(rig: &mut Rig, now: u32) {
+            let mut fr = Frame::begin(&rig.app.player.session, rig.app.runtime.metadata_view());
+            fr.now = now;
+            fr.dt = 0.016;
+            unsafe { playback_tick(&mut rig.app, &mut fr); }
+        }
+        use plx_data::metadata::{PreplayPick, SubPick};
+        use plx_data::stores::metadata::MetadataCmd;
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::new() else {
+            eprintln!("SKIPPED pick spend: lifecycle fixture worker could not be spawned");
+            return;
+        };
+        let sid = rig.sid;
+        let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+        plx_data::metadata::install_for_test(rig.app.runtime.metadata_mut().state_mut(), Some(plx_data::metadata::Detail {
+            sid,
+            rk: "1".into(),
+            kind: "movie".into(),
+            part: "/library/parts/1/file.mkv".into(),
+            audio: vec![stream(11)],
+            subs: vec![stream(21)],
+            ..Default::default()
+        }));
+        let off = PreplayPick { part_id: 1, audio_sid: 11, sub: SubPick::Off };
+        assert!(rig.app.runtime.metadata_mut().run(MetadataCmd::PatchTracks { sid, rk: "1".into(), pick: off }));
+        rig.request();
+        rig.resolve();
+        assert!(!plx_media::route::url(&rig.app.player.session).is_empty(), "setup: the plan landed playable");
+        loop_tick(&mut rig, 16);
+        assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "a landed plan has not started");
+        let transaction = plx_media::route::begin_route_start().unwrap();
+        assert!(plx_media::route::prepare_route_start(transaction));
+        let attempt = plx_media::route::claim_route_start_attempt(transaction).unwrap();
+        assert!(plx_media::route::settle_route_start(
+            &mut rig.app.player.session, attempt, plx_media::route::RouteStartResult::Started,
+        ));
+        assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "the drain is the loop's, next tick");
+        loop_tick(&mut rig, 32);
+        assert!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1").is_empty(), "the confirmed start spent the pick");
     }
 
     #[test]

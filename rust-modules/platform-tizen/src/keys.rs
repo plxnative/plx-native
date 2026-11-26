@@ -6,21 +6,25 @@
 //! row with `None`: known, and dropped.
 //!
 //! **Emulator codes only; a retail remote is unmeasured.** The rows marked [`Basis::Measured`] are the
-//! emulator's, observed with a key injector and read off the diagnostics panel (`docs/platform-ports.md`,
+//! emulator's. Six were observed with a key injector and read off the diagnostics panel (`docs/platform-ports.md`,
 //! E7 and E11): Right (keycode 114), Left (113), Up (111), Down (116), Return (36) and the colour button
-//! `XF86Color` (385). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
+//! `XF86Color` (385). Three are the keys the system keyboard's panel sends to the window ([`crate::ime`]), read
+//! off the key log while pressing the panel itself (`docs/tizen.md`, "The system keyboard", 2026-11-25):
+//! `BackSpace` (22, its delete key), `Select` (0, its Done) and `Cancel` (231, Back while it is up). Every other row is [`Basis::Unverified`]: the name is what Tizen's TV key names are
 //! documented as, or inferred from the Samsung remote's layout, and no run has pressed it. The first
 //! retail key dump replaces this table, and a row that turns out wrong is a wrong row here and nowhere else.
 //!
-//! The table's only reader is [`Decoder::decode`]; the unit test below states each name's expected action
-//! as a literal of its own, so a swapped pair (Play and Pause, Rewind and Left, the two pagers) fails it,
-//! which a test that read the table back through itself could not.
+//! The table has two readers: [`Decoder::decode`] (through [`lookup`]) and [`grabbed`] (the window's key grab).
+//! The unit test below states each name's expected action as a literal of its own, so a swapped pair (Play and
+//! Pause, Rewind and Left, the two pagers) fails it, which a test that read the table back through itself could
+//! not; `every_transport_key_is_grabbed_and_no_navigation_key_is` guards the second reader the same way.
 use plxnative_modules::host::{Action, Edge};
 
 /// How a row got into the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Basis {
-    /// Observed on the emulator (E7, E11).
+    /// Observed on the emulator: E7 and E11 with a key injector, and the system keyboard's three keys pressed on its
+    /// own panel (`docs/tizen.md`, "The system keyboard", 2026-11-25).
     Measured,
     /// Documented or inferred; not pressed on any device.
     Unverified,
@@ -35,6 +39,15 @@ pub const TABLE: &[(&str, Option<Action>, Basis)] = &[
     ("Down", Some(Action::Down), Basis::Measured),
     ("Return", Some(Action::Ok), Basis::Measured),
     ("XF86Color", None, Basis::Measured),
+    // The system keyboard's delete key (`ime`): the panel sends it to the window as this key, code 22, and the
+    // field reads it as `Action::Backspace` (measured on the TV 10.0 emulator, 2026-11-25).
+    ("BackSpace", Some(Action::Backspace), Basis::Measured),
+    // The panel's Done, code 0: OK, so the field commits and closes the keyboard as OK on it does. Delivered only
+    // while the panel is up (`ecore::on_key` asks `ime::Panel::done`): its HIDE may arrive first.
+    ("Select", Some(Action::Ok), Basis::Measured),
+    // Back while the panel is up, code 231. No action: the panel closes itself and says so
+    // (`ime`'s STATE callback, `Input::KeyboardDismissed`), so a Back here would be a second dismissal.
+    ("Cancel", None, Basis::Measured),
     // Back and leave.
     ("XF86Back", Some(Action::Back), Basis::Unverified),
     ("Escape", Some(Action::Back), Basis::Unverified),
@@ -44,6 +57,8 @@ pub const TABLE: &[(&str, Option<Action>, Basis)] = &[
     ("XF86AudioPlay", Some(Action::Play), Basis::Unverified),
     ("XF86AudioPause", Some(Action::Pause), Basis::Unverified),
     ("XF86PlayBack", Some(Action::PlayPause), Basis::Unverified),
+    // The older guide's name for the same toggle; flutter-tizen grabs both.
+    ("XF86AudioPlayPause", Some(Action::PlayPause), Basis::Unverified),
     ("XF86AudioStop", Some(Action::Stop), Basis::Unverified),
     ("XF86AudioRewind", Some(Action::Rewind), Basis::Unverified),
     ("XF86AudioNext", Some(Action::FastForward), Basis::Unverified),
@@ -71,6 +86,23 @@ pub const TABLE: &[(&str, Option<Action>, Basis)] = &[
     ("8", Some(Action::Digit(8)), Basis::Unverified),
     ("9", Some(Action::Digit(9)), Basis::Unverified),
 ];
+
+/// The keys the window GRABS (`ecore::Window::show`): every row bound to a transport action. A retail set acts
+/// on an ungrabbed media key itself as well as delivering it: the first retail report (discussion #1460,
+/// 2026-11-26) had the remote's Play/Pause pause the video AND raise the system's "Not Available" popup, the
+/// popup flutter-tizen's issue #319 removed by grabbing the key TOPMOST. Derived from [`TABLE`], so a transport
+/// row added there is grabbed too.
+pub fn grabbed() -> impl Iterator<Item = &'static str> {
+    TABLE.iter().filter(|(_, action, _)| matches!(action, Some(a) if transport(*a))).map(|(name, _, _)| *name)
+}
+
+/// The player's transport actions, the media keys a TV's own shell would otherwise also act on.
+fn transport(action: Action) -> bool {
+    matches!(
+        action,
+        Action::Play | Action::Pause | Action::PlayPause | Action::Stop | Action::Rewind | Action::FastForward
+    )
+}
 
 /// What `name` presses: `Some(Some(action))` for a bound key, `Some(None)` for a known key with no action,
 /// `None` for a name the table does not list.
@@ -197,12 +229,16 @@ mod tests {
             ("Down", Some(Action::Down)),
             ("Return", Some(Action::Ok)),
             ("XF86Color", None),
+            ("BackSpace", Some(Action::Backspace)),
+            ("Select", Some(Action::Ok)),
+            ("Cancel", None),
             ("XF86Back", Some(Action::Back)),
             ("Escape", Some(Action::Back)),
             ("XF86Exit", Some(Action::Exit)),
             ("XF86AudioPlay", Some(Action::Play)),
             ("XF86AudioPause", Some(Action::Pause)),
             ("XF86PlayBack", Some(Action::PlayPause)),
+            ("XF86AudioPlayPause", Some(Action::PlayPause)),
             ("XF86AudioStop", Some(Action::Stop)),
             ("XF86AudioRewind", Some(Action::Rewind)),
             ("XF86AudioNext", Some(Action::FastForward)),
@@ -241,11 +277,30 @@ mod tests {
 
     /// The emulator's measured rows come first and are marked so, and every other row says it is not.
     #[test]
-    fn the_measured_rows_are_the_emulators_six_and_the_rest_say_unverified() {
+    fn the_measured_rows_are_the_emulators_nine_and_the_rest_say_unverified() {
         let measured: Vec<_> = TABLE.iter().filter(|r| r.2 == Basis::Measured).map(|r| r.0).collect();
-        assert_eq!(measured, ["Right", "Left", "Up", "Down", "Return", "XF86Color"]);
-        assert!(TABLE[..6].iter().all(|r| r.2 == Basis::Measured), "the measured rows are the first six");
-        assert!(TABLE[6..].iter().all(|r| r.2 == Basis::Unverified));
+        assert_eq!(measured, ["Right", "Left", "Up", "Down", "Return", "XF86Color", "BackSpace", "Select", "Cancel"]);
+        assert!(TABLE[..9].iter().all(|r| r.2 == Basis::Measured), "the measured rows are the first nine");
+        assert!(TABLE[9..].iter().all(|r| r.2 == Basis::Unverified));
+    }
+
+    /// **The media keys are grabbed, so the TV does not also act on them** (discussion #1460: the remote's
+    /// Play/Pause paused the video and raised the system's "Not Available" popup). Every transport key is in the
+    /// grab list, the dedicated Play/Pause first among them, and no navigation key is: a grabbed arrow or OK would
+    /// be the window's even over the system's own UI.
+    #[test]
+    fn every_transport_key_is_grabbed_and_no_navigation_key_is() {
+        let grabbed: Vec<&str> = grabbed().collect();
+        for name in [
+            "XF86PlayBack", "XF86AudioPlayPause", "XF86AudioPlay", "XF86AudioPause", "XF86AudioStop",
+            "XF86AudioRewind", "XF86AudioNext", "XF86AudioForward",
+        ] {
+            assert!(grabbed.contains(&name), "{name} must be grabbed");
+        }
+        assert_eq!(grabbed.len(), 8, "only the transport rows: {grabbed:?}");
+        for name in ["Return", "Up", "Down", "Left", "Right", "XF86Back", "XF86Exit", "Select", "0"] {
+            assert!(!grabbed.contains(&name), "{name} is not a media key");
+        }
     }
 
     #[test]

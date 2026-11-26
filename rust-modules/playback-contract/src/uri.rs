@@ -58,10 +58,37 @@ pub fn native_index(tracks: &[NativeTrackIndex], selected: TrackSelection) -> Op
     (first.index >= 0 && matches.next().is_none()).then_some(first.index)
 }
 
-/// The authorized URL stays opaque; callers provide the exact native track map with it.
-pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex> }
+/// What a driver whose native track order is not proven must check before it trusts a [`NativeTrackIndex`]: the
+/// identity evidence the source states for one selected track. A driver that trusts its map ignores it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NativeTrackCheck {
+    /// The source has one track of this kind, so its index needs no other evidence.
+    Sole,
+    /// The track's language as the server states it (ISO 639, e.g. `ger`; empty when unknown): the native track
+    /// the driver selects must report the same language.
+    Language(String),
+}
+
+/// The authorized URL stays opaque; callers provide the exact native track map with it, and may state for a track
+/// the [`NativeTrackCheck`] a driver that does not trust the map uses.
+pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex>, checks: Vec<(TrackSelection, NativeTrackCheck)> }
 impl UriSource {
-    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks } }
+    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks, checks: Vec::new() } }
+
+    /// This source with `check` stated for `selection`, replacing any check stated for it before.
+    pub fn with_check(mut self, selection: TrackSelection, check: NativeTrackCheck) -> Self {
+        self.checks.retain(|(stated, _)| *stated != selection);
+        self.checks.push((selection, check));
+        self
+    }
+
+    /// The identity check stated for `selection`, if any.
+    pub fn check_of(&self, selection: TrackSelection) -> Option<&NativeTrackCheck> {
+        self.checks.iter().find(|(stated, _)| *stated == selection).map(|(_, check)| check)
+    }
+
+    /// Every identity check this source states, for a driver that keeps them past [`Self::into_parts`].
+    pub fn checks(&self) -> &[(TrackSelection, NativeTrackCheck)] { &self.checks }
 
     pub fn has_url(&self) -> bool { !self.url.is_empty() }
 
@@ -76,16 +103,35 @@ impl UriSource {
 
     /// Whether this owned source can execute its required native track choices. The same
     /// check guards qualification and the physical Start; no URL or index map escapes.
+    ///
+    /// `Off` names no track, so it needs nothing of the source's map: whether a play can be carried
+    /// with a track off is the DRIVER's capability ([`Capabilities::supports_track`]), which every
+    /// URI driver checks before this (a pipeline that shows a default subtitle by itself states
+    /// `subtitle_off: false` and refuses it there).
+    ///
+    /// [`Capabilities::supports_track`]: crate::Capabilities::supports_track
     pub fn can_supply(&self, requirements: Requirements) -> bool {
         let mapped = |choice, kind| match choice {
-            TrackChoice::Unspecified => true,
-            TrackChoice::Off => false,
+            TrackChoice::Unspecified | TrackChoice::Off => true,
             TrackChoice::Selected(id) => native_index(&self.tracks, TrackSelection { kind, id }).is_some(),
         };
         self.has_url() && self.valid_track_map()
             && mapped(requirements.audio_track, TrackKind::Audio)
             && mapped(requirements.subtitle_track, TrackKind::Subtitle)
     }
+}
+
+/// One subtitle cue a URI driver's native player raised for the attempt's selected subtitle track, for the app to draw:
+/// `text` (UTF-8, already free of the source's markup, lines split by newlines) shows from `start` for `duration_ms`, in the
+/// attempt's content time (the clock its `Observation::Position` reports). Only a driver that [delivers
+/// captions](UriDriver::delivers_captions) hands any over, and only of the track it settled and has not turned off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UriCaption {
+    pub attempt: AttemptId,
+    pub track: TrackSelection,
+    pub start: crate::ContentTime,
+    pub duration_ms: u64,
+    pub text: String,
 }
 
 /// What the player adapter needs of a URI driver beyond [`DriverSet`]: the escrow of an
@@ -115,6 +161,13 @@ pub trait UriDriver: DriverSet {
     /// the offer and the play stays with Feed instead of failing at its Start. The Start re-checks
     /// whatever it needs. A driver with nothing to set up is always ready.
     fn ready_to_start(&mut self, _ctx: &Self::Context) -> Result<(), UriNotReady> { Ok(()) }
+    /// Whether this driver hands the selected subtitle's cues to the app ([`Self::drain_captions`]) instead of its
+    /// pipeline drawing them: the app then draws a selected subtitle with its own renderer, Style and Timing. A driver
+    /// whose platform draws subtitles itself (webOS) says no, the default.
+    fn delivers_captions(&self) -> bool { false }
+    /// Every cue the driver has for the app since the last call, in order, appended to `out` (see [`UriCaption`]).
+    /// Asked after each poll; the default has none.
+    fn drain_captions(&mut self, _out: &mut Vec<UriCaption>) {}
 }
 
 /// Why a [`UriDriver`] cannot take a Start ([`UriDriver::ready_to_start`]), or has no display path
@@ -134,5 +187,33 @@ impl UriNotReady {
             Self::DisplayUnavailable => "the driver has no display path",
             Self::Driver(reason) => reason,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Capabilities, Fidelity, SourceKind};
+
+    fn wants(audio_track: TrackChoice, subtitle_track: TrackChoice) -> Requirements {
+        Requirements { source: SourceKind::ProgressiveUri, video: Fidelity::Exact, audio: Fidelity::Exact,
+            audio_track, subtitle_track }
+    }
+
+    /// Off names no track, so a URL source supplies it with an empty map; whether it is carried is the driver's
+    /// capability, which refuses it where the pipeline cannot hold a track off.
+    #[test]
+    fn off_needs_no_native_track_and_is_the_drivers_to_refuse() {
+        let source = UriSource::new("http://pms/file".into(), vec![]);
+        let off = wants(TrackChoice::Unspecified, TrackChoice::Off);
+        assert!(source.can_supply(off));
+        assert!(source.can_supply(wants(TrackChoice::Off, TrackChoice::Unspecified)));
+        assert!(!source.can_supply(wants(TrackChoice::Unspecified, TrackChoice::Selected(7))),
+            "a selected track still needs its native index");
+        assert!(!UriSource::new(String::new(), vec![]).can_supply(off), "no URL, no source");
+        let no_off = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false, pause: true, seek: true,
+            audio_track: true, subtitle_track: true, audio_off: false, subtitle_off: false };
+        assert!(!no_off.supports(off));
+        assert!(Capabilities { subtitle_off: true, ..no_off }.supports(off));
     }
 }

@@ -1,6 +1,6 @@
 //! The hosted contract's logic (`docs/platform-ports.md`, Target shape 7), with no Ecore and no EGL in it.
 //!
-//! [`Hosted`] is everything behind the three C exports: the gate every host-bound callback enters through,
+//! [`Hosted`] is everything behind the header's `plx_host_*` C exports: the gate every host-bound callback enters through,
 //! the exactly-once completion, the bounded input queue, the copy of the host's callback table, and the
 //! start, post, stop and deliver steps. It is an instance (built by a `const fn`, held in one `static` by
 //! [`crate::exports`]) so a host test builds its own and drives it with a fake host table and injected
@@ -47,10 +47,14 @@ const LOOP_STACK_BYTES: usize = 8 << 20;
 pub const STOP_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One input the host side queued for the loop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
     /// A key with an action, and its edge.
     Key(Action, Edge),
+    /// A commit from the system keyboard (`ime`'s COMMIT callback).
+    Text(String),
+    /// The viewer closed the system keyboard on its panel (`ime`'s STATE callback).
+    KeyboardDismissed,
     /// `OnPause`.
     Pause,
     /// `OnResume`.
@@ -248,6 +252,27 @@ impl Hosted {
         self.player.accept(event).map_or_else(|code| code, |()| host_abi::OK)
     }
 
+    /// `plx_host_post_cue`: copy the host's subtitle cue and queue it (`plx_host.h`, PLAYER, CUE). Refused when the loop
+    /// is not running or a stop was requested, stale for an epoch that is not live, and dropped (counted) when the cue
+    /// queue is full. Never blocks.
+    pub fn post_cue(&self, cue: *const host_abi::PlxHostCue) -> i32 {
+        // SAFETY: `cue` is the host's, readable as far as its own `size` says, and its text as far as `len` says.
+        let cue = match unsafe { host_abi::read_cue(cue) } {
+            Ok(cue) => cue,
+            Err(code) => return code,
+        };
+        if self.gate.stopping() || !self.running.load(Ordering::SeqCst) {
+            return host_abi::E_STATE;
+        }
+        self.player.accept_cue(cue).map_or_else(|code| code, |()| host_abi::OK)
+    }
+
+    /// The cues the host posted since the last call, in order, and how many a full cue queue dropped. Loop thread.
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
+    pub fn drain_cues(&self, out: &mut Vec<host_abi::HostCue>) -> usize {
+        self.player.drain_cues(out)
+    }
+
     /// The host's media player, or why there is none. A table that does not offer one is not an error.
     pub fn player_support(&self) -> Result<(), NoPlayer> {
         match self.callbacks.get() {
@@ -316,6 +341,8 @@ impl Hosted {
                 Input::Key(action, edge) => {
                     sink.key(Some(action), None, edge);
                 }
+                Input::Text(text) => sink.text(&text),
+                Input::KeyboardDismissed => sink.keyboard_dismissed(),
                 Input::Pause => {
                     // One transition is one DID edge: the application works and logs once per edge, and DID
                     // alone is complete. A pause while paused is no transition.
@@ -640,6 +667,9 @@ pub(crate) mod testing {
         }
         fn text(&mut self, text: &str) {
             self.seen.push(format!("text {text}"));
+        }
+        fn keyboard_dismissed(&mut self) {
+            self.seen.push("keyboard dismissed".into());
         }
         fn pointer(&mut self, _x: f32, _y: f32, _edge: PointerEdge) {
             self.seen.push("pointer".into());
@@ -1206,6 +1236,8 @@ mod tests {
         assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 7_200_000, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_VIDEO_SIZE, 4, 1920, 1080), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_TRACK, 4, 2, 1), host_abi::OK, "a track answer is a player event");
+        assert_eq!(post(host_abi::EVENT_PLAYER_AUDIO_LANGUAGE, 4, 1, 0x0075_6564), host_abi::OK, "so is a track's language");
         assert_eq!(post(host_abi::EVENT_PLAYER_STARTED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_CLOSED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_COMPLETED, 4, 0, 0), host_abi::E_STALE, "late: its player is closed");
@@ -1222,6 +1254,8 @@ mod tests {
             [
                 (4, host_abi::PlayerKind::Prepared, 7_200_000, 0),
                 (4, host_abi::PlayerKind::VideoSize, 1920, 1080),
+                (4, host_abi::PlayerKind::Track, 2, 1),
+                (4, host_abi::PlayerKind::AudioLanguage, 1, 0x0075_6564),
                 (4, host_abi::PlayerKind::Started, 0, 0),
                 (4, host_abi::PlayerKind::Closed, 0, 0)
             ]
@@ -1232,6 +1266,34 @@ mod tests {
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 5, 1, 0), host_abi::OK);
         w.hosted.stop(Duration::from_secs(30));
         w.wait_stopped(1);
+    }
+
+    /// **A cue is copied, queued by epoch apart from the player's events, and refused outside a run.** The host's text
+    /// is copied at the call (the buffer is the host's again when `plx_host_post_cue` returns), an empty cue is the
+    /// player's "the cue ended" and is queued too, and a cue of an epoch that is not live is stale.
+    #[test]
+    fn cues_are_copied_and_queued_by_epoch_and_refused_outside_a_run() {
+        let w = World::new();
+        let text = b"Hello\nworld".to_vec();
+        let cue = |epoch: u32, position_ms: i64, text: &[u8]| host_abi::PlxHostCue {
+            size: std::mem::size_of::<host_abi::PlxHostCue>() as u32, epoch, position_ms, duration_ms: 1_500,
+            text: text.as_ptr().cast(), len: text.len() as u32, reserved: 0 };
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_000, &text)), host_abi::E_STATE, "not running");
+        assert_eq!(idle_loop(&w), host_abi::OK);
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_000, &text)), host_abi::E_STALE, "never opened");
+        assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_003, &text)), host_abi::OK);
+        assert_eq!(w.hosted.post_cue(&cue(4, 3_501, b"")), host_abi::OK, "an empty cue ends the shown one");
+        let mut out = Vec::new();
+        assert_eq!(w.hosted.drain_cues(&mut out), 0, "nothing was dropped");
+        assert_eq!(out.iter().map(|c| (c.epoch, c.position_ms, c.duration_ms, c.text.as_str())).collect::<Vec<_>>(),
+            [(4, 2_003, 1_500, "Hello\nworld"), (4, 3_501, 1_500, "")]);
+        let mut events = Vec::new();
+        w.hosted.drain_player(&mut events);
+        assert!(events.is_empty(), "a cue is no player event");
+        w.hosted.stop(Duration::from_secs(30));
+        w.wait_stopped(1);
+        assert_eq!(w.hosted.post_cue(&cue(4, 5_000, &text)), host_abi::E_STATE, "after the stop");
     }
 
     /// **The player's events do not share the input queue**: with the key queue full (a burst of keys the loop
@@ -1316,5 +1378,19 @@ mod tests {
             ["key Some(Right) None Down", "key Some(Right) None Up", "lifecycle DidBackground", "key Some(Back) None Down"]
         );
         plx_base::task::watchdog::arm();
+    }
+
+    /// **The system keyboard's commits and its dismissal reach the application in the order queued among the
+    /// keys**: a commit as `EventSink::text`, the viewer closing the panel as `keyboard_dismissed`.
+    #[test]
+    fn keyboard_commits_and_the_panels_dismissal_reach_the_application_in_order() {
+        let w = World::new();
+        w.hosted.running.store(true, Ordering::SeqCst);
+        for input in [Input::Key(Action::Ok, Edge::Down), Input::Text("wal".into()), Input::Text("l".into()), Input::KeyboardDismissed] {
+            w.hosted.push(input).unwrap();
+        }
+        let mut rec = Rec::default();
+        w.hosted.deliver(&mut rec);
+        assert_eq!(rec.seen, ["key Some(Ok) None Down", "text wal", "text l", "keyboard dismissed"]);
     }
 }

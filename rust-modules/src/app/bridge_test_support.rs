@@ -83,7 +83,7 @@ pub(super) fn pump_navigation(d: &mut Dispatcher<AppHost>, rig: &mut Bridge) -> 
 
 
 /// Fixture-owned physical resources, borrowed by the same CommandRig as the product frame.
-pub(super) struct TestCommandResources {
+pub(crate) struct TestCommandResources {
     player: plx_media::player::machine::Player,
     adapters: crate::app::Adapters,
     menu_play_await: Option<crate::app::input::MenuPlayAwait>,
@@ -96,7 +96,7 @@ pub(super) struct TestCommandResources {
 }
 
 impl TestCommandResources {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: this serial fixture thread owns its no-sink player adapter.
         let mt = unsafe { plx_base::task::MainThread::assume() };
         Self { player: Default::default(), adapters: crate::app::Adapters {
@@ -105,7 +105,10 @@ impl TestCommandResources {
                     repause_at: 0, refresh_hubs: false, ptr: crate::app::input::Pointer::IDLE,
                     rec: crate::app::recorder::Recplay::Off, boot_initial: None }
     }
-    pub(super) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
+    /// The session the commands in this fixture act on.
+    pub(crate) fn session(&self) -> &plx_media::route::PlaybackSession { &self.player.session }
+    pub(crate) fn session_mut(&mut self) -> &mut plx_media::route::PlaybackSession { &mut self.player.session }
+    pub(crate) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
         crate::app::content::CommandResources { player: &mut self.player,
             adapters: &mut self.adapters, menu_play_await: &mut self.menu_play_await, playback: &mut self.playback,
                         repause_at: &mut self.repause_at, refresh_hubs: &mut self.refresh_hubs, ptr: &mut self.ptr,
@@ -471,7 +474,7 @@ impl World {
 
     /// [`Self::detail_page`] for the page `arg` names: the argument is the identity the page mounts
     /// under, `detail` is what the store holds for it.
-    fn detail_page_at(name: &str, arg: AppArg, detail: plx_data::metadata::Detail) -> World {
+    pub(super) fn detail_page_at(name: &str, arg: AppArg, detail: plx_data::metadata::Detail) -> World {
         let mut w = Self::scripted(name);
         super::show_page(&mut w.d, AppArg::Home);
         w.frames(20);
@@ -909,6 +912,30 @@ impl Drop for Pms {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+impl Bridge<'_> {
+    /// Put the Recent channels' seat where the profile publication would: the seat the session holds
+    /// now (published by `TempSession::seated`). The list is the memory door's, read by each step.
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn seat_recent_for_test(&mut self) {
+        self.retained.seat_watch.restored = plx_plex::plex::session::current_snapshot().seat();
+    }
+    /// A live tune of `dvr`/`channel` on `sid`, noted the way the landing notes it.
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn note_recent_for_test(&mut self, sid: plx_plex::plex::ServerId, dvr: &str, channel: &str) {
+        self.note_channel(sid, dvr, channel);
+    }
+    /// The frame's clock as the loop would have published it, so the Live TV step has a clock (the
+    /// instant alone: no zone, which the step does not need).
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn clock_for_test(&mut self, unix_s: i64) {
+        self.publish_clock(Some(crate::app::clock::Reading { unix_ms: unix_s * 1_000, utc_offset_s: None }));
+    }
+    /// The `now` the Live TV store's next step is handed (`BridgeRetained::livetv_input`).
+    pub(crate) fn livetv_now_for_test(&self) -> Option<i64> {
+        self.retained.livetv_input(&self.retained.client_keys).now
     }
 }
 

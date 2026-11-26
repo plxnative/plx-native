@@ -22,7 +22,7 @@
 //!   thread), both bound at run time through `plx_base::dynlib!`; [`surface`], the [`Shell`] and [`Surface`]
 //!   the application drives, with the hand-off between the two threads;
 //! - [`keys`], the remote's key names to the application's `Action`s, and the dump that shows an unbound
-//!   name; [`log_udp`], the event log's tap onto a UDP socket (the emulator has no file access);
+//!   name; [`ime`], the system on-screen keyboard (Ecore IMF, on the host thread); [`log_udp`], the event log's tap onto a UDP socket (the emulator has no file access);
 //! - [`devboot`], the dev-token boot armed from the launch string instead of trigger files;
 //! - [`identity`], the platform name and the locale;
 //! - `player` (the `uri` feature), the Sans-IO URI driver over the host's media player, what the platform certifies
@@ -41,6 +41,7 @@ mod exports;
 mod host_abi;
 mod hosted;
 mod identity;
+mod ime;
 mod keys;
 mod launch;
 mod layout;
@@ -54,7 +55,7 @@ use plx_os::tv::secure::StoreMode;
 use plx_os::tv::{IdentityHooks, Libraries, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
 use plxnative_modules::host::{self, Platform};
 
-/// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The three exports and
+/// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The four exports and
 /// the Ecore handlers reach it; nothing else does.
 pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
 

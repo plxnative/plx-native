@@ -461,7 +461,7 @@ pub(super) fn start_playback_with<R: PlaybackResources>(
     bridge: &mut super::bridge::Bridge,
     resources: &mut R,
 ) -> bool {
-    publish_live_banner(ps, bridge.livetv_view().channels, bridge.wall());
+    publish_live_banner(ps, bridge.livetv_view().channels);
     let entering = resources.prepare_start(ps, pa, resume_ns);
     if entering {
         enter_player(pages, bridge, from, ret);
@@ -502,23 +502,17 @@ fn live_channel<'a>(ps: &plx_media::route::PlaybackSession, channels: &'a [plx_d
     channels.iter().enumerate().find(|(_, ch)| ch.sid == sid && ch.dvr == live.dvr && ch.channel == live.channel)
 }
 
-/// Refresh the existing HUD caption from the current guide, including a programme rollover, and
-/// its time line from the frame's published `wall` time (`Bridge::wall`): the same
-/// `plx_ui::fmt::airing_line` every Live TV surface words an airing with, re-worded when the wall
-/// second changes. No wall time (a replay) is no time line, never a guessed one.
-pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel],
-    wall: Option<plx_ui::fmt::Wall>)
-{
+/// Refresh the existing HUD caption from the current guide, including a programme rollover. The
+/// airing's time line is not kept here: the HUD words it at draw from the channel's raw begin and
+/// end and the frame's wall time (`plx_ui::fmt::airing_line`).
+pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel]) {
     let Some((_, ch)) = live_channel(ps, channels) else {
         plx_media::route::set_live_info(ps, None);
         plx_media::route::set_live_context(ps, "");
         return;
     };
-    let airing_at_s = wall.map_or(0, |wall| wall.unix_s);
-    if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch && info.airing_at_s == airing_at_s) { return; }
-    let airing = wall.and_then(|wall| plx_ui::fmt::airing_line(
-        plx_ui::fmt::Airing::Banner, ch.begins_at, ch.ends_at, wall.unix_s, i64::from(wall.utc_offset_s)));
-    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone(), airing, airing_at_s }));
+    if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch) { return; }
+    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone() }));
     let context = match (ch.vcn.is_empty(), ch.now.is_empty()) {
         (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, &ch.now),
         (false, true) => ch.vcn.clone(),
@@ -527,41 +521,32 @@ pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, ch
     plx_media::route::set_live_context(ps, &context);
 }
 
-fn change_live_channel(
+/// **Tune a live channel the player screen asked for** (its zap's debounce has closed on it): the same retire-and-start
+/// as a channel change has always been, now over a channel named by identity. The screen chose it from the lineup it
+/// read; a channel the lineup has since dropped still tunes, because the server decides what is on.
+fn tune_live_channel(
     player: &mut plx_media::player::machine::Player,
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     repause_at: &mut i64,
-    direction: i32,
+    play: plx_screens::registry::PlayIntent,
     pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
     bridge: &mut super::bridge::Bridge,
 ) {
-    if !matches!(direction, -1 | 1) { return; }
-    let channels = bridge.livetv_view().channels;
-    let Some((index, _)) = live_channel(&player.session, channels) else {
-        // The channel on screen is not one the lineup lists (an unloaded or a redacted store), so
-        // there is no neighbour to walk to. The device log is the only place this is visible.
-        log(&format!("livetv: channel change ignored — direction {direction} on a channel the lineup does not list"));
-        return;
+    // Read before the intent is consumed: the device log is the only place a refusal is visible.
+    let refused = match &play {
+        plx_screens::registry::PlayIntent::Live { dvr, channel, .. } => format!("livetv: channel change refused — the route took no live request for {channel} {dvr}"),
+        _ => return,
     };
-    if channels.len() < 2 {
-        log("livetv: channel change ignored — one channel in the lineup");
-        return;
-    }
-    let next = if direction < 0 { index.checked_sub(1).unwrap_or(channels.len() - 1) } else { (index + 1) % channels.len() };
-    let ch = &channels[next];
-    let play = plx_screens::registry::PlayIntent::Live {
-        sid: ch.sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), title: ch.name.clone(),
-    };
-    // Read while the lineup is still borrowed: the bridge is borrowed mutably further down.
-    let refused = format!("livetv: channel change refused — the route took no live request for {} {}", ch.vcn, ch.dvr);
     stop_player_resources(player, pa, repause_at, pages);
     *repause_at = -1;
     if super::content::request_play_intent(&mut player.session, bridge.metadata_mut(), &play) {
         start_playback(&mut player.session, pa, 0, Origin::Here, HUD_LINGER_MS, None, pages, bridge);
     } else {
         // The retune took no request (a resolve still in flight, or a route that refused it): the
-        // old channel has already been stopped, so this is a failed change, not an ignored one.
+        // old channel has already been stopped, so this is a failed change, not an ignored one. The page is told, so
+        // its zap ends on the refusal and not on a guess from timing.
         log(&refused);
+        super::bridge::send_player_message(pages, plx_screens::registry::AppMsg::LiveTuneRefused);
     }
 }
 
@@ -743,9 +728,12 @@ pub(crate) fn commit_track(
         // (`route::commit_subtitle_and_sidecar`): the sidecar policy lives beside the track memory's.
         TrackCommit::Subtitle { render_ordinal, stream_id, sidecar_key, sidecar_codec, memo } => {
             if ps.attempt_view().backend() == Some(plx_media::player::attempt_view::Backend::Uri) {
-                if render_ordinal < 0 || sidecar_key.is_some()
+                // Off names no native track: a driver that hands its cues to the app carries it (`select_uri_subtitle`:
+                // the app no longer draws them), and only a refusal re-resolves it. Any other driver re-resolves Off.
+                let off = stream_id == 0 && sidecar_key.is_none() && pa.uri_delivers_captions();
+                if (!off && (render_ordinal < 0 || sidecar_key.is_some()
                     || pa.uri_maps_track(ps, plx_playback_contract::TrackKind::Subtitle,
-                        stream_id) == Some(false)
+                        stream_id) == Some(false)))
                     || !pa.commit_subtitle_track(ps, render_ordinal, stream_id,
                         sidecar_key.clone(), sidecar_codec.clone(), memo.clone()) {
                     let mode = if stream_id == 0 { plx_media::route::SubMode::Off }
@@ -924,7 +912,8 @@ pub(crate) fn player_requests(
             // The fall-through a surface cannot perform (`screens::player::overlay`'s module doc):
             // the same toggle the bare transport reaches, with the panel left untouched.
             PlayerReq::Transport(play) => { apply_transport(&mut player.session, pa, play, now, pages); }
-            PlayerReq::Channel(direction) => change_live_channel(player, pa, repause_at, direction, pages, bridge),
+            PlayerReq::Tune { sid, dvr, channel, title } => tune_live_channel(
+                player, pa, repause_at, plx_screens::registry::PlayIntent::Live { sid, dvr, channel, title }, pages, bridge),
             PlayerReq::SeekTo(ns) => apply_seek_to(&mut player.session, pa, ns),
             // …and its twin, which does NOT resume: the scrub bar is how a paused film is moved.
             // The pump keeps the pause across it (see `commit_seek`).
@@ -936,6 +925,9 @@ pub(crate) fn player_requests(
             // The failure-read-out's recovery escape (`ChooseQuality`) and the Tracks->Timing hand-off, which
             // present a panel immediately rather than through the row's deferred press. The
             // tabs row is not an asker: it asks `ToggleSection` (Info and Chapters are sections).
+            PlayerReq::OpenFailedTracks { anchor } => super::bridge::open_failed_tracks(&player.session, anchor, pages),
+            // A digit over a live channel (Live TV PR5): number entry, a player panel that leaves the video live.
+            PlayerReq::OpenChannelEntry { first, playing } => super::bridge::open_channel_entry(first, playing, pages),
             PlayerReq::OpenOverlay(kind) => {
                 if plx_media::route::is_live(&player.session) { continue; }
                 seed_menu_anchor(pages, bridge, kind);
@@ -1030,7 +1022,12 @@ pub(crate) fn exit_player(
     refresh_hubs: &mut bool,
     pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
 ) {
+    // The channel the viewer is leaving, named before the stop retires the request: the page they return to seats it.
+    let left = plx_media::route::live_request(&player.session).map(|(sid, tune)| (sid, tune.dvr.clone(), tune.channel.clone()));
     stop_player_resources(player, pa, repause_at, pages);
+    if let Some((sid, dvr, channel)) = left {
+        super::bridge::seat_live_channel(pages, sid, dvr, channel);
+    }
     // Return to the original container entry, retaining its focus and page memory.
     return_from_player(pages);
     *refresh_hubs = true;
@@ -2257,4 +2254,39 @@ fn perform_skip_prompt(player: &mut plx_media::player::machine::Player,
                 }
             }
 
+}
+
+#[cfg(test)]
+mod uri_subtitle_off_tests {
+    //! **Off on a URI driver that hands its cues to the app** (the Tizen driver). The track menu commits Off as
+    //! `render_ordinal: -1, stream_id: 0`; `commit_track` must hand it to the driver (`select_uri_subtitle`, where Off
+    //! is the app no longer drawing the cues), not to the re-resolve door, which refuses it on a qualifier that
+    //! cannot carry a source track change and leaves the subtitle drawing.
+    use plx_appkit::track_menu::TrackCommit;
+    use plx_playback_contract::uri::NativeTrackIndex;
+    use plx_playback_contract::{Capabilities, Operation, TrackChoice, TrackKind, TrackSelection};
+
+    const CAPTIONING: Capabilities = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false,
+        pause: true, seek: true, audio_track: true, subtitle_track: true, audio_off: false, subtitle_off: true };
+
+    #[test]
+    fn off_on_a_captioning_uri_driver_is_asked_of_the_driver_not_re_resolved() {
+        let _serial = plx_base::testlock::serial();
+        let subtitle = TrackSelection { kind: TrackKind::Subtitle, id: 77 };
+        let (mut ps, mut pa, handle, route) = plx_media::player::adapter::open_fake_uri_for_test(CAPTIONING,
+            vec![NativeTrackIndex { selection: subtitle, index: 0 }]);
+        handle.set_delivers_captions(true);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+
+        assert!(super::commit_track(&mut ps, &mut pa, &mut meta, TrackCommit::Subtitle { render_ordinal: -1,
+            stream_id: 0, sidecar_key: None, sidecar_codec: String::new(),
+            memo: Some(plx_plex::plex::session::prefs::SubtitleMemo::Off) }), "the Off pick is accepted");
+        let offs: Vec<_> = handle.dispatched().into_iter().filter(|(attempt, _, operation)|
+            *attempt == route.contract_id() && *operation == Operation::SelectTrack { kind: TrackKind::Subtitle,
+                choice: TrackChoice::Off }).collect();
+        assert_eq!(offs.len(), 1, "Off reached the driver once: {:?}", handle.dispatched());
+        assert!(!plx_media::route::play_pending(), "nothing was re-resolved");
+        assert_eq!(pa.backend_snapshot().phase, plx_playback_contract::Phase::Active, "the play goes on");
+        plx_media::route::reset_player_control_for_test(&ps);
+    }
 }

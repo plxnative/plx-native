@@ -132,6 +132,12 @@ arguments, and its time is the `dt` it is handed.
      (`push`/`place`), `next_x` for the lazy break. Never write `x += w + GAP` for a new row.
      The same stack top to bottom is `vstack::VStack`/`VFlow` (`Anchor::{Top,Bottom,Centre}`, `Item::before` for a
      gap that belongs to the item below it, `AlertHead` for the alert family's eyebrow/title/path ladder); never `y += h + GAP`.
+   - **Reordering rows**: `table::RowMove` (`Off | Pickable | Lifted | Waiting`, set per row with `Row::moving`) is the ONE
+     move-mode state; the table draws chevrons, lift, shadow and ink from it and glides rows to whatever order a
+     `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
+     Two kinds of row are not a stop (`Row::selectable`; neither key nor pointer lands on them): an `inert` row (`FormSection::inert`) is drawn at .45, and a `RowMove::Waiting` row, one that waits while another is held, keeps its own weight in secondary ink; do not dim it by hand.
+   - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
+     plan_names, names_row}` (`names_row` is the ONE assembly: labels at room, visit slot, right cluster, ⋯ per `MoreOpener`; `joined_name` and `fit_name` are the shared name fit); never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
      `K_SCROLL`, `K_SNAP`; `popover::K_APPEAR`), not a new constant or a hand-made easing.
 
@@ -674,7 +680,14 @@ tried first. None of it is reconstructable from the code without repeating the m
 
 - **A MENU is glass on the frozen ground (DS6); nothing else is glass.** The scope is
   MENUS ONLY (owner decision, wave 2 review): Sort & Filter, the account menu, the item hold menu,
-  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground).
+  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground), and
+  Live TV's number entry (owner, 2026-11-27: glass while on the GUI). A `Ground::Menu` is glass only where a
+  frozen page is under it: the number entry declares `Scrim::over_host(DIM_COMPACT)`, the container owes that
+  dim to a style that holds its host (`Style::Compact`, the What's on page) and none to `Style::PlayerPanel`
+  (host live, the video plane behind), so over the player nothing latches and the panel is the sheet it was,
+  with no dim on the picture; and `popover_glass::draw_shadowed` refuses on any video-plane frame. The ground
+  follows the surface's style, fixed for its life, not the plane's bound bit, which changes under a panel
+  opened mid-tune.
   Every other `panel_ground` user — the alerts, About, Track information, the person bio, the
   Also-available sheet, the decision alert — keeps the pre-DS6 ground, the latched underlay field
   under the frost. The choice is explicit at each call, `widgets::Ground::Menu` or
@@ -724,7 +737,7 @@ tried first. None of it is reconstructable from the code without repeating the m
   `GlassRim::Menu` over the LIVE path (`draw_blur_backdrop`) would turn on a per-frame sharp band
   copy; no menu takes that path any more. A source-grep test (`widgets_glass_budget_tests`) keeps `Glass` and
   `Painter::backdrop_blur` out of every file except the chrome list — no popover and no screen
-  names the blur path — and pins the scope: the menu files name `Ground::Menu`, the sheet files
+  names the blur path — and pins the scope: the menu files (number entry among them) name `Ground::Menu`, the sheet files
   `Ground::Sheet`, and none names the other.
 
 - **Glass over a page stands on the frozen host; the page does not move while a menu is up, except
@@ -1033,4 +1046,4 @@ nothing above draws a single pixel. For anything that moves pixels, capture the 
 cap-band re-centering are invisible until deployed.
 
 Note (library redesign): `cards::draw_label` is re-exported so screens can draw a poster caption
-through the shared label path; Settings > Libraries has two rows (Favorite libraries, Under posters).
+through the shared label path.
