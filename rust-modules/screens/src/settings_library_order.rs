@@ -25,8 +25,9 @@
 //! `presented_sections_named`, the call the store makes over the same table in its server order (the
 //! publication's [`Published::slots`]), so a row no order names lands right after its default
 //! predecessor. A drop that SENDS an order shows what the store publishes for it (the store keeps
-//! no entry of a library on a present server that the order does not name, so the record becomes
-//! exactly the named order), and the echo moves no row. A drop that sends nothing shows the rows that
+//! no entry of a library on a present server that the order does not name: the record names, among
+//! the present servers' libraries, exactly the named order, or is deleted when that is the server
+//! order), and the echo moves no row. A drop that sends nothing shows the rows that
 //! were picked up, as Back does: the record stays as it was, and it may name libraries that are no
 //! favourites, which would place the rows differently.
 //!

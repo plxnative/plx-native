@@ -4447,11 +4447,14 @@ pub type TestLibrary<'a> = (&'a str, i64, &'a str, SecKind, bool);
 /// tests above this layer (which cannot reach the store's state): `libs` in the table's own order
 /// (each distinct machine id is one own server, in the order first seen; an empty machine id is a
 /// server whose id the registry has not learned), `record` the profile's order as `(machine id,
-/// key)` pairs, which may name libraries that are not favourites. The rows, the server-order slots
-/// and the record state are what [`BrowseState`] publishes for them, not a fixture's guess.
+/// key)` pairs, which may name libraries that are not favourites. `then` is an order the SAME store
+/// is then told to hold (`set_library_order_from`, the command a drop sends), so a test sees what
+/// the writer makes of it over the record it already had; empty for none. The rows, the server-order
+/// slots and the record state are what [`BrowseState`] publishes for them, not a fixture's guess.
 #[cfg(any(test, feature = "test-support"))]
-pub fn library_order_publication(libs: &[TestLibrary<'_>], record: &[(&str, i64)]) -> crate::stores::browse::DirectorySnapshot {
-    let session = plx_plex::plex::session::Session {
+pub fn library_order_publication(libs: &[TestLibrary<'_>], record: &[(&str, i64)], then: &[(&str, i64)])
+    -> crate::stores::browse::DirectorySnapshot {
+    let mut session = plx_plex::plex::session::Session {
         client_id: "order-client".into(), account_token: "order-account".into(), ..Default::default()
     };
     let mut state = BrowseState::default();
@@ -4470,8 +4473,17 @@ pub fn library_order_publication(libs: &[TestLibrary<'_>], record: &[(&str, i64)
         let machine = state.sources[section.src].machine_id.as_str();
         section.pinned = libs.iter().any(|lib| lib.0 == machine && lib.1 == section.key && lib.4);
     }
+    // the record is SAVED (on the session, as a profile load finds it), so the order `then` is
+    // written over it the way a drop's command is: a pending write replaces an earlier pending one
+    // whole, and only a saved record is what the writer merges with
+    let user = state.profile_key.clone();
     if !record.is_empty() {
         let named: Vec<(String, i64)> = record.iter().map(|(machine, key)| ((*machine).to_string(), *key)).collect();
+        session.set_order_for(&user, &named);
+        state.load_remembered(&session, &user);
+    }
+    if !then.is_empty() {
+        let named: Vec<(String, i64)> = then.iter().map(|(machine, key)| ((*machine).to_string(), *key)).collect();
         state.set_library_order_from(named, &session);
     }
     let mut snapshot = crate::stores::browse::DirectorySnapshot::default();

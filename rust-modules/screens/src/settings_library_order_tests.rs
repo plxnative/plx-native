@@ -236,7 +236,7 @@ fn a_round_trip_and_a_drop_that_sends_nothing_leave_the_rows_the_store_published
         ("home", 1, "A", SecKind::Movie, true), ("home", 2, "X", SecKind::Show, false),
         ("", 3, "U", SecKind::Show, true), ("nas", 4, "B", SecKind::Movie, true),
     ];
-    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)]);
+    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)], &[]);
     let titles = |page: &LibraryOrderPage| page.state.shown.iter().map(|row| row.title.clone()).collect::<Vec<_>>();
     let mut page = page_of(&s);
     assert_eq!(titles(&page), ["B", "U", "A"], "the store's publication");
@@ -260,15 +260,16 @@ fn a_drop_that_sends_an_order_shows_the_rows_the_real_store_publishes_for_it() {
         ("home", 1, "A", SecKind::Movie, true), ("home", 2, "X", SecKind::Show, false),
         ("", 3, "U", SecKind::Show, true), ("nas", 4, "B", SecKind::Movie, true),
     ];
-    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)]);
+    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)], &[]);
     let mut page = page_of(&s);
     let b = s.view().library_order().iter().find(|row| row.title == "B").map(|row| row.section).expect("B");
     pick_up(&mut page, &s, b);
     press(&mut page, &s, Key::Down);
     let Some(Sent::Set(sent_order)) = sent(&ok_lib(&mut page, &s, b)).pop() else { panic!("the named order changed: it is sent") };
-    // the store writes exactly the named order (X is on a present server and is not named, so it goes)
-    let record: Vec<(&str, i64)> = sent_order.iter().map(|(machine, key)| (machine.as_str(), *key)).collect();
-    let echo = library_order_publication(&libs, &record);
+    // the SAME store, which already holds [B, X, A], is told the order the page sent: X is a present
+    // server's library the order does not name, so the writer drops it
+    let echo = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)],
+        &sent_order.iter().map(|(machine, key)| (machine.as_str(), *key)).collect::<Vec<_>>());
     let published: Vec<String> = echo.view().library_order().iter().map(|row| row.title.clone()).collect();
     let shown: Vec<String> = page.state.shown.iter().map(|row| row.title.clone()).collect();
     assert_eq!(shown, published, "what the page shows after the drop is what the store publishes for it");
