@@ -295,7 +295,7 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T20:08:06Z",
+ "generated": "2026-11-26T20:09:17Z",
  "metrics": [
   {
    "change30_pct": 44.6,
@@ -524,14 +524,14 @@
    "change7_pct": -0.8,
    "d30": 985.5,
    "delta30": 165.5,
-   "delta7": -9.0,
+   "delta7": -9,
    "group": "ci",
    "id": "nightly|ARM build + gates / build + verify",
    "kind": "job",
    "label": "Nightly: ARM build + gates / build + verify",
-   "n_now": 28,
+   "n_now": 29,
    "n_prev": 17,
-   "now": 1151.0,
+   "now": 1151,
    "prev7": 1160,
    "shown": true,
    "state": "flat",
@@ -613,9 +613,9 @@
    "id": "nightly|build Samsung nightly / Tizen package (armv7)",
    "kind": "job",
    "label": "Nightly: build Samsung nightly / Tizen package (armv7)",
-   "n_now": 6,
+   "n_now": 7,
    "n_prev": 0,
-   "now": 316.0,
+   "now": 317,
    "prev7": null,
    "shown": true,
    "state": "new",
@@ -778,14 +778,14 @@
    "change7_pct": 10.7,
    "d30": 20.5,
    "delta30": 10.5,
-   "delta7": 3.0,
+   "delta7": 3,
    "group": "ci",
    "id": "nightly|publish nightly prerelease",
    "kind": "job",
    "label": "Nightly: publish nightly prerelease",
-   "n_now": 28,
+   "n_now": 29,
    "n_prev": 17,
-   "now": 31.0,
+   "now": 31,
    "prev7": 28,
    "shown": false,
    "state": "flat",
@@ -795,18 +795,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 52.8,
-   "change7_pct": 14.6,
+   "change30_pct": 50.0,
+   "change7_pct": 12.5,
    "d30": 18.0,
-   "delta30": 9.5,
-   "delta7": 3.5,
+   "delta30": 9.0,
+   "delta7": 3,
    "group": "ci",
    "id": "nightly|plan today's nightly",
    "kind": "job",
    "label": "Nightly: plan today's nightly",
-   "n_now": 28,
+   "n_now": 29,
    "n_prev": 17,
-   "now": 27.5,
+   "now": 27,
    "prev7": 24,
    "shown": false,
    "state": "flat",
@@ -990,7 +990,7 @@
    "group": "ci",
    "id": "nightly|ARM build + gates / build + verify",
    "label": "Nightly: ARM build + gates / build + verify",
-   "now": 1151.0
+   "now": 1151
   },
   {
    "group": "ci",
@@ -1014,7 +1014,7 @@
    "group": "ci",
    "id": "nightly|build Samsung nightly / Tizen package (armv7)",
    "label": "Nightly: build Samsung nightly / Tizen package (armv7)",
-   "now": 316.0
+   "now": 317
   }
  ],
  "slowest_local": [
