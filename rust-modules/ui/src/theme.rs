@@ -279,11 +279,16 @@ pub mod hero {
 /// Shared ink and geometry for the continuous Home and Detail edge fields and Catalog's
 /// feathered content blocks. Both field types use `gfx::scrim::GroundShade`.
 pub mod shade {
-    /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::EdgeShade`):
+    /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::SideShade`):
     /// nothing on and outside these semi-axes (x along the bottom, y up the left edge), so on the
-    /// left edge the shade starts at y = 120, where the old box ramp started, and never sooner;
-    /// wide, so the iso-lines run in one long arc under the title's right end to the bottom-right.
-    pub const DETAIL_SIDE_REACH: [f32; 2] = [2234.0, 960.0];
+    /// left edge it starts at y = 120, where the box it replaced started, and never sooner; wide,
+    /// so its iso-lines run in one long arc over the title's right end down toward the bottom-right.
+    pub const DETAIL_SIDE_REACH: [f32; 2] = [2200.0, 960.0];
+    /// **How far inside that ellipse the shade rises to full strength**, in px along its shorter
+    /// axis (wider along the longer one): a smoothstep, so the shade never changes faster than
+    /// `1.5 * DETAIL_SIDE_A / DETAIL_SIDE_FEATHER` per px in any direction. Wide on purpose: a
+    /// narrower band reads as an edge, which a tester took for a backlight fault (discussion #1460).
+    pub const DETAIL_SIDE_FEATHER: f32 = 380.0;
     /// Grow the side shade's reach upward as the preview logo travels into the corner.
     pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
@@ -296,15 +301,13 @@ pub mod shade {
     /// Inactive pagination dots still need contrast against the art.
     pub const PAGER_IDLE_A: f32 = 0.50;
 
-    /// Home's side shade, the same ellipse about the bottom-left corner: nothing on and outside
-    /// these semi-axes, so it starts at y = 110 on the left edge (the old box ramp's start) and has
-    /// reached nothing at the right edge above the shelf.
-    pub const HOME_SIDE_REACH: [f32; 2] = [2125.0, 970.0];
-    /// **How far inside the reach ellipse either side shade rises to its full strength**, in px along
-    /// the ellipse's shorter axis (wider along the longer one): a smoothstep, so the shade never
-    /// changes faster than `1.5 * peak / SIDE_FEATHER` per px in any direction. Wide on purpose: a
-    /// narrower band reads as an edge, which a tester took for a backlight fault (discussion #1460).
-    pub const SIDE_FEATHER: f32 = 400.0;
+    /// Home starts feathering inside the copy column and keeps its right edge legible. Home's side
+    /// is still the box (`gfx::scrim::SideShade::Box`): its copy runs to x = 1039 and its right edge
+    /// must be clear above the shelf, and no ellipse with Detail's soft feather and a top-left no
+    /// higher than this box's holds the title's floor in that 880 px.
+    pub const HOME_SIDE_X: [f32; 2] = [850.0, 1650.0];
+    /// Where the edge shade begins and reaches full strength down the screen.
+    pub const HOME_SIDE_Y: [f32; 2] = [110.0, 405.0];
     /// Strength at the left under the logo, metadata and actions.
     pub const HOME_SIDE_A: f32 = 0.59;
     /// Opacity difference over which the side and shelf shades softly join.

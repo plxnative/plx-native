@@ -132,13 +132,12 @@ fn contour_y(shade: &WashScrim, x: f32, level: f32) -> f32 {
 ///   Detail, as the background ramp rises) moves it left, which is the box's vertical side;
 /// - **the top edge drops as it goes right.** Where the shade reaches half its peak must move
 ///   DOWN between the left edge and the copy's right part, not stay one horizontal line.
+///
+/// Detail's only: Home keeps the box (`theme::shade::HOME_SIDE_X` says why).
 #[test]
 fn the_side_shade_falls_off_in_a_curve_not_a_box_corner() {
-    use crate::landing_hero::{detail_shade, home_shade, shelf_fade, SHELF_TOP};
-    let cases = [
-        ("detail", detail_shade(1.0, 1.0, 1.0, 0.0), theme::shade::DETAIL_SIDE_A, (420.0, 540.0)),
-        ("home", home_shade(shelf_fade(SHELF_TOP, 1.0), 1.0), theme::shade::HOME_SIDE_A, (430.0, 640.0)),
-    ];
+    use crate::landing_hero::detail_shade;
+    let cases = [("detail", detail_shade(1.0, 1.0, 1.0, 0.0), theme::shade::DETAIL_SIDE_A, (420.0, 540.0))];
     for (name, shade, peak, (upper, lower)) in cases {
         let edge = |y: f32| {
             let (side, ground) = (shade.alpha(0.0, y), shade.alpha(1919.0, y));
@@ -156,15 +155,11 @@ fn the_side_shade_falls_off_in_a_curve_not_a_box_corner() {
     }
 }
 
-/// Both heroes' side shade on its own, with its peak: the page's field with the bottom ramp (Detail)
-/// or the shelf (Home) at zero, which leaves exactly the side term (`EdgeShade::at` joins a zero
-/// ramp to nothing).
-fn side_shades() -> [(&'static str, WashScrim, f32); 2] {
-    use crate::landing_hero::{detail_shade, home_shade, shelf_fade, SHELF_TOP};
-    [
-        ("detail", detail_shade(1.0, 1.0, 0.0, 0.0), theme::shade::DETAIL_SIDE_A),
-        ("home", home_shade(shelf_fade(SHELF_TOP, 0.0), 1.0), theme::shade::HOME_SIDE_A),
-    ]
+/// Detail's side shade on its own, with its peak: the page's field with the bottom ramp at zero,
+/// which leaves exactly the side term (`EdgeShade::at` joins a zero ramp to nothing). Home keeps the
+/// box (`theme::shade::HOME_SIDE_X` says why), so these two tests grade Detail only.
+fn side_shades() -> [(&'static str, WashScrim, f32); 1] {
+    [("detail", crate::landing_hero::detail_shade(1.0, 1.0, 0.0, 0.0), theme::shade::DETAIL_SIDE_A)]
 }
 
 /// **The side shade has no edge anywhere: it changes slowly in every direction.** Discussion #1460:
@@ -206,7 +201,7 @@ fn the_side_shade_covers_no_more_of_the_top_left_than_the_box_did() {
     let old = |x: f32, y: f32, peak: f32, [x0, x1]: [f32; 2], [y0, y1]: [f32; 2]| {
         peak * (1.0 - smooth((x - x0) / (x1 - x0))) * smooth((y - y0) / (y1 - y0))
     };
-    let boxes = [([600.0, 1700.0], [120.0, 400.0]), ([850.0, 1650.0], [110.0, 405.0])];
+    let boxes = [([600.0, 1700.0], [120.0, 400.0])];
     for ((name, shade, peak), (bx, by)) in side_shades().into_iter().zip(boxes) {
         for y in (0..=250).step_by(2) {
             for x in (0..=600).step_by(4) {
