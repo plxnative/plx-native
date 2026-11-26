@@ -773,8 +773,10 @@ Number entry (Live TV PR5) added the registered surface `AppArg::ChannelEntry` t
 four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
 
 The Guide (Live TV PR6) added the Live TV screen's scope and its board's page and window to the screen's canon, which
-moved `SCREEN_SHAPES_PIN` again (`0x62a1_9fdc_6c66_d317` -> `0x5526_0309_3cae_faf9`), so the two current anchors were
+moved `SCREEN_SHAPES_PIN` again (`0x62a1_9fdc_6c66_d317` -> `0x45d6_2e83_a8a5_8bb1`), so the two current anchors were
 recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape
-`2110622538349771770`). `make check-replay` replays them SAME in Targets and Resolve (906 and 1198 frames, every
+`2880519627823040040`). `make check-replay` replays them SAME in Targets and Resolve (923 and 1206 frames, every
 difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
-has the record.
+has the record. A controlled recording publishes no wall clock, as its replay does not (`clock::hold_no_wall`): since the
+TopBar clock (#1577) a recording taken with the live wall time measured the clock's text into the recording, a string no
+fixture can commit.

@@ -1083,6 +1083,7 @@ impl Recplay {
             super::bootstrap::Preflight::Record => {
                 let dir = plx_base::paths::runtime_dir().join("plxnative-recordings").join("latest");
                 let sink = DirSink::create(&dir).map_err(|_| "cannot create private recording")?;
+                super::clock::hold_no_wall();
                 Self::recording_with_sink(initial, Box::new(sink))
             }
             super::bootstrap::Preflight::Replay { recording, mode, .. } => {

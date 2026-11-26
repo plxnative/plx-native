@@ -1653,6 +1653,13 @@ pub trait LiveTvLike: AppLike<Memory = PageMemory> + Sized {
     fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
         None
     }
+    /// **The Unix second of this frame's clock**, with or without a zone: what a page that only needs WHEN (the
+    /// Guide's board is laid out against the guide's UTC schedule) reads, so a zone the platform cannot read
+    /// costs it its clock words and not its content. By default the wall's second; `AppHost` answers the
+    /// publication's own, which has the instant where the wall has none.
+    fn instant(cx: &Cx<'_, Self>) -> Option<i64> {
+        Self::wall(cx).map(|wall| wall.unix_s())
+    }
 }
 
 /// A host that publishes this frame's playback session (spec §2.3). The player's owned screens

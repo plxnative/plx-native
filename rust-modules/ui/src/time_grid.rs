@@ -1,8 +1,10 @@
 //! **TimeGrid** — every row of a list against one clock: the Live TV Guide's board (the handoff's `SPEC-3`),
 //! drawn at 1:1 on the 1920 x 1080 frame. A row is a channel cell that stands still at the left and the
-//! programmes of that channel laid along a time ruler; the window is [`Axis`], a start and a length in Unix
-//! seconds (the Guide's is 90 minutes from the last half hour), and a programme stands from where it begins (or
-//! where the window does, for one that began before it) to where it ends, less [`CELL_GAP`].
+//! programmes of that channel laid along a time ruler; the window is [`Axis`], a start, a length and a ruler step in
+//! Unix seconds (the Guide's is 90 minutes from a half hour, which moves a half hour at a time), and a programme
+//! stands from where it begins (or where the window does, for one that began before it) to where it ends, less
+//! [`CELL_GAP`]. The now line, its shade and its chip are drawn only while now is in the window, and the chip hides
+//! the ruler label it would cover.
 //!
 //! **Why this is a widget of its own.** Nothing else here lays things out along a TIME axis: a card shelf
 //! ([`cards`](crate::cards)) and the poster grid are lattices of equal cells, and an [`HStack`](crate::hstack)
@@ -32,7 +34,7 @@ use std::ops::Range;
 
 use plx_machine::machine::Measure;
 
-use crate::fmt::{self, Wall};
+use crate::fmt;
 use crate::label::HAlign;
 use crate::screen::Dir;
 use crate::text_view::TextView;
@@ -57,9 +59,6 @@ const RULER_H: f32 = 40.0;
 /// The time axis' left and right edges on the frame: 1392 px for the window.
 const AXIS_X0: f32 = 432.0;
 const AXIS_X1: f32 = 1824.0;
-/// The ruler labels every half hour: the same grain the window starts snap to (`plx_plex::plex::livetv::WINDOW_STEP_SECONDS`;
-/// this crate does not depend on that one, and `Axis::new` takes whatever start it is given).
-const TICK_STEP_S: i64 = 30 * 60;
 /// A ruler tick (2 x 32) and the air between it and its label.
 const TICK_W: f32 = 2.0;
 const TICK_H: f32 = 32.0;
@@ -79,7 +78,7 @@ const LOGO_X: f32 = 128.0;
 const LOGO_W: f32 = 175.0;
 const LOGO_H: f32 = 98.0;
 /// The logo box and its content are the Recent tile's, at 70%.
-const LOGO_SCALE: f32 = 0.7;
+pub const LOGO_SCALE: f32 = 0.7;
 /// A cell narrower than this draws no text: a title that is all ellipsis says nothing.
 const MIN_TEXT_W: f32 = 64.0;
 /// How far apart the elements of two rows are: more than the seconds in any window the board has, so no row runs
@@ -116,17 +115,21 @@ impl Span {
     }
 }
 
-/// **The clock-to-pixel rule**: a window of `seconds` from `start`, laid across [`AXIS_X0`]..[`AXIS_X1`].
+/// **The clock-to-pixel rule**: a window of `seconds` from `start`, laid across [`AXIS_X0`]..[`AXIS_X1`], its ruler
+/// ticking every `step` seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Axis {
     start: i64,
     seconds: i64,
+    step: i64,
 }
 
 impl Axis {
-    /// The window `[start, start + seconds)`. A window of no length is one second long (there is no 0 to divide by).
-    pub const fn new(start: i64, seconds: i64) -> Self {
-        Self { start, seconds: if seconds < 1 { 1 } else { seconds } }
+    /// The window `[start, start + seconds)` with a tick every `step`: the screen's one step (the Guide's
+    /// `WINDOW_STEP_SECONDS`, which is also what the window moves by). A window of no length is one second long
+    /// (there is no 0 to divide by), and so is a step.
+    pub const fn new(start: i64, seconds: i64, step: i64) -> Self {
+        Self { start, seconds: if seconds < 1 { 1 } else { seconds }, step: if step < 1 { 1 } else { step } }
     }
 
     pub const fn start(self) -> i64 {
@@ -160,10 +163,10 @@ impl Axis {
         (w > 0.0).then_some((x, w))
     }
 
-    /// The ruler's ticks: every [`TICK_STEP_S`] from the window's start, while they are inside it.
+    /// The ruler's ticks: every step from the window's start, while they are inside it.
     pub fn ticks(self) -> impl Iterator<Item = i64> {
-        let (start, end) = (self.start, self.end());
-        (0..).map(move |n| start + n * TICK_STEP_S).take_while(move |t| *t < end)
+        let (start, end, step) = (self.start, self.end(), self.step);
+        (0..).map(move |n| start + n * step).take_while(move |t| *t < end)
     }
 }
 
@@ -353,6 +356,27 @@ impl TimeGrid {
         Some(Rect::new(CHANNEL_X, self.row_top(row)?, CHANNEL_W, CELL_H))
     }
 
+    /// **What time a move leaves from**: the cell's own, or, for the one cell of an unscheduled row (which spans the
+    /// whole window and says nothing about where the reader was), the instant `now` (held inside the window: before it,
+    /// the window's first second), so the move lands on what is airing then and not on the longest cell.
+    fn leaving(&self, at: Cell, now: i64) -> Option<Span> {
+        if self.is_unscheduled(at.row) { Some(self.instant(now)) } else { self.span(at) }
+    }
+
+    /// The instant `now` as a span of one second, held inside the window (before it, the window's first second).
+    fn instant(&self, now: i64) -> Span {
+        let window = self.axis.window();
+        let at = now.clamp(window.begins, window.ends - 1);
+        Span::new(at, at + 1)
+    }
+
+    /// **Where a focus lands when the board under it is rebuilt or its window moves**: the cell of `row` that shares the
+    /// most time with the cell the focus stood on (`from`, its span; the same programme where it is still there), or, for
+    /// a focus that stood on an unscheduled row (`None`, which says nothing about where the reader was), the cell on `now`.
+    pub fn land(&self, row: usize, from: Option<Span>, now: i64) -> Option<Cell> {
+        self.nearest(row, from.unwrap_or_else(|| self.instant(now)))
+    }
+
     /// The cell of `row` that shares the most time with `from` (clipped to the window), the earliest on a tie; when
     /// `from` shares none with any of them (a gap in the guide), the nearest in time.
     fn nearest(&self, row: usize, from: Span) -> Option<Cell> {
@@ -368,8 +392,9 @@ impl TimeGrid {
     }
 
     /// **A move**: LEFT and RIGHT to the cell before or after in the row (`None` at its ends); UP and DOWN to the
-    /// cell of the row above or below that shares the most time with this one. `None` at the first and last row.
-    pub fn step(&self, at: Cell, dir: Dir) -> Option<Cell> {
+    /// cell of the row above or below that shares the most time with this one (from an unscheduled row, the one on
+    /// `now`). `None` at the first and last row.
+    pub fn step(&self, at: Cell, dir: Dir, now: i64) -> Option<Cell> {
         match dir {
             Dir::Left => at.index.checked_sub(1).map(|index| Cell { row: at.row, index }),
             Dir::Right => (at.index + 1 < self.cells(at.row)).then_some(Cell { row: at.row, index: at.index + 1 }),
@@ -378,7 +403,7 @@ impl TimeGrid {
                 if row >= self.rows.len() {
                     return None;
                 }
-                self.nearest(row, self.span(at)?)
+                self.nearest(row, self.leaving(at, now)?)
             }
         }
     }
@@ -386,14 +411,14 @@ impl TimeGrid {
     /// **Turn the page by `pages`** (CH+ and CH-): the cell of the same place on the page `pages` over, by the same
     /// overlap rule as UP and DOWN. The slot stands at the last row of a last page that is short. `None` with no such
     /// page (the board does not wrap).
-    pub fn turn(&self, at: Cell, pages: isize) -> Option<Cell> {
+    pub fn turn(&self, at: Cell, pages: isize, now: i64) -> Option<Cell> {
         let page = at.row / PAGE_ROWS;
         let want = page.checked_add_signed(pages)?;
         if want >= self.pages() || want == page {
             return None;
         }
         let row = (want * PAGE_ROWS + at.row % PAGE_ROWS).min(self.rows.len() - 1);
-        self.nearest(row, self.span(at)?)
+        self.nearest(row, self.leaving(at, now)?)
     }
 
     /// **The cell a board is entered on** from outside it (DOWN from the header): the first row of the page showing, at
@@ -411,10 +436,15 @@ impl TimeGrid {
 
     /// **Paint the board** at the frame's own coordinates (translate `p` for a page that scrolls): the indicator and the
     /// ruler, the page's rows (the channel cell, then the programmes, the focused one lit), the shade over the time
-    /// already aired, and the now line and chip. `focus` is the focused cell, if it is the board's.
-    pub fn draw(&self, p: Painter, measure: &dyn Measure, wall: Wall, words: Words<'_>, content: &dyn Content, focus: Option<Cell>) {
-        let offset = i64::from(wall.utc_offset_s);
-        self.draw_ruler(p, measure, offset, words.indicator);
+    /// already aired, and the now line and chip, the last two while `now` is in the window. `offset` is the zone's
+    /// UTC offset: without it (the platform could not say) there are no clock words, no ruler labels, programme
+    /// times or chip, and the board is otherwise the same. `focus` is the focused cell, if it is the board's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(&self, p: Painter, measure: &dyn Measure, now: i64, offset: Option<i32>, words: Words<'_>, content: &dyn Content, focus: Option<Cell>) {
+        let offset = offset.map(i64::from);
+        let in_window = self.axis.window().contains(now);
+        let chip = in_window.then(|| self.chip(measure, offset, now)).flatten();
+        self.draw_ruler(p, measure, offset, words.indicator, chip.as_ref().map(|(rect, _)| *rect));
         let shown = self.shown();
         for row in shown.clone() {
             let Some(at) = self.channel_rect(row) else { continue };
@@ -431,14 +461,24 @@ impl TimeGrid {
             return;
         }
         let rows_bottom = FIRST_ROW_Y + (shown.len() - 1) as f32 * ROW_PITCH + CELL_H;
-        let now_x = self.axis.x_of(wall.unix_s());
-        // time already aired: shaded over every row, from the axis' left edge to the now line
-        p.rrect(Rect::new(AXIS_X0, FIRST_ROW_Y, now_x - AXIS_X0, rows_bottom - FIRST_ROW_Y), 0.0, 0.0, theme::GUIDE_AIRED_SHADE);
+        let now_x = self.axis.x_of(now);
+        // time already aired: shaded over every row, from the axis' left edge to the now line (none while the window is
+        // still ahead of now)
+        if now_x > AXIS_X0 {
+            p.rrect(Rect::new(AXIS_X0, FIRST_ROW_Y, now_x - AXIS_X0, rows_bottom - FIRST_ROW_Y), 0.0, 0.0, theme::GUIDE_AIRED_SHADE);
+        }
+        if !in_window {
+            return;
+        }
         p.rrect(Rect::new(now_x - NOW_W * 0.5, RULER_Y + RULER_H * 0.5, NOW_W, rows_bottom - RULER_Y - RULER_H * 0.5), 0.0, 0.0, theme::GUIDE_NOW);
-        self.draw_chip(p, measure, offset, wall.unix_s(), now_x);
+        if let Some((rect, label)) = chip {
+            self.draw_chip(p, measure, rect, &label);
+        }
     }
 
-    fn draw_ruler(&self, p: Painter, measure: &dyn Measure, offset: i64, indicator: &str) {
+    /// The ruler's line: the indicator, then a tick and its clock label at every step of the window. A label the now chip
+    /// (`chip`) would cover is not drawn (its tick stays): the chip's own words say the time there.
+    fn draw_ruler(&self, p: Painter, measure: &dyn Measure, offset: Option<i64>, indicator: &str, chip: Option<Rect>) {
         let caption = theme::size::CAPTION;
         let top = RULER_Y + (RULER_H - measure.cap_h(caption)) * 0.5;
         TextView::new(indicator, caption, theme::TEXT_TERTIARY).with_measure(measure).max_lines(1)
@@ -446,26 +486,32 @@ impl TimeGrid {
         for t in self.axis.ticks() {
             let x = self.axis.x_of(t);
             p.rrect(Rect::new(x, RULER_Y + (RULER_H - TICK_H) * 0.5, TICK_W, TICK_H), 0.0, 0.0, theme::TAB_PLATE_SELECTED);
-            if let Some(label) = fmt::clock_face(t, offset) {
-                TextView::new(&label, caption, theme::TEXT_SECONDARY).with_measure(measure).max_lines(1)
-                    .draw(p, Rect::new(x + TICK_W + TICK_LABEL_GAP, top, 200.0, 0.0));
+            let Some(label) = offset.and_then(|offset| fmt::clock_face(t, offset)) else { continue };
+            let left = x + TICK_W + TICK_LABEL_GAP;
+            if chip.is_some_and(|chip| left < chip.x + chip.w && left + measure.width_str(&label, caption, false) > chip.x) {
+                continue;
             }
+            TextView::new(&label, caption, theme::TEXT_SECONDARY).with_measure(measure).max_lines(1)
+                .draw(p, Rect::new(left, top, 200.0, 0.0));
         }
     }
 
-    fn draw_chip(&self, p: Painter, measure: &dyn Measure, offset: i64, now: i64, now_x: f32) {
+    /// The now chip's place and words, centred on `now`; `None` without a zone offset (no words to put in it).
+    fn chip(&self, measure: &dyn Measure, offset: Option<i64>, now: i64) -> Option<(Rect, String)> {
+        let label = fmt::clock_face(now, offset?)?;
+        let w = CHIP_W.max(measure.width_str(&label, theme::size::MICRO, true) + 2.0 * CHIP_PAD);
+        Some((Rect::new(self.axis.x_of(now) - w * 0.5, RULER_Y + (RULER_H - CHIP_H) * 0.5, w, CHIP_H), label))
+    }
+
+    fn draw_chip(&self, p: Painter, measure: &dyn Measure, chip: Rect, label: &str) {
         let micro = theme::size::MICRO;
-        let label = fmt::clock_face(now, offset).unwrap_or_default();
-        let text_w = measure.width_str(&label, micro, true);
-        let w = CHIP_W.max(text_w + 2.0 * CHIP_PAD);
-        let chip = Rect::new(now_x - w * 0.5, RULER_Y + (RULER_H - CHIP_H) * 0.5, w, CHIP_H);
         p.rrect(chip, CHIP_H * 0.5, CHIP_H * 0.5, theme::GUIDE_NOW);
-        TextView::new(&label, micro, theme::GUIDE_CELL_FOCUS_INK).bold().h(HAlign::Center).with_measure(measure)
+        TextView::new(label, micro, theme::GUIDE_CELL_FOCUS_INK).bold().h(HAlign::Center).with_measure(measure)
             .draw(p, Rect::new(chip.x, chip.cy() - measure.cap_h(micro) * 0.5, chip.w, 0.0));
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_cell(&self, p: Painter, measure: &dyn Measure, offset: i64, words: Words<'_>, content: &dyn Content,
+    fn draw_cell(&self, p: Painter, measure: &dyn Measure, offset: Option<i64>, words: Words<'_>, content: &dyn Content,
         cell: Cell, rect: Rect, focused: bool) {
         if focused {
             let (blur, off, a, _) = card_shadow_params(rect.h, 1.0, theme::CARD_SHADOW[3]);
@@ -490,22 +536,18 @@ impl TimeGrid {
         };
         TextView::new(content.title(cell.row, cell.index), label, title_ink).bold().with_measure(measure).max_lines(1)
             .draw(p, at(rect.y + PAD_Y + 3.0));
-        if let Some(range) = self.span(cell).and_then(|s| fmt::airing_range(s.begins, s.ends, offset)) {
+        if let Some(range) = offset.and_then(|offset| self.span(cell).and_then(|s| fmt::airing_range(s.begins, s.ends, offset))) {
             let top = rect.y + rect.h - PAD_Y - 3.0 - measure.cap_h(micro);
             TextView::new(&range, micro, time_ink).with_measure(measure).max_lines(1).draw(p, at(top));
         }
     }
 }
 
-/// **A channel logo's place in the channel cell**: the Recent tile's logo layout (the rung's slot, contained and
-/// centred) at 70%, in the 175 x 98 box at [`LOGO_X`] of the cell. `logo` is the contained size
-/// [`hero_logo::fit`](crate::hero_logo::fit) answers for the picture at the channel rung (the tile's own); `None`
-/// before the picture is known (the box alone).
-pub fn logo_rect(cell: Rect, logo: Option<(f32, f32)>) -> Rect {
-    let boxed = Rect::new(cell.x + LOGO_X, cell.y + (cell.h - LOGO_H) * 0.5, LOGO_W, LOGO_H);
-    let Some((w, h)) = logo else { return boxed };
-    let (w, h) = (w * LOGO_SCALE, h * LOGO_SCALE);
-    Rect::new(boxed.cx() - w * 0.5, boxed.cy() - h * 0.5, w, h)
+/// **A channel logo's box in the channel cell**: the Recent tile's 250 x 140 plate at [`LOGO_SCALE`] (175 x 98), at
+/// [`LOGO_X`] of the cell. What stands in it (the logo, or the name) is laid out as the tile lays it out on its plate
+/// and scaled by [`LOGO_SCALE`] about the box's middle.
+pub fn logo_rect(cell: Rect) -> Rect {
+    Rect::new(cell.x + LOGO_X, cell.y + (cell.h - LOGO_H) * 0.5, LOGO_W, LOGO_H)
 }
 
 /// Where the channel number stands in the channel cell: its left edge and the line it is vertically centred on.

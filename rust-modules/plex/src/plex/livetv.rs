@@ -40,8 +40,9 @@ pub struct LiveChannel {
     pub begins_at: i64,
     /// Unix seconds the current airing ends; 0 when nothing is airing. The row is stale after it.
     pub ends_at: i64,
-    /// The programmes after the current one that start inside the guide window ([`window_end`]), earliest
-    /// first. Empty when the guide has none (a guide of current airings only, or a channel with no data).
+    /// The programmes after the current one that begin by the end the last read asked for ([`guide_path`]: at
+    /// least [`window_end`], further while the Guide is scrolled ahead), earliest first. Empty when the guide has
+    /// none (a guide of current airings only, or a channel with no data).
     pub later: Vec<LiveAiring>,
 }
 
@@ -54,9 +55,10 @@ pub struct LiveAiring {
     pub ends_at: i64,
 }
 
-/// The Guide's window in seconds: 90 minutes.
+/// The length of the Guide's window in seconds: 90 minutes. It is the width of the board, not a limit on what
+/// the Guide reaches: the window moves in [`WINDOW_STEP_SECONDS`] steps as far as the guide has data.
 pub const WINDOW_SECONDS: i64 = 90 * 60;
-/// The half hour the window's start snaps to, and the ruler's label step.
+/// The half hour the window's start snaps to, the step it moves by and the ruler's label step.
 pub const WINDOW_STEP_SECONDS: i64 = 30 * 60;
 
 /// **Where the Guide's window starts** for `now`: the last half hour at or before it (Unix seconds, so a
@@ -66,7 +68,7 @@ pub fn window_start(now: i64) -> i64 {
     now - now.rem_euclid(WINDOW_STEP_SECONDS)
 }
 
-/// Where the Guide's window ends for `now`: [`WINDOW_SECONDS`] after [`window_start`].
+/// Where the live Guide window (the first one, [`window_start`]) ends for `now`: [`WINDOW_SECONDS`] after it.
 pub fn window_end(now: i64) -> i64 {
     window_start(now) + WINDOW_SECONDS
 }
@@ -91,13 +93,14 @@ pub fn epg_channels_path(epg: &str) -> String {
     format!("/{epg}/lineups/dvr/channels")
 }
 
-/// `GET /{epg}/grid?beginsAt<=window_end&endsAt>=now` — every airing that has not ended by `now` and starts
-/// by the end of the Guide's window ([`window_end`]): per channel the one on at `now` and the ones that
-/// follow inside the window (measured 2026-11-26, `docs/pms-api.md` §10). The operators are part of the KEY
-/// (`beginsAt%3C=`), which [`QueryBuilder`] passes as given.
-pub fn guide_path(epg: &str, now: i64) -> String {
+/// `GET /{epg}/grid?beginsAt<=until&endsAt>=now` — every airing that has not ended by `now` and starts by
+/// `until` (at least [`window_end`]: the Guide scrolled ahead asks for the far end of the window it shows):
+/// per channel the one on at `now` and the ones that follow up to `until` (measured 2026-11-26,
+/// `docs/pms-api.md` §10). The operators are part of the KEY (`beginsAt%3C=`), which [`QueryBuilder`] passes as
+/// given.
+pub fn guide_path(epg: &str, now: i64, until: i64) -> String {
     QueryBuilder::new(format!("/{epg}/grid"))
-        .int("beginsAt%3C", window_end(now))
+        .int("beginsAt%3C", until.max(window_end(now)))
         .int("endsAt%3E", now)
         .build()
 }
@@ -373,7 +376,7 @@ pub fn vcn_order(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// Refresh only the airings of an existing lineup; no channel is added or lost by a grid read. A grid read
-/// answers every airing from `now` to the window's end ([`guide_path`]): per channel the one on at `now` is
+/// answers every airing from `now` to the end it asked for ([`guide_path`]): per channel the one on at `now` is
 /// the latest-starting one that has begun and not ended (a guide with no times counts as on), and
 /// [`LiveChannel::later`] holds the ones that begin after `now`, earliest first.
 pub fn update_airings(rows: &mut [LiveChannel], airings: &[Metadata], now: i64) {
@@ -424,13 +427,13 @@ impl Client {
         }
     }
 
-    /// `GET /{epg}/grid` bounded to the airings from `now` (Unix seconds) to the end of the Guide's
-    /// window ([`guide_path`]): per channel the one on now and the ones that follow inside the window.
-    pub fn epg_guide(&self, epg: &str, now: i64) -> Option<Vec<Metadata>> {
+    /// `GET /{epg}/grid` bounded to the airings from `now` (Unix seconds) to `until` ([`guide_path`]): per
+    /// channel the one on now and the ones that follow up to `until`.
+    pub fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
         if !is_provider_id(epg) {
             return None;
         }
-        self.get_json(&guide_path(epg, now)).map(|c| c.metadata)
+        self.get_json(&guide_path(epg, now, until)).map(|c| c.metadata)
     }
 
     /// `POST …/tune` — the server starts recording the channel and answers once it streams (4.8 s
@@ -855,8 +858,13 @@ mod tests {
         );
         // 1_792_524_066 falls in the half hour that starts at 1_792_522_800; the window ends 90 minutes after it
         assert_eq!(
-            guide_path("tv.plex.providers.epg.xmltv:7", 1_792_524_066),
+            guide_path("tv.plex.providers.epg.xmltv:7", 1_792_524_066, 0),
             "/tv.plex.providers.epg.xmltv:7/grid?beginsAt%3C=1792528200&endsAt%3E=1792524066"
+        );
+        // scrolled ahead: the far end of the window shown, an hour on
+        assert_eq!(
+            guide_path("tv.plex.providers.epg.xmltv:7", 1_792_524_066, 1_792_528_200 + 3_600),
+            "/tv.plex.providers.epg.xmltv:7/grid?beginsAt%3C=1792531800&endsAt%3E=1792524066"
         );
     }
 

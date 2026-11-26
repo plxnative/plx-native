@@ -10,8 +10,10 @@ impl Measure for Fixed {
 
 /// A window on a half hour: 90 minutes from 20:30 UTC, so a minute is `1392 / 90` px.
 const START: i64 = 1_792_524_600 - 1_792_524_600 % 1_800;
-const AXIS: Axis = Axis::new(START, 5_400);
+const AXIS: Axis = Axis::new(START, 5_400, 1_800);
 const MIN: i64 = 60;
+/// Ten minutes into the window: what the moves of a board with nothing unscheduled in the way do not care about.
+const NOW: i64 = START + 10 * MIN;
 
 fn span(from_min: i64, to_min: i64) -> Span {
     Span::new(START + from_min * MIN, START + to_min * MIN)
@@ -172,11 +174,11 @@ fn the_page_follows_the_focus_and_only_moves_when_the_row_is_on_another_page() {
 #[test]
 fn left_and_right_walk_a_row_and_stop_at_its_ends() {
     let g = board();
-    assert_eq!(g.step(cell(0, 0), Dir::Right), Some(cell(0, 1)));
-    assert_eq!(g.step(cell(0, 1), Dir::Left), Some(cell(0, 0)));
-    assert_eq!(g.step(cell(0, 0), Dir::Left), None);
-    assert_eq!(g.step(cell(0, 1), Dir::Right), None);
-    assert_eq!(g.step(cell(1, 0), Dir::Right), None, "one programme: no next");
+    assert_eq!(g.step(cell(0, 0), Dir::Right, NOW), Some(cell(0, 1)));
+    assert_eq!(g.step(cell(0, 1), Dir::Left, NOW), Some(cell(0, 0)));
+    assert_eq!(g.step(cell(0, 0), Dir::Left, NOW), None);
+    assert_eq!(g.step(cell(0, 1), Dir::Right, NOW), None);
+    assert_eq!(g.step(cell(1, 0), Dir::Right, NOW), None, "one programme: no next");
 }
 
 #[test]
@@ -184,17 +186,17 @@ fn up_and_down_land_on_the_cell_sharing_the_most_time() {
     let g = board();
     // row 0: [0,45) [45,90). Row 3: [0,30) [30,90).
     // from row 0's first cell (0-45): overlap with row 3's first is 30, with its second 15
-    assert_eq!(g.step(cell(0, 0), Dir::Down), Some(cell(1, 0)), "row 1 has one programme");
-    assert_eq!(g.step(cell(2, 0), Dir::Down), Some(cell(3, 1)), "the unscheduled row spans the window; the longer cell wins");
-    assert_eq!(g.step(cell(3, 0), Dir::Up), Some(cell(2, 0)), "into the unscheduled row");
+    assert_eq!(g.step(cell(0, 0), Dir::Down, NOW), Some(cell(1, 0)), "row 1 has one programme");
+    assert_eq!(g.step(cell(2, 0), Dir::Down, NOW), Some(cell(3, 0)), "out of the unscheduled row: what is on now, not the longest cell");
+    assert_eq!(g.step(cell(3, 0), Dir::Up, NOW), Some(cell(2, 0)), "into the unscheduled row");
     // from row 3's first cell [0,30): row 4's overlaps are 30 and 0, so its first
-    assert_eq!(g.step(cell(3, 0), Dir::Down), Some(cell(4, 0)));
+    assert_eq!(g.step(cell(3, 0), Dir::Down, NOW), Some(cell(4, 0)));
     // from row 3's second cell [30,90): row 4's overlaps are 0 and 60, so its second
-    assert_eq!(g.step(cell(3, 1), Dir::Down), Some(cell(4, 1)));
+    assert_eq!(g.step(cell(3, 1), Dir::Down, NOW), Some(cell(4, 1)));
     // from row 0's second cell [45,90) into row 1: the only one
-    assert_eq!(g.step(cell(0, 1), Dir::Down), Some(cell(1, 0)));
+    assert_eq!(g.step(cell(0, 1), Dir::Down, NOW), Some(cell(1, 0)));
     // from row 1's whole-window cell down to row 2 (nothing): its one
-    assert_eq!(g.step(cell(1, 0), Dir::Down), Some(cell(2, 0)));
+    assert_eq!(g.step(cell(1, 0), Dir::Down, NOW), Some(cell(2, 0)));
 }
 
 #[test]
@@ -202,14 +204,14 @@ fn up_and_down_use_the_overlap_inside_the_window_for_a_cell_that_began_before_it
     // row 1's programme began 30 minutes before the window: only its 90 minutes inside count, so against
     // [0,45) / [45,90) of row 0 the first (45 shared) wins on a tie by the earliest
     let g = board();
-    assert_eq!(g.step(cell(1, 0), Dir::Up), Some(cell(0, 0)));
+    assert_eq!(g.step(cell(1, 0), Dir::Up, NOW), Some(cell(0, 0)));
 }
 
 #[test]
 fn up_from_the_first_row_and_down_from_the_last_have_nowhere_to_go() {
     let g = board();
-    assert_eq!(g.step(cell(0, 0), Dir::Up), None);
-    assert_eq!(g.step(cell(7, 0), Dir::Down), None);
+    assert_eq!(g.step(cell(0, 0), Dir::Up, NOW), None);
+    assert_eq!(g.step(cell(7, 0), Dir::Down, NOW), None);
 }
 
 #[test]
@@ -218,28 +220,28 @@ fn a_gap_in_the_guide_goes_to_the_nearest_cell_in_time() {
     let g = TimeGrid::new(AXIS, vec![vec![span(0, 30), span(60, 90)], vec![span(40, 50)]], 0);
     // [40,50) shares nothing with either, and is nearer [60,90) (10 minutes) than [0,30) (10 minutes): the
     // earlier wins the tie
-    assert_eq!(g.step(cell(1, 0), Dir::Up), Some(cell(0, 0)));
+    assert_eq!(g.step(cell(1, 0), Dir::Up, NOW), Some(cell(0, 0)));
     let g = TimeGrid::new(AXIS, vec![vec![span(0, 30), span(60, 90)], vec![span(45, 55)]], 0);
-    assert_eq!(g.step(cell(1, 0), Dir::Up), Some(cell(0, 1)), "5 minutes from the second, 15 from the first");
+    assert_eq!(g.step(cell(1, 0), Dir::Up, NOW), Some(cell(0, 1)), "5 minutes from the second, 15 from the first");
 }
 
 #[test]
 fn the_page_turns_by_six_keeping_the_slot() {
     let g = board();
     // 3 + 6 = 9 is past row 7: the slot stands at the last row of the short page
-    assert_eq!(g.turn(cell(3, 1), 1).map(|c| c.row), Some(7));
+    assert_eq!(g.turn(cell(3, 1), 1, NOW).map(|c| c.row), Some(7));
     // row 0 + 6 = 6
-    assert_eq!(g.turn(cell(0, 0), 1).map(|c| c.row), Some(6));
+    assert_eq!(g.turn(cell(0, 0), 1, NOW).map(|c| c.row), Some(6));
     // and back, to the same slot
-    assert_eq!(g.turn(cell(6, 0), -1).map(|c| c.row), Some(0));
-    assert_eq!(g.turn(cell(7, 0), -1).map(|c| c.row), Some(1));
+    assert_eq!(g.turn(cell(6, 0), -1, NOW).map(|c| c.row), Some(0));
+    assert_eq!(g.turn(cell(7, 0), -1, NOW).map(|c| c.row), Some(1));
 }
 
 #[test]
 fn the_page_does_not_wrap() {
     let g = board();
-    assert_eq!(g.turn(cell(0, 0), -1), None, "no page before the first");
-    assert_eq!(g.turn(cell(6, 0), 1), None, "no page after the last");
+    assert_eq!(g.turn(cell(0, 0), -1, NOW), None, "no page before the first");
+    assert_eq!(g.turn(cell(6, 0), 1, NOW), None, "no page after the last");
 }
 
 #[test]
@@ -247,8 +249,8 @@ fn a_page_turn_keeps_the_time_it_was_on() {
     // [30,90) of row 3 turns to the cell of row 9's shared time: the second of two
     let rows: Vec<Vec<Span>> = (0..12).map(|_| vec![span(0, 30), span(30, 90)]).collect();
     let g = TimeGrid::new(AXIS, rows, 0);
-    assert_eq!(g.turn(cell(3, 1), 1), Some(cell(9, 1)));
-    assert_eq!(g.turn(cell(3, 0), 1), Some(cell(9, 0)));
+    assert_eq!(g.turn(cell(3, 1), 1, NOW), Some(cell(9, 1)));
+    assert_eq!(g.turn(cell(3, 0), 1, NOW), Some(cell(9, 0)));
 }
 
 #[test]
@@ -293,9 +295,13 @@ impl Content for Faces {
 const WORDS: Words<'static> = Words { indicator: "Channels 1\u{2013}6 of 8", unscheduled: "No guide data" };
 
 fn paint(g: &TimeGrid, now: i64, focus: Option<Cell>) -> (Vec<crate::draw_census::Run>, Vec<(u64, Rect, f32)>) {
-    let wall = Wall::from_secs(now, 0);
-    let runs = crate::draw_census::capture_runs(|| g.draw(Painter::recording(), &Fixed, wall, WORDS, &Faces, focus));
-    let inks = crate::draw_census::capture_inks(|| g.draw(Painter::recording(), &Fixed, wall, WORDS, &Faces, focus));
+    paint_in(g, now, Some(0), focus)
+}
+
+/// [`paint`] in a zone: `None` is a frame whose zone could not be read.
+fn paint_in(g: &TimeGrid, now: i64, offset: Option<i32>, focus: Option<Cell>) -> (Vec<crate::draw_census::Run>, Vec<(u64, Rect, f32)>) {
+    let runs = crate::draw_census::capture_runs(|| g.draw(Painter::recording(), &Fixed, now, offset, WORDS, &Faces, focus));
+    let inks = crate::draw_census::capture_inks(|| g.draw(Painter::recording(), &Fixed, now, offset, WORDS, &Faces, focus));
     (runs, inks)
 }
 
@@ -395,12 +401,98 @@ fn the_page_not_showing_is_not_drawn() {
 #[test]
 fn the_logo_is_the_recent_tiles_at_seventy_percent_in_a_175_by_98_box() {
     let cell = Rect::new(96.0, 292.0, 320.0, 100.0);
-    let boxed = logo_rect(cell, None);
+    let boxed = logo_rect(cell);
     assert!(near(boxed.x, 96.0 + 128.0) && near(boxed.w, 175.0) && near(boxed.h, 98.0));
     assert!(near(boxed.cy(), cell.cy()));
-    let logo = logo_rect(cell, Some((250.0, 140.0)));
-    assert!(near(logo.w, 175.0) && near(logo.h, 98.0), "the tile's 250 x 140 at 70%");
-    assert!(near(logo.cx(), boxed.cx()) && near(logo.cy(), boxed.cy()));
+    assert!(near(boxed.w, 250.0 * LOGO_SCALE) && near(boxed.h, 140.0 * LOGO_SCALE), "the tile's 250 x 140 at 70%");
     let (x, y) = number_at(cell);
     assert!(near(x, 96.0 + 20.0) && near(y, cell.cy()));
+}
+
+#[test]
+fn leaving_an_unscheduled_row_lands_on_what_is_on_now_whichever_way_the_move_goes() {
+    // row 0 nothing, rows 1 and 2 two programmes split at minute 30, with the longer one second
+    let g = TimeGrid::new(AXIS, vec![vec![], vec![span(0, 30), span(30, 90)], vec![span(0, 30), span(30, 90)]], 0);
+    assert_eq!(g.step(cell(0, 0), Dir::Down, START + 10 * MIN), Some(cell(1, 0)), "on now: the first");
+    assert_eq!(g.step(cell(0, 0), Dir::Down, START + 40 * MIN), Some(cell(1, 1)), "on now: the second");
+    assert_eq!(g.step(cell(0, 0), Dir::Down, START + 30 * MIN), Some(cell(1, 1)), "a programme begins at its first second");
+    assert_eq!(g.step(cell(0, 0), Dir::Down, START + 29 * MIN + 59), Some(cell(1, 0)));
+    let g = TimeGrid::new(AXIS, vec![vec![span(0, 30), span(30, 90)], vec![]], 0);
+    assert_eq!(g.step(cell(1, 0), Dir::Up, START + 10 * MIN), Some(cell(0, 0)), "Up too");
+    // a window still ahead of now (the Guide scrolled): the first programme of the window
+    assert_eq!(g.step(cell(1, 0), Dir::Up, START - 20 * MIN), Some(cell(0, 0)));
+    // after it (nothing else is possible for a live window, but the rule holds): the last
+    assert_eq!(g.step(cell(1, 0), Dir::Up, START + 200 * MIN), Some(cell(0, 1)));
+}
+
+#[test]
+fn a_page_turn_out_of_an_unscheduled_row_lands_on_what_is_on_now() {
+    let mut rows: Vec<Vec<Span>> = vec![vec![]];
+    rows.extend((1..12).map(|_| vec![span(0, 30), span(30, 90)]));
+    let g = TimeGrid::new(AXIS, rows, 0);
+    assert_eq!(g.turn(cell(0, 0), 1, START + 10 * MIN), Some(cell(6, 0)));
+    assert_eq!(g.turn(cell(0, 0), 1, START + 50 * MIN), Some(cell(6, 1)));
+}
+
+#[test]
+fn the_ruler_follows_a_window_that_moved() {
+    // the window one step on: its ticks are the later half hours
+    let g = TimeGrid::new(Axis::new(START + 1_800, 5_400, 1_800), vec![vec![span(30, 90)]], 0);
+    let (runs, _) = paint(&g, START + 10 * MIN, None);
+    for t in [START + 1_800, START + 3_600, START + 5_400] {
+        let face = drawn(fmt::clock_face(t, 0).unwrap());
+        assert!(runs.iter().any(|run| run.text == face), "{face} on the ruler");
+    }
+    let first = drawn(fmt::clock_face(START, 0).unwrap());
+    assert!(!runs.iter().any(|run| run.text == first), "the half hour before the window is not on it");
+}
+
+#[test]
+fn the_now_line_shade_and_chip_are_drawn_only_while_now_is_in_the_window() {
+    // a window ahead of now: no line, no shade, no chip
+    let g = TimeGrid::new(Axis::new(START + 1_800, 5_400, 1_800), vec![vec![span(30, 90)]], 0);
+    let now = START + 10 * MIN;
+    let (runs, inks) = paint(&g, now, None);
+    assert!(!inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.w, 2.0) && near(*a, 0.95) && r.h > 100.0), "no now line");
+    assert!(!inks.iter().any(|(tag, _, a)| *tag == 2 && near(*a, 0.22)), "no shade");
+    assert!(!inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.h, 36.0) && near(*a, 0.95)), "no chip");
+    assert!(!runs.iter().any(|run| run.bold && run.text == drawn(fmt::clock_face(now, 0).unwrap())), "no chip words");
+    // the live window has all three
+    let (_, live) = paint(&board(), now, None);
+    assert!(live.iter().any(|(tag, _, a)| *tag == 2 && near(*a, 0.22)));
+    assert!(live.iter().any(|(tag, r, a)| *tag == 2 && near(r.h, 36.0) && near(*a, 0.95)));
+}
+
+#[test]
+fn a_chip_over_a_ruler_label_hides_that_label_only() {
+    let g = board();
+    // 29 minutes in: the chip (88 wide, centred on 432 + 29 min) runs over the 30-minute tick's label
+    let (runs, _) = paint(&g, START + 29 * MIN, None);
+    let label = |t: i64| drawn(fmt::clock_face(t, 0).unwrap());
+    assert!(!runs.iter().any(|run| run.text == label(START + 1_800) && !run.bold), "the covered label is not drawn");
+    assert!(runs.iter().any(|run| run.text == label(START + 3_600)), "the others are");
+    // and the tick itself stays: two px wide, on the ruler
+    let (_, inks) = paint(&g, START + 29 * MIN, None);
+    let x = AXIS.x_of(START + 1_800);
+    assert!(inks.iter().any(|(tag, r, _)| *tag == 2 && near(r.w, 2.0) && near(r.x, x) && near(r.h, 32.0)));
+    // ten minutes in the chip covers none
+    let (runs, _) = paint(&g, START + 10 * MIN, None);
+    for t in [START, START + 1_800, START + 3_600] {
+        assert!(runs.iter().any(|run| run.text == label(t)), "{} on the ruler", label(t));
+    }
+}
+
+#[test]
+fn a_frame_with_no_zone_offset_has_no_clock_words() {
+    let g = board();
+    let (runs, inks) = paint_in(&g, START + 10 * MIN, None, None);
+    let face = |t: i64| drawn(fmt::clock_face(t, 0).unwrap());
+    for t in [START, START + 1_800, START + 3_600, START + 10 * MIN] {
+        assert!(!runs.iter().any(|run| run.text == face(t)), "{} needs a zone", face(t));
+    }
+    assert!(!runs.iter().any(|run| run.text == drawn(fmt::airing_range(START, START + 45 * MIN, 0).unwrap())), "no programme times");
+    assert!(runs.iter().any(|run| run.text == "News"), "the programmes' titles are there");
+    assert!(runs.iter().any(|run| run.text == WORDS.indicator));
+    assert!(inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.w, 2.0) && near(*a, 0.95) && r.h > 400.0), "the now line is the instant's");
+    assert!(!inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.h, 36.0) && near(*a, 0.95)), "and there is no chip");
 }

@@ -49,6 +49,8 @@ impl Host for TestHost {
 thread_local! {
     /// The wall time the test host publishes (`None`: the frame has no clock).
     static WALL: std::cell::Cell<Option<Wall>> = const { std::cell::Cell::new(None) };
+    /// The clock instant the host publishes when it has no wall: a frame whose zone offset could not be read.
+    static INSTANT: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 impl LiveTvLike for TestHost {
@@ -57,6 +59,9 @@ impl LiveTvLike for TestHost {
     }
     fn wall(_cx: &Cx<'_, Self>) -> Option<Wall> {
         WALL.with(std::cell::Cell::get)
+    }
+    fn instant(_cx: &Cx<'_, Self>) -> Option<i64> {
+        WALL.with(std::cell::Cell::get).map(|wall| wall.unix_s()).or_else(|| INSTANT.with(std::cell::Cell::get))
     }
 }
 
@@ -476,7 +481,7 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
         let view = with_recent(&store, &recent);
         step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
         let case = format!("programmes {programmes}, recent {:?}", recent.iter().map(|c| c.vcn.as_str()).collect::<Vec<_>>());
-        assert_eq!((screen.page.mode, screen.page.mode.rows()), (mode, rows), "{case}");
+        assert_eq!((&screen.page.mode, screen.page.mode.rows()), (&mode, rows), "{case}");
         let context = cx(view, None);
         let mut tiles = std::collections::BTreeSet::new();
         for k in [Sec::Recent, Sec::Now, Sec::Channels] {
@@ -801,9 +806,22 @@ fn guide_lineup() -> Vec<Channel> {
 
 /// A screen on the Guide over [`guide_lineup`], at [`GUIDE_NOW`].
 fn guide() -> (LiveTvStore, LiveTvScreen) {
+    guide_over(guide_lineup())
+}
+
+/// [`guide_lineup`] with a guide that goes on for two hours more: 101's programmes run to 180 minutes, so the window can
+/// scroll three half hours before the data ends.
+fn long_guide_lineup() -> Vec<Channel> {
+    let mut lineup = guide_lineup();
+    lineup[0].later.push(later("Epilogue", 120, 180));
+    lineup
+}
+
+/// A screen on the Guide over `lineup`, at [`GUIDE_NOW`].
+fn guide_over(lineup: Vec<Channel>) -> (LiveTvStore, LiveTvScreen) {
     WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
     let mut store = LiveTvStore::default();
-    store.install_for_test(guide_lineup());
+    store.install_for_test(lineup);
     let mut screen = LiveTvScreen::new(ENTRY);
     step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
     choose(&mut screen, store.view(), GUIDE_ELEM);
@@ -821,7 +839,7 @@ fn choose(screen: &mut LiveTvScreen, view: LiveTvView<'_>, elem: u32) -> Vec<Sta
 }
 
 fn board(screen: &LiveTvScreen) -> &Board {
-    screen.page.board.as_ref().expect("the Guide's board")
+    screen.page.board().expect("the Guide's board")
 }
 
 /// The element of the Guide's cell `row`, `index`.
@@ -856,13 +874,13 @@ fn the_scope_row_switches_between_whats_on_and_the_guide() {
     let _language = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
     WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
     let (store, mut screen) = seeded();
-    assert_eq!((screen.page.scope, screen.page.mode), (Scope::WhatsOn, Mode::NowChannels));
+    assert_eq!((screen.page.scope, &screen.page.mode), (Scope::WhatsOn, &Mode::NowChannels));
     let context = cx(store.view(), None);
     assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(WHATS_ON_ELEM));
-    assert!(screen.page.board.is_none(), "What's on lays out no board");
+    assert!(screen.page.board().is_none(), "What's on lays out no board");
 
     choose(&mut screen, store.view(), GUIDE_ELEM);
-    assert_eq!((screen.page.scope, screen.page.mode), (Scope::Guide, Mode::Guide));
+    assert!(screen.page.scope == Scope::Guide && matches!(screen.page.mode, Mode::Guide(_)));
     assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(GUIDE_ELEM), "the Guide wears the selected plate");
     assert_eq!(screen.page.regions().content, &[GUIDE_GROUP]);
     let mut sections = Vec::new();
@@ -875,8 +893,8 @@ fn the_scope_row_switches_between_whats_on_and_the_guide() {
     }
 
     choose(&mut screen, store.view(), WHATS_ON_ELEM);
-    assert_eq!((screen.page.scope, screen.page.mode), (Scope::WhatsOn, Mode::NowChannels));
-    assert!(screen.page.board.is_none());
+    assert_eq!((screen.page.scope, &screen.page.mode), (Scope::WhatsOn, &Mode::NowChannels));
+    assert!(screen.page.board().is_none());
     assert_eq!(screen.page.header_row(context.measure).selected_stop(), Some(WHATS_ON_ELEM));
 }
 
@@ -909,17 +927,35 @@ fn the_guide_is_a_90_minute_window_from_the_last_half_hour_six_channels_a_page()
     assert!(near(axis.x_of(GUIDE_NOW), 432.0 + 10.0 * 1_392.0 / 90.0));
 }
 
-/// Without a wall time the Guide has no window to start from: it is the loading read-out, not a board at the wrong time.
+/// Without a clock the Guide has no window to start from: it is the loading read-out, not a board at the wrong time.
 #[test]
 fn a_guide_with_no_clock_is_loading_not_a_board() {
     let (store, mut screen) = guide();
     WALL.with(|w| w.set(None));
     step(&mut screen, store.view(), Some(GUIDE_ELEM), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
-    assert_eq!((screen.page.scope, screen.page.mode), (Scope::Guide, Mode::Loading));
-    assert!(screen.page.board.is_none());
+    assert_eq!((screen.page.scope, &screen.page.mode), (Scope::Guide, &Mode::Loading));
+    assert!(screen.page.board().is_none());
     WALL.with(|w| w.set(Some(Wall::from_secs(GUIDE_NOW, 0))));
     step(&mut screen, store.view(), Some(GUIDE_ELEM), &ScreenEvent::Tick(Tick { ms: 32, dt_us: 16_667 }));
-    assert_eq!(screen.page.mode, Mode::Guide, "the clock came back");
+    assert!(matches!(screen.page.mode, Mode::Guide(_)), "the clock came back");
+}
+
+/// **A zone the platform cannot read costs the Guide its clock words, not its programmes**: the frame has the instant and
+/// no offset, so the board is laid out against the instant (no permanent "Loading channels"), the airing is on, and the
+/// frame's clock stamp says there is no zone.
+#[test]
+fn a_guide_with_the_instant_but_no_zone_is_laid_out_and_tunes() {
+    let (store, mut screen) = guide();
+    let with_zone = screen.page.clock_stamp(store.view(), Some(GUIDE_NOW), Some(Wall::from_secs(GUIDE_NOW, 0)));
+    WALL.with(|w| w.set(None));
+    INSTANT.with(|i| i.set(Some(GUIDE_NOW)));
+    step(&mut screen, store.view(), Some(GUIDE_ELEM), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    assert!(matches!(screen.page.mode, Mode::Guide(_)), "the board stands on the instant alone");
+    assert_eq!(board(&screen).grid.axis().start(), NOW);
+    assert_ne!(screen.page.clock_stamp(store.view(), Some(GUIDE_NOW), None), with_zone, "the words come and go with the zone");
+    let tune = PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: "C101".into(), title: "Station 101".into() };
+    assert_eq!(asked_plays(&press_cell(&mut screen, store.view(), 0, 0)), [tune], "what is airing tunes");
+    INSTANT.with(|i| i.set(None));
 }
 
 /// **A cell stands from where its programme begins (or the window does) to where it ends, less the 8 px gap,
@@ -969,7 +1005,7 @@ fn up_and_down_follow_the_time_and_left_and_right_walk_the_row() {
     assert_eq!(move_from(&screen, view, e(0, 1), Dir::Down), Some(e(1, 0)));
     // from 102's cell to 103's whole-window cell and on to 104's first half (0-30 shares 30 of the 60)
     assert_eq!(move_from(&screen, view, e(1, 0), Dir::Down), Some(e(2, 0)));
-    assert_eq!(move_from(&screen, view, e(2, 0), Dir::Down), Some(e(3, 1)), "the whole window shares most with the longer second half");
+    assert_eq!(move_from(&screen, view, e(2, 0), Dir::Down), Some(e(3, 0)), "out of the row with no guide: what is on now (20:40), not the longer cell");
     assert_eq!(move_from(&screen, view, e(3, 0), Dir::Down), Some(e(4, 0)));
     assert_eq!(move_from(&screen, view, e(3, 1), Dir::Up), Some(e(2, 0)));
     assert_eq!(move_from(&screen, view, e(0, 0), Dir::Right), Some(e(0, 1)));
@@ -1181,4 +1217,225 @@ fn the_canon_carries_the_scope_the_page_and_the_window() {
     assert_ne!(canon(&screen), on_page, "the window rolled to the next half hour");
     choose(&mut screen, store.view(), WHATS_ON_ELEM);
     assert_ne!(canon(&screen), on_page, "the scope");
+}
+
+// ---- the Guide's window scrolls by half hours ----------------------------------------------------------------------
+
+fn clock(now: i64) {
+    WALL.with(|w| w.set(Some(Wall::from_secs(now, 0))));
+}
+
+/// LEFT or RIGHT that the board's edge hands to the screen (`EdgeRule::Screen`).
+fn edge_key(key: Key) -> ScreenEvent<TestHost> {
+    ScreenEvent::Input(InputEvent { at: Tick::default(), source: plx_machine::machine::Source::Script,
+        kind: InputKind::Key { key, sym: 0, wcode: 0, edge: Edge::Down, at_edge: true } })
+}
+
+/// The reaches a step sent to the store, in order.
+fn reaches(out: &[Stamped<TestHost>]) -> Vec<i64> {
+    out.iter().filter_map(|s| match &s.fx {
+        Fx::App(AppFx::Store(StoreId::LiveTv, StoreCmd::LiveTv(LiveTvCmd::Reach(until)))) => Some(*until),
+        _ => None,
+    }).collect()
+}
+
+fn window_of(screen: &LiveTvScreen) -> Window {
+    board(screen).window
+}
+
+/// **The board's edge hands LEFT and RIGHT to the screen** (so a press past a row's end moves the window), and UP and DOWN
+/// stay the engine's.
+#[test]
+fn the_boards_left_and_right_edges_are_the_screens() {
+    let (store, screen) = guide();
+    let context = cx(store.view(), None);
+    let mut groups = Vec::new();
+    Focusable::<TestHost>::groups(&screen, &context, &mut groups);
+    let spec = groups.iter().find(|g| g.id == GUIDE_GROUP).expect("the Guide's group");
+    assert_eq!(spec.edge, [EdgeRule::Stop, EdgeRule::Stop, EdgeRule::Screen, EdgeRule::Screen]);
+}
+
+/// **RIGHT past a row's last cell moves the whole window half an hour later**: the window is held ahead, the ruler follows it,
+/// the now line leaves it, the focus lands on the cell of its row that shares the most time with the one it left, and the
+/// store is asked to read to the new window's end and a step beyond.
+#[test]
+fn right_past_the_last_cell_scrolls_the_window_half_an_hour_later() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    assert_eq!(window_of(&screen), Window::Live);
+    // 101's last cell, "Late Film" 60-120, which the live window cuts at 90
+    let (handled, out) = step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    assert_eq!(handled, Handled::Yes);
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 30 * MIN));
+    let axis = board(&screen).grid.axis();
+    assert_eq!((axis.start(), axis.end()), (NOW + 30 * MIN, NOW + 120 * MIN));
+    assert_eq!(axis.ticks().collect::<Vec<_>>(), [NOW + 30 * MIN, NOW + 60 * MIN, NOW + 90 * MIN], "the ruler's labels are the later half hours");
+    assert!(!axis.window().contains(GUIDE_NOW), "now is before the window: no now line");
+    // "News at Nine" 30-60 and "Late Film" 60-120: the programme the focus left, whole now
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 1)]);
+    assert_eq!(board(&screen).grid.span(Cell { row: 0, index: 1 }).map(|s| (s.begins, s.ends)), Some((NOW + 60 * MIN, NOW + 120 * MIN)));
+    assert_eq!(reaches(&out), [NOW + 120 * MIN + 30 * MIN], "read to the window's end and a step more");
+}
+
+/// **LEFT past a row's first cell moves it back, and never earlier than the live window.**
+#[test]
+fn left_scrolls_back_and_stops_at_the_live_window() {
+    let (store, mut screen) = guide_over(long_guide_lineup());
+    let view = store.view();
+    // at the live window LEFT past the first cell does nothing (and is spent)
+    let (handled, out) = step_handled_at(&mut screen, view, 0, 0, &edge_key(Key::Left));
+    assert_eq!((handled, window_of(&screen)), (Handled::Yes, Window::Live));
+    assert!(seated_elems(&out).is_empty() && reaches(&out).is_empty());
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    step_handled_at(&mut screen, view, 0, 1, &edge_key(Key::Right));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 60 * MIN), "two steps on");
+    // 101's first cell at 60 is "Late Film": back a step, where it is the second cell and the focus lands on it
+    let (_, out) = step_handled_at(&mut screen, view, 0, 0, &edge_key(Key::Left));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 30 * MIN));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 1)], "the focus lands again, on the programme it left");
+    let (_, out) = step_handled_at(&mut screen, view, 0, 0, &edge_key(Key::Left));
+    assert_eq!(window_of(&screen), Window::Live, "back at the live window");
+    assert_eq!(board(&screen).grid.axis().start(), NOW);
+    assert_eq!(reaches(&out), [NOW + 90 * MIN + 30 * MIN]);
+    // and no further
+    let (_, out) = step_handled_at(&mut screen, view, 0, 0, &edge_key(Key::Left));
+    assert_eq!(window_of(&screen), Window::Live);
+    assert!(seated_elems(&out).is_empty() && reaches(&out).is_empty());
+}
+
+/// **The end of the guide's data stops the shift**: no programme runs past the window's end, so there is nothing to show.
+#[test]
+fn the_end_of_the_guide_data_stops_the_scroll() {
+    let (mut store, mut screen) = guide();
+    // nothing runs past the live window's end (90): "Late Film" now ends at 90 and no other channel is longer
+    let mut lineup = guide_lineup();
+    lineup[0].later = vec![later("News at Nine", 30, 60), later("Late Film", 60, 90)];
+    store.install_for_test(lineup);
+    step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
+    let (handled, out) = step_handled_at(&mut screen, store.view(), 0, 2, &edge_key(Key::Right));
+    assert_eq!(handled, Handled::Yes, "the press is spent");
+    assert_eq!(window_of(&screen), Window::Live, "the guide ends where the window does");
+    assert!(seated_elems(&out).is_empty() && reaches(&out).is_empty());
+    // one programme to 120: the window moves once, then the data has ended again
+    let mut lineup = guide_lineup();
+    lineup[0].later = vec![later("News at Nine", 30, 60), later("Late Film", 60, 120)];
+    store.install_for_test(lineup);
+    step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 3));
+    step_handled_at(&mut screen, store.view(), 0, 2, &edge_key(Key::Right));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 30 * MIN));
+    step_handled_at(&mut screen, store.view(), 0, 1, &edge_key(Key::Right));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 30 * MIN), "the last programme ends at the window's end: no more");
+}
+
+/// **Where the focus lands**: a row whose programme the window left is the row's cell that shares the most with it, and a row
+/// with nothing in the new window is its one unscheduled cell.
+#[test]
+fn the_focus_lands_on_the_cell_that_overlaps_the_one_it_left() {
+    let (store, mut screen) = guide_over(long_guide_lineup());
+    let view = store.view();
+    // 102 airs 0-60 and nothing after: one step on its cell is cut at the left edge and still the only one, which the
+    // focus already stands on
+    let (_, out) = step_handled_at(&mut screen, view, 1, 0, &edge_key(Key::Right));
+    assert!(seated_elems(&out).is_empty(), "the same cell: nothing to move");
+    assert_eq!(board(&screen).grid.cells(1), 1);
+    assert!(!board(&screen).grid.is_unscheduled(1));
+    // two steps on it is over: the row has nothing in the window, and its one cell is where the focus stands
+    step_handled_at(&mut screen, view, 1, 0, &edge_key(Key::Right));
+    assert!(board(&screen).grid.is_unscheduled(1));
+    // a row the shift moves under: 104 (0-30, then 30-90) from its last cell at the live window: "Second Half" stays
+    let (store, mut screen) = guide();
+    let (_, out) = step_handled_at(&mut screen, store.view(), 3, 1, &edge_key(Key::Right));
+    let kept = board(&screen).grid.span(Cell { row: 3, index: 0 }).map(|s| (s.begins, s.ends));
+    assert_eq!(kept, Some((NOW + 30 * MIN, NOW + 90 * MIN)), "the second half is the first cell of the moved window");
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 3, 0)]);
+}
+
+/// **The window follows the clock until it is moved**: a held window stays where the reader put it as the half hour rolls
+/// over, and is the live window again once the live one reaches it.
+#[test]
+fn a_held_window_stays_through_the_half_hour_roll_and_goes_live_when_caught_up() {
+    let (store, mut screen) = guide_over(long_guide_lineup());
+    let view = store.view();
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    step_handled_at(&mut screen, view, 0, 1, &edge_key(Key::Right));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 60 * MIN));
+    // 21:35: the live window is 21:30-23:00, the held one (21:30) is the live one
+    clock(NOW + 65 * MIN);
+    step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    assert_eq!(window_of(&screen), Window::Live, "caught up: the live window");
+    assert_eq!(board(&screen).grid.axis().start(), NOW + 60 * MIN);
+    // a window held further ahead stays put as the live window rolls
+    clock(GUIDE_NOW);
+    step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 24, dt_us: 16_667 }));
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    step_handled_at(&mut screen, view, 0, 1, &edge_key(Key::Right));
+    step_handled_at(&mut screen, view, 0, 1, &edge_key(Key::Right));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 90 * MIN));
+    clock(NOW + 35 * MIN);
+    step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 32, dt_us: 16_667 }));
+    assert_eq!(window_of(&screen), Window::Ahead(NOW + 90 * MIN), "the held window did not move with the clock");
+}
+
+/// **The window returns to the live one** on BACK (first), on choosing a scope again and on coming back from the player.
+#[test]
+fn back_a_scope_and_a_restore_return_the_window_to_live() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    let back = ScreenEvent::Input(InputEvent { at: Tick::default(), source: plx_machine::machine::Source::Script,
+        kind: InputKind::Key { key: Key::Back, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false } });
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    assert_ne!(window_of(&screen), Window::Live);
+    let (handled, out) = step_handled_at(&mut screen, view, 0, 1, &back);
+    assert_eq!(handled, Handled::Yes, "BACK first backs out of the scroll");
+    assert_eq!(window_of(&screen), Window::Live);
+    assert!(out.iter().all(|s| !matches!(&s.fx, Fx::App(AppFx::Home(_)))), "and does not leave the page");
+    // a scope chosen opens on the live window
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    choose(&mut screen, view, WHATS_ON_ELEM);
+    choose(&mut screen, view, GUIDE_ELEM);
+    assert_eq!(window_of(&screen), Window::Live);
+    // and the player's BACK
+    step_handled_at(&mut screen, view, 0, 2, &edge_key(Key::Right));
+    step(&mut screen, view, None, &left("C101"));
+    step_at(&mut screen, view, 0, 1, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(window_of(&screen), Window::Live);
+}
+
+/// **The store's reach follows the page**: asked for when the Guide shows (the window's end and a step), sent again only
+/// when it changes, and released when the page leaves (a scope without a board, or the screen going).
+#[test]
+fn the_reach_follows_the_board_and_is_released_when_the_page_leaves() {
+    let (store, mut screen) = guide();
+    let view = store.view();
+    assert_eq!(screen.reached, NOW + 120 * MIN, "asked for when the Guide opened");
+    let out = step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    assert!(reaches(&out).is_empty(), "not again while it is unchanged");
+    let out = step(&mut screen, view, None, &ScreenEvent::WillLeave(plx_machine::machine::Leave::Deeper));
+    assert_eq!(reaches(&out), [0], "covered: released");
+    let out = step(&mut screen, view, None, &ScreenEvent::WillLeave(plx_machine::machine::Leave::ForGood));
+    assert!(reaches(&out).is_empty(), "once");
+    let out = step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 32, dt_us: 16_667 }));
+    assert_eq!(reaches(&out), [NOW + 120 * MIN], "a page restored asks again");
+    let out = choose(&mut screen, view, WHATS_ON_ELEM);
+    assert_eq!(reaches(&out), [0], "What's on shows no more than the live window");
+    let out = choose(&mut screen, view, GUIDE_ELEM);
+    assert_eq!(reaches(&out), [NOW + 120 * MIN]);
+}
+
+/// **A read that lands under the focus keeps it on its programme**: cells are numbered by their place in the row, so when
+/// the airing ends and the next programme takes the first place the focus follows the programme, not the number.
+#[test]
+fn a_landing_read_keeps_the_focus_on_its_programme() {
+    let (mut store, mut screen) = guide();
+    let view = store.view();
+    // focus on 101's second cell, "News at Nine"
+    let elem = cell_elem(&screen, 0, 1);
+    step(&mut screen, view, Some(elem), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem }, by: By::Dir });
+    // the airing ended: the guide's answer has the programme that was next as the one on now, and the cells renumber
+    let mut lineup = guide_lineup();
+    lineup[0] = guide_channel("101", 30, 60, vec![later("Late Film", 60, 120)]);
+    lineup[0].now = "News at Nine".into();
+    store.install_for_test(lineup);
+    let out = step(&mut screen, store.view(), Some(elem), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)], "News at Nine is now the first cell: the focus follows it");
 }

@@ -1866,8 +1866,10 @@ XMLTV guide. The app's reads live in `rust-modules/plex/src/plex/livetv.rs`.
   the one channel of the lineup that has guide data (the lineup is 16 channels; the other 15, Pluto channels,
   have none and appear in no answer); with `until` = `now` + 90 min, still one (the airing
   ran past that); with `until` = `now` + 6 h, two (the airing on now and the one after it). An answer took 2-4 ms. This is
-  the Guide's read (`livetv::guide_path`): `until` is the end of the Guide's 90-minute window, which starts at the
-  last half hour at or before `now`. The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
+  the Guide's read (`livetv::guide_path`): `until` is the far end of the window the Guide shows (the 90-minute window
+  that starts at the last half hour at or before `now`, or, once the reader has scrolled the board by half hours, the
+  later window's end plus one more step: the store's `Reach`, which only grows while the page is open and returns to the
+  live window's end when it leaves). The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
   programme that has already ended is never asked for (the Guide draws the aired part of the window shaded and
   empty). A channel with no airing in the answer has no guide data for the window.
 
@@ -1967,8 +1969,9 @@ server answers a retune after a stop is as unmeasured as the rest of this route.
 
 The mock server models this whole sequence for tests without a tuner:
 `tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3
-and an AC-4 one, whose airings began at different times; the grid honours both bounds and answers a next programme on most
-channels and none on three (`LiveTvFixture.SOLO`); `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
+and an AC-4 one; a deterministic guide of back-to-back programmes of 15 to 120 minutes that runs six hours past the half
+hour a read falls in, on every channel but 103, which has no guide data, with a gap on 112; the grid honours both bounds;
+`--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
 Its busy (503) and live-transcode answers follow the inferences above; they are not captures.
 
 ---
