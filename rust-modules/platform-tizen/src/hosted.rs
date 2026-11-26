@@ -1232,6 +1232,7 @@ mod tests {
             [
                 (4, host_abi::PlayerKind::Prepared, 7_200_000, 0),
                 (4, host_abi::PlayerKind::VideoSize, 1920, 1080),
+                (4, host_abi::PlayerKind::Track, 2, 1),
                 (4, host_abi::PlayerKind::Started, 0, 0),
                 (4, host_abi::PlayerKind::Closed, 0, 0)
             ]

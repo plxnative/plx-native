@@ -574,7 +574,7 @@ mod tests {
         );
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PLAYER_COMPLETED, 3, 0, 0)) }, Err(E_ARGS), "short");
         assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE - 1, EVENT_PLAYER_POSITION, 3, 9, 0)) }, Err(E_ARGS), "short by one byte");
-        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, 28, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_TRACK + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
         // A v1 host's pause is 8 bytes in memory: only 8 are readable and only 8 are read.
         let pause = [EVENT_V1_SIZE, EVENT_PAUSE];
         assert_eq!(unsafe { read_event(pause.as_ptr().cast()) }, Ok(HostEvent::Pause));
