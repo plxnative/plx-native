@@ -1983,3 +1983,36 @@ fn a_cancelled_request_keeps_the_restored_plans_pick_to_spend() {
     assert!(rig.settle(second, RouteStartResult::Started));
     assert!(rig.picks().is_empty(), "the restored plan's start spent the pick the cancelled request found held");
 }
+
+/// **The failure screen's pick survives a retry whose request is cancelled** (`held_pick` follows the rule
+/// `pick_spend_on_start` does: a REQUEST does not clear it, the LANDING that consumes it does). The plan
+/// lands and its start fails; the viewer picks in the panel and presses Try again; Home runs `cancel_play`
+/// during the resolve. The panel's seed (`failed_pick`) and the next retry's context must still read the
+/// viewer's pick, not the failed attempt's pair; a later retry that lands consumes it once.
+#[test]
+fn a_cancelled_retry_request_keeps_the_failure_screens_held_pick_until_a_landing_consumes_it() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let mut rig = PickRig::new();
+    // resolved at their presses: the first install marks the page's copy as played
+    let (first_plan, retry_plan) = (rig.plan(PickRig::URL), rig.plan(PickRig::URL));
+    let first = rig.land(first_plan).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+
+    let pick = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Track(21) };
+    assert_ne!(memory::failed_pick(&rig.ps), Some(pick), "setup: the failed attempt stood on another pair");
+    memory::hold_pick_for_retry(&mut rig.ps, &pick);
+    assert_eq!(memory::failed_pick(&rig.ps), Some(pick));
+
+    // Try again: the request begins, carrying the held pick, and is cancelled before it lands
+    let retry = current_retry_context(&rig.ps, 0);
+    begin_playback_request().expect("request admission");
+    begin_track_selection(&mut rig.ps, Some(retry));
+    cancel_playback_request(&mut rig.ps, true);
+    let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+    assert_eq!(memory::failed_pick(&rig.ps), Some(pick), "the panel still opens on the viewer's pick");
+    assert_eq!(held(current_retry_context(&rig.ps, 0).selection), Some((9001, 11, 21)), "and the next retry carries it");
+
+    // the retry that lands consumes it, once
+    rig.land(retry_plan).expect("the retry's plan is playable");
+    assert!(rig.ps.held_pick.is_none(), "the landing consumed it");
+}

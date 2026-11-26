@@ -437,8 +437,10 @@ pub struct PlaybackSession {
     carried_selection: Option<HeldSelection>,
     /// **The pair the viewer chose on the failure screen** (`memory::hold_pick_for_retry`): the
     /// pick the next retry carries INSTEAD of the standing selection, which describes the attempt that
-    /// just failed. One owner of 'what Try again plays': [`current_retry_context`] reads it first, and the
-    /// request that consumes it ([`clear_track_selection`]) clears it.
+    /// just failed. One owner of 'what Try again plays': [`current_retry_context`] reads it first. Same
+    /// rule as [`Self::pick_spend_on_start`]: a REQUEST does not clear it (a retry's request cancelled before
+    /// it lands, BACK or Home during the resolve, leaves the failure screen's pick standing); only the
+    /// LANDING that consumes it does ([`apply_plan`] installs the next playback with none held).
     held_pick: Option<HeldSelection>,
     /// Is [`Self::cur_sub_sid`] an external sidecar (`metadata::Stream::sidecar_renderable`) rather
     /// than an embedded (in-container) track? Meaningless when `cur_sub_sid == 0`. Issue #266 I6:
@@ -11573,13 +11575,13 @@ fn request_play_with_queue(
 }
 
 /// What a play REQUEST clears of the outgoing item's live track selection (the landing installs
-/// the incoming item's own).
+/// the incoming item's own). Not [`PlaybackSession::held_pick`]: a request cancelled before it lands
+/// restores the failed attempt, whose screen still shows the viewer's pick; the landing clears it.
 fn clear_track_selection(s: &mut PlaybackSession) {
     s.cur_audio = None;
     s.source_selection = None;
     s.cur_sub_sid = 0;
     s.selection_known = false;
-    s.held_pick = None;
     s.cur_sub_sidecar = false;
     s.cur_sub_client_drawable = false;
     s.cur_sub_ordinal = -1;

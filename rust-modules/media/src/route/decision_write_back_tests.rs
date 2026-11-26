@@ -1139,6 +1139,6 @@ fn a_pick_held_on_the_failure_screen_is_the_selection_the_retry_carries() {
 
     let retry = current_retry_context(&ps, 0);
     begin_track_selection(&mut ps, Some(retry));
-    assert!(ps.held_pick.is_none(), "the retry absorbed it");
+    assert!(ps.held_pick.is_some(), "the request does not clear it: only the landing that consumes it does");
     assert_eq!(held(ps.carried_selection), Some((PART, 22, 12)), "into the pair the new attempt carries");
 }

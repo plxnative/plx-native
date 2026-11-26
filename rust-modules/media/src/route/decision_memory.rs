@@ -707,7 +707,9 @@ pub fn commit_preplay_pick(
 /// The failed attempt's own selection is what a retry would otherwise carry; this replaces it with the
 /// viewer's. The session's copy of the ONE pick value ([`plx_data::metadata::PreplayPick`], written by
 /// the picker's `Selection`): derived here and nowhere else, written only by the loop's
-/// `CommitPreplayPick` on the failure screen, cleared by the request that consumes it. A
+/// `CommitPreplayPick` on the failure screen. Held until the LANDING that consumes it clears it
+/// (`apply_plan`), never by a request: a retry's request cancelled before it lands (BACK or Home during
+/// the resolve) leaves it held, like [`PlaybackSession::pick_spend_on_start`]. A
 /// [`plx_data::metadata::SubPick::Server`] subtitle half keeps the subtitle the attempt stood on, so an
 /// audio-only pick does not turn subtitles off.
 pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::PreplayPick) {
