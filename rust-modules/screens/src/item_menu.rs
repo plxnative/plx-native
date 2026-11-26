@@ -74,7 +74,7 @@ use std::os::raw::c_int;
 use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
-use crate::registry::{hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
+use crate::registry::{commit_pick, hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
 use plx_ui::consts::*;
 use plx_ui::form::{Activation, Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::frame::Budget;
@@ -1149,7 +1149,7 @@ impl ItemMenuScreen {
         let picked = hero.tracks.tracks().clone();
         let form = source!(self).form(self.pages.top());
         self.form.set_sliding(form, Some(&row));
-        crate::preplay_panel::commit_pick(fx, picked, sel, PreplaySource::Page);
+        commit_pick(fx, picked, sel, PreplaySource::Page);
     }
 
     /// Emit dismissal before the captured action. Navigation is parked until commit, while the

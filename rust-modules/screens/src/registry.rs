@@ -261,6 +261,8 @@ pub(crate) use crate::{about_panel::AboutPanelScreen, tracks_panel::audio_rows a
 pub(crate) use crate::preplay_panel::PreplayArg;
 /// The tracks' source a menu page commits with (`item_menu` may not name the panel's module).
 pub(crate) use crate::preplay_panel::Source as PreplaySource;
+/// A pick of Audio & Subtitles as effects: the one pair of every surface that lists the tracks.
+pub(crate) use crate::preplay_panel::commit_pick;
 
 /// **What the item context menu asks of the loop**, once its own `step` has resolved the pressed
 /// row to an [`crate::item_menu::Action`].
