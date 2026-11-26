@@ -43,9 +43,10 @@ tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json"
 # composition that installs it (`player`). Without it the platform keeps `host::NO_MEDIA` (`BackendSet::NONE`, no resolver, the
 # Play control's no-driver path) and the driver is not compiled. It enables no dependency (`plx_media` and
 # `plx_playback_contract` are `tizen`'s, and already in every build that has the application), so a `tizen` pass with no `uri`
-# links exactly what it did before. It is NOT the application's `play-uri`, which is the webOS ACB/LS2 driver and which a Tizen
+# links exactly what it did before. It does turn on `plx_media`'s `uri-captions` (the caption path this driver's subtitles
+# are drawn through), which the webOS build leaves out. It is NOT the application's `play-uri`, which is the webOS ACB/LS2 driver and which a Tizen
 # build never turns on; the plan names it (`docs/platform-ports.md`, "Tizen: its own `uri` feature; `play-uri` never").
-uri = []
+uri = ["plx_media?/uri-captions"]
 
 [dependencies]
 # The application, through its `host` module: the one crate a platform names. Optional, so the empty

@@ -391,8 +391,14 @@ A selected EMBEDDED text subtitle (SubRip or ASS) is drawn by the app from the h
   `NativeTrackCheck` as audio: `Sole` for a lone stream, else the stream's language, matched by the shared language table against the
   language the host reports for each native text track before `PREPARED` (`PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE`, 30). The driver asks for
   the index with `PLX_HOST_PLAYER_VERB_TEXT_TRACK` (6); the host calls `player_select_track(PLAYER_STREAM_TYPE_TEXT, index)` and answers
-  `PLAYER_TRACK`, as for audio. A pick of another mapped embedded stream mid-play is asked of the host (`player_select_track(TEXT)`).
-- **How cues flow.** The host registers `player_set_subtitle_updated_cb` and hands every cue to the library through the fourth export,
+  `PLAYER_TRACK`, as for audio. A pick of another mapped embedded stream mid-play is asked of the host the same way
+  (`player_select_track(TEXT)`, measured mid-play above). While that request is unanswered no cue is handed over, and a poll judges its
+  cues before the events it settles: the host selects before it answers, so a cue then may already be the new track's, and it is dropped
+  rather than drawn as the old one's (the first cue or so of the new track can be lost).
+  Picking Off, or another track, from the track menu reaches the driver (`app::playback::commit_track`); only a refused pick re-resolves.
+- **How cues flow.** The host registers `player_set_subtitle_updated_cb` ONCE, at `PREPARED`, for a source with a text track (registration
+  in READY is what was measured; registering in PLAYING was not, so a mid-play pick after a start with subtitles Off finds the callback
+  already there), posts cues only once a text track was answered, and hands every cue to the library through the fourth export,
   `plx_host_post_cue(const PlxHostCue *)` (a 40-byte struct: `size`, `epoch`, `position_ms`, `duration_ms`, `text`, `len`, `reserved`;
   text at most `PLX_HOST_CUE_TEXT_MAX`, 4096 bytes), which has its own bounded lossy queue of 32. The driver turns each cue of the live
   epoch into a `UriCaption`, the shared caption store's `ass_source` takes it, and the app's libass subtitle renderer draws it. The

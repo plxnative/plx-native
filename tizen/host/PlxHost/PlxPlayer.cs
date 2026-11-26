@@ -483,9 +483,9 @@ namespace PlxHost
 
         // Select the held track and answer its command ids with the index now selected, or TrackRefused. A refusal is not a PLAYER_ERROR: the
         // player keeps the track it had. It reads nothing of its own: the count and the current index are the PREPARED-time snapshot (ReadTracks),
-        // kept current by the selections made here. A TEXT track answered with an index also turns the epoch's cues on: the subtitle callback
-        // is registered first (once per player), so the new track's first cue is not missed, and a player that refuses the callback refuses
-        // the track (a track the app cannot draw is not selected).
+        // kept current by the selections made here. A TEXT track answered with an index also turns the epoch's cues on. The subtitle callback
+        // was registered at PREPARED (RegisterCueCallback: never later, in PLAYING, which nothing measured), and a player that refused it
+        // refuses every text track (a track the app cannot draw is not selected).
         private static void ApplyHeldTrack(Session s, bool text)
         {
             Track track = text ? s.TextLater : s.TrackLater;
@@ -503,9 +503,9 @@ namespace PlxHost
             {
                 PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " track " + track.Index + " asked of a source with no " + what + " track");
             }
-            else if (text && !EnsureCueCallback(s))
+            else if (text && !s.CueCallbackSet)
             {
-                // logged by EnsureCueCallback
+                PlxApp.Log("player: epoch " + s.Epoch + ": text track " + track.Index + " refused: the subtitle callback was not registered at PREPARED");
             }
             else if (tracks.RcCurrent == 0 && tracks.Current == track.Index)
             {
@@ -538,23 +538,24 @@ namespace PlxHost
             foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
         }
 
-        // Registers the subtitle callback once per player (video thread, on a prepared player: measured working in READY). False, logged, when
-        // the player refuses it or the entry point is missing on this firmware.
-        private static bool EnsureCueCallback(Session s)
+        // Registers the subtitle callback ONCE, at PREPARED, for a source with a text track (video thread; MEASURED working in READY on the
+        // emulator, 2026-11-26; registering in PLAYING was not measured, so a text track picked mid-play with subtitles Off from the start
+        // finds the callback already there). Its cues are posted only once a text track was answered (CuesOn), so a play that never shows a
+        // subtitle hands over none. Logged and left unset when the player refuses it or the entry point is missing on this firmware.
+        private static void RegisterCueCallback(Session s)
         {
-            if (s.CueCallbackSet) return true;
+            if (s.CueCallbackSet || s.TextTracks == null || s.TextTracks.Count == 0) return;
             try
             {
                 int rc = MediaPlayerNative.player_set_subtitle_updated_cb(s.Handle, SubtitleCb, UserOf(s.Epoch));
-                if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_set_subtitle_updated_cb returned " + rc); return false; }
+                if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_set_subtitle_updated_cb returned " + rc); return; }
             }
             catch (Exception e)
             {
                 PlxApp.Log("player: epoch " + s.Epoch + ": player_set_subtitle_updated_cb threw " + e.GetType().Name + ": " + e.Message);
-                return false;
+                return;
             }
             s.CueCallbackSet = true;
-            return true;
         }
 
         // Answers the held tracks' command ids with TrackRefused and forgets them: the epoch is ending or never prepared. Cues stop too.
@@ -823,6 +824,7 @@ namespace PlxHost
             {
                 Post((uint)Native.PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE, s.Epoch, i, LanguageWord(s.TextTracks.Languages[i]));
             }
+            RegisterCueCallback(s);
             ApplyHeldTrack(s, false); // a track asked for before PREPARED is selected before the library hears PREPARED
             ApplyHeldTrack(s, true);
             int duration;

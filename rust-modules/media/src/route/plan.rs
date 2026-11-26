@@ -1841,6 +1841,28 @@ pub enum SubWrite {
 /// the answer is "whatever the user is looking at NOW", which for an item from a shared source is
 /// the wrong authority for every id in this function. The server arrives in `env.sid` and the only
 /// client here is `client_for` of it.
+/// Every embedded subtitle stream of the playing Part, for a qualifier whose driver hands the selected track's cues to
+/// the app (`uri-captions`, the Tizen build). A build without such a driver (webOS) sends none: its qualifier never
+/// reads them.
+#[cfg(any(test, feature = "uri-captions"))]
+fn uri_subtitle_streams(playing: Option<&plx_data::metadata::PlayingItem>) -> Vec<super::uri_preflight::SourceSubtitleStream> {
+    playing.map_or_else(Vec::new, |item| item.subs.iter()
+        .enumerate()
+        .filter(|(_, sub)| !sub.external)
+        .map(|(i, sub)| super::uri_preflight::SourceSubtitleStream {
+            sid: u64::try_from(sub.id).unwrap_or(0),
+            ordinal: i64::from(plx_data::metadata::sub_render_ordinal(&item.subs, i)),
+            codec: sub.codec.to_lowercase(),
+            language: sub.lang_code.clone(),
+        })
+        .collect())
+}
+
+#[cfg(not(any(test, feature = "uri-captions")))]
+fn uri_subtitle_streams(_: Option<&plx_data::metadata::PlayingItem>) -> Vec<super::uri_preflight::SourceSubtitleStream> {
+    Vec::new()
+}
+
 pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str, vcodec: &str, acodec: &str, env: &ResolveEnv) -> Plan {
     // The play queue is asked for beside the rest of the plan, on a sibling thread of this scope
     // (`plx_base::task::beside`). The scope joins it on EVERY exit of the body, the early returns
@@ -2178,16 +2200,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                         .map_or_else(String::new, |track| track.lang_code.clone()),
                     subtitle_source: source_sub_stream.map(|sub| super::uri_preflight::SourceSubtitle {
                         codec: sub.codec.to_lowercase(), embedded: !sub.external }),
-                    subtitle_streams: plan.playing.as_ref().map_or_else(Vec::new, |item| item.subs.iter()
-                        .enumerate()
-                        .filter(|(_, sub)| !sub.external)
-                        .map(|(i, sub)| super::uri_preflight::SourceSubtitleStream {
-                            sid: u64::try_from(sub.id).unwrap_or(0),
-                            ordinal: i64::from(plx_data::metadata::sub_render_ordinal(&item.subs, i)),
-                            codec: sub.codec.to_lowercase(),
-                            language: sub.lang_code.clone(),
-                        })
-                        .collect()),
+                    subtitle_streams: uri_subtitle_streams(plan.playing.as_ref()),
                     subtitle_choice,
                     source_kbps: u32::try_from(source_kbps).ok().filter(|kbps| *kbps > 0),
                     raster: u32::try_from(width).ok().zip(u32::try_from(height).ok())

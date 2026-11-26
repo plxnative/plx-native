@@ -1265,12 +1265,13 @@ fn a_selected_subtitle_is_asked_of_the_host_and_its_cues_become_captions() {
     assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
     assert_eq!(fake.verbs(), [Verb::TextTrack { index: 1, command: 2 }]);
     fake.post(epoch, PlayerKind::Track, 2, 1);
-    fake.with(|s| s.cues.extend([cue(epoch, 2_003, 1_500, "TWO 01 top\nTWO 01 bottom"), cue(epoch, 3_501, 0, ""),
-        cue(epoch + 1, 4_000, 1_500, "another epoch"), cue(epoch, 4_001, 1_500, "{brace} kept")]));
     assert_eq!(poll(&mut driver), [
         observation(a, Observation::TrackSelected(seen(SUB_EN))),
         DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(11) },
     ]);
+    fake.with(|s| s.cues.extend([cue(epoch, 2_003, 1_500, "TWO 01 top\nTWO 01 bottom"), cue(epoch, 3_501, 0, ""),
+        cue(epoch + 1, 4_000, 1_500, "another epoch"), cue(epoch, 4_001, 1_500, "{brace} kept")]));
+    assert!(poll(&mut driver).is_empty());
     assert_eq!(captions(&mut driver), [(11, 2_003, 1_500, "TWO 01 top\nTWO 01 bottom".to_owned()),
         (11, 4_001, 1_500, "{brace} kept".to_owned())]);
     assert!(captions(&mut driver).is_empty(), "drained once");
@@ -1278,9 +1279,10 @@ fn a_selected_subtitle_is_asked_of_the_host_and_its_cues_become_captions() {
     // A refused switch keeps the settled track's cues flowing.
     assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Queued);
     fake.post(epoch, PlayerKind::Track, 3, -1);
-    fake.with(|s| s.cues.push(cue(epoch, 6_001, 1_500, "still English")));
     assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(3), operation: pick_sub(12),
         failure: Failure::Refused }]);
+    fake.with(|s| s.cues.push(cue(epoch, 6_001, 1_500, "still English")));
+    assert!(poll(&mut driver).is_empty());
     assert_eq!(captions(&mut driver), [(11, 6_001, 1_500, "still English".to_owned())]);
 
     // Off: settled at once, no host call, and the cues stop.
@@ -1296,6 +1298,43 @@ fn a_selected_subtitle_is_asked_of_the_host_and_its_cues_become_captions() {
     // A full host queue is logged and nothing else changes.
     fake.with(|s| s.cues_dropped = 3);
     assert!(poll(&mut driver).is_empty());
+}
+
+/// **A cue is never drawn as the old track's after a switch** (review of #1575). The host selects the new native track and
+/// only then posts `PLAYER_TRACK`, so cues of the NEW track can reach the library while the old one is still the settled
+/// subtitle; and cues have a queue of their own, so one drained in the same poll as the settle has no order against it.
+/// While a subtitle `TextTrack` is unanswered no cue is handed over, and a poll hands its cues over before the events it
+/// settles: a cue is dropped rather than labelled with a track it may not belong to.
+#[test]
+fn a_cue_raised_while_a_subtitle_switch_is_unanswered_is_never_the_old_tracks() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 2, 1);
+    poll(&mut driver);
+    fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+
+    // The switch to French (native text track 0): the player already raises French cues before the host answers.
+    assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Queued);
+    fake.with(|s| s.cues.push(cue(epoch, 4_000, 1_500, "FRENCH 02")));
+    assert!(poll(&mut driver).is_empty());
+    assert!(captions(&mut driver).is_empty(), "a cue raised during the switch is not the English track's");
+
+    // The answer and one more cue in the same poll: the cue has no order against the settle, so it is not handed over.
+    fake.post(epoch, PlayerKind::Track, 3, 0);
+    fake.with(|s| s.cues.push(cue(epoch, 6_000, 1_500, "FRENCH 03")));
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SUB_FR))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(12) },
+    ]);
+    assert!(captions(&mut driver).iter().all(|(track, ..)| *track == 12), "never labelled English");
+
+    // From the next poll on, the cues are French.
+    fake.with(|s| s.cues.push(cue(epoch, 8_000, 1_500, "FRENCH 04")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(12, 8_000, 1_500, "FRENCH 04".to_owned())]);
 }
 
 /// The subtitle's native track is told by its language exactly as an audio stream's is: a language no native TEXT track

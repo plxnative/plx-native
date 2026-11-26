@@ -531,10 +531,15 @@ impl Machine {
     /// The host's cues as the app's captions, appended to `out`: only a cue of the active, prepared epoch whose subtitle
     /// the host settled and nothing turned off since, and only one with text and a duration (an empty cue is the
     /// player's "the cue ended", which a caption's own duration already says). A cue whose times are negative is dropped.
+    /// While a subtitle `TextTrack` is unanswered NO cue is handed over: the host selects the new native track before it
+    /// posts `PLAYER_TRACK`, so a cue then may already be the new track's and must not be drawn as the settled one's.
     pub fn cues(&self, cues: &[HostCue], out: &mut Vec<UriCaption>) {
         let Some(active) = self.active.as_ref() else { return };
         let Some(track) = active.captioned else { return };
         if active.phase != Phase::Open || !active.prepared {
+            return;
+        }
+        if active.controls.iter().any(|c| matches!(c.operation, Operation::SelectTrack { kind: TrackKind::Subtitle, .. })) {
             return;
         }
         for cue in cues.iter().filter(|cue| cue.epoch == active.epoch && !cue.text.is_empty()) {

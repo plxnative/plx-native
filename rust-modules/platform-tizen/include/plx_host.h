@@ -196,8 +196,9 @@
  *     at the saved position as a NEW epoch (a PLAYER_OPEN, then the usual PREPARED, seek and PLAY). A host start of the old epoch would
  *     race that restore, so OnResume only logs why it resumed nothing.
  *   - CUE: once a _TEXT_TRACK has been answered with an index for an epoch, the host hands the library every cue the player raises for
- *     it (player_set_subtitle_updated_cb, registered then: the player calls it on a thread of its own, measured working when registered in
- *     READY) with plx_host_post_cue, from that thread. A cue is the text that is due NOW: position_ms is the play position when the
+ *     it (player_set_subtitle_updated_cb, registered ONCE at PREPARED for a source with a text track, never later: the player calls it
+ *     on a thread of its own, measured working when registered in READY, and registering in PLAYING was not measured) with
+ *     plx_host_post_cue, from that thread. A player that refused the registration refuses every _TEXT_TRACK (b = -1). A cue is the text that is due NOW: position_ms is the play position when the
  *     callback fired (the host's own estimate, from its last position read and the time since; the callback makes no native call),
  *     duration_ms how long it shows, and text its UTF-8 (the player has already removed SubRip tags and ASS override blocks; a line
  *     break is a newline). The player also raises an EMPTY cue when one ends and after a seek; the host passes it on with len = 0 and

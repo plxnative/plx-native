@@ -103,9 +103,9 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
         inbox.clear();
         let drained = self.port.drain(&mut inbox);
         let mut fx = Vec::new();
-        let events = self.machine.poll(now, &inbox, drained.overflowed, &mut fx);
-        self.inbox = inbox;
-        // The cues after the events: a PLAYER_TRACK that settled the subtitle in this poll lets its first cues through.
+        // The cues BEFORE the events: cues have a queue of their own, so a cue drained beside the PLAYER_TRACK that
+        // settles a subtitle switch has no order against it, and is judged under the switch still unanswered (dropped,
+        // never labelled with a track it may not belong to).
         let mut cues = std::mem::take(&mut self.cue_inbox);
         cues.clear();
         let dropped = self.port.drain_cues(&mut cues);
@@ -119,6 +119,8 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
             self.captions.drain(..excess);
         }
         self.cue_inbox = cues;
+        let events = self.machine.poll(now, &inbox, drained.overflowed, &mut fx);
+        self.inbox = inbox;
         self.perform(DispatchResult::Queued, fx);
         events.into_iter().map(|event| BackendEvent { backend: BackendKind::Uri, event }).collect()
     }
