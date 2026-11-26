@@ -77,7 +77,24 @@ namespace PlxHost
             if (Mode == ProbeMode.DisplayNone)
             {
                 int d = player_set_display(player, PLAYER_DISPLAY_TYPE_NONE, IntPtr.Zero);
-                PlxApp.Log("frameprobe: player_set_display(NONE) rc=" + d);
+                PlxApp.Log("frameprobe: player_set_display(NONE, NULL) rc=" + d);
+                if (d != 0)
+                {
+                    // Some builds refuse a NULL handle even for NONE: try the app's own window as the handle, then the wl2 entry point.
+                    IntPtr window = IntPtr.Zero;
+                    PlxApp.RunOnMain(() =>
+                    {
+                        IntPtr dpy = MediaPlayerNative.ecore_wl2_connected_display_get(IntPtr.Zero);
+                        if (dpy != IntPtr.Zero) window = MediaPlayerNative.ecore_wl2_display_window_find(dpy, 1u /* the library window, as PlxPlayer.LibraryWindowId */);
+                    }, 2000);
+                    d = player_set_display(player, PLAYER_DISPLAY_TYPE_NONE, window);
+                    PlxApp.Log("frameprobe: player_set_display(NONE, window " + (window == IntPtr.Zero ? "0" : "set") + ") rc=" + d);
+                    if (d != 0)
+                    {
+                        d = MediaPlayerNative.player_set_ecore_wl_display(player, PLAYER_DISPLAY_TYPE_NONE, window, 0, 0, 1920, 1080);
+                        PlxApp.Log("frameprobe: player_set_ecore_wl_display(NONE, window) rc=" + d);
+                    }
+                }
             }
             int rc = player_set_media_packet_video_frame_decoded_cb(player, Cb, IntPtr.Zero);
             PlxApp.Log("frameprobe: mode " + Mode + ": player_set_media_packet_video_frame_decoded_cb rc=" + rc);
