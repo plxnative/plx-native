@@ -1257,7 +1257,7 @@ mirrored in `img.rs`'s decode-budget note.
 
 | UI element | request (all `minSize=1`) | source aspect differs from the box → |
 |---|---|---|
-| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`) |
+| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now and Channels shelves (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for art with transparency (a channel's logo), over the flat Recent-plate ground instead of a blur (`art_fit::BackdropSpec::ground`) |
 | Landscape still (episode / shelf) | `width=420&height=236`, still → show art → poster | cropped at draw (`art_uv`) |
 | Person headshot, profile avatar | `width=300&height=300`, `url=thumb` | cropped at draw, headshots riding high (`Crop::Headshot`) |
 | Profile chip avatar | `width=128&height=128` | cropped at draw |
@@ -1944,6 +1944,15 @@ every open and publishes no duration. This is an implemented extension of the li
 **not a measured live-tuner remux/transcode flow**. Real PMS/tuner acceptance, output codecs and
 resource cleanup for this route still require device or server evidence; the official client's
 sequence above proves only the direct-play route.
+
+**Zapping: one run of presses is one session.** Up, Down, CH+ and CH- in the live player step a target the banner
+follows at once, and the app is asked to tune only 600 ms after the last press (`PlayerReq::Tune`, the player screen's
+`zap` machine), so a run of presses sends steps 1 to 4 above once, for the channel it ended on, and none for the
+channels it passed; a run that ends on the channel already playing (Up then Down, or a full lap of the lineup) sends
+nothing, and the stream is neither stopped nor restarted. The tune retires the playing channel first, with the ritual an exit uses (the `stopped` timeline of
+step 5, which frees the tuner of a one-tuner server before it is asked for another), then starts the new one. Nothing is
+sent while the debounce runs, so the old stream keeps playing under the art and the banner until the tune. How a real
+server answers a retune after a stop is as unmeasured as the rest of this route.
 
 The mock server models this whole sequence for tests without a tuner:
 `tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3

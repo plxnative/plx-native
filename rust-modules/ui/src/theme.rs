@@ -111,6 +111,8 @@ const AMBER_500: [f32; 4] = rgb8(0xe5, 0xa0, 0x0d);
 const AMBER_950: [f32; 4] = rgb8(0x1a, 0x12, 0x04);
 const RED_400: [f32; 4] = rgb8(0xeb, 0x52, 0x4a);
 const RED_500: [f32; 4] = rgb8(0xf5, 0x34, 0x1a);
+/// The Live badge's red, `#ff453a`: a STATE mark (the channel is live), never a failure read-out.
+const RED_LIVE: [f32; 4] = rgb8(0xff, 0x45, 0x3a);
 const GREEN_400: [f32; 4] = rgb8(0x3e, 0xc9, 0x6b);
 const GREEN_500: [f32; 4] = rgb8(0x2f, 0xae, 0x5b);
 
@@ -279,11 +281,17 @@ pub mod hero {
 /// Shared ink and geometry for the continuous Home and Detail edge fields and Catalog's
 /// feathered content blocks. Both field types use `gfx::scrim::GroundShade`.
 pub mod shade {
-    /// Detail needs legibility farther into the art for its wider title and synopsis.
-    pub const DETAIL_SIDE_X: [f32; 2] = [600.0, 1700.0];
-    /// Normal vertical entrance of the Detail shade.
-    pub const DETAIL_SIDE_Y: [f32; 2] = [120.0, 400.0];
-    /// Shift the fade upward as the preview logo travels into the corner.
+    /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::SideShade`):
+    /// nothing on and outside these semi-axes (x along the bottom, y up the left edge), so on the
+    /// left edge it starts at y = 120, where the box it replaced started, and never sooner; wide,
+    /// so its iso-lines run in one long arc over the title's right end down toward the bottom-right.
+    pub const DETAIL_SIDE_REACH: [f32; 2] = [2200.0, 960.0];
+    /// **How far inside that ellipse the shade rises to full strength**, in px along its shorter
+    /// axis (wider along the longer one): a smoothstep, so the shade never changes faster than
+    /// `1.5 * DETAIL_SIDE_A / DETAIL_SIDE_FEATHER` per px in any direction. Wide on purpose: a
+    /// narrower band reads as an edge, which a tester took for a backlight fault (discussion #1460).
+    pub const DETAIL_SIDE_FEATHER: f32 = 380.0;
+    /// Grow the side shade's reach upward as the preview logo travels into the corner.
     pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
     pub const DETAIL_PREVIEW_TOP_Y: [f32; 2] = [20.0, 245.0];
@@ -295,7 +303,10 @@ pub mod shade {
     /// Inactive pagination dots still need contrast against the art.
     pub const PAGER_IDLE_A: f32 = 0.50;
 
-    /// Home starts feathering inside the copy column and keeps its right edge legible.
+    /// Home starts feathering inside the copy column and keeps its right edge legible. Home's side
+    /// is still the box (`gfx::scrim::SideShade::Box`): its copy runs to x = 1039 and its right edge
+    /// must be clear above the shelf, and no ellipse with Detail's soft feather and a top-left no
+    /// higher than this box's holds the title's floor in that 880 px.
     pub const HOME_SIDE_X: [f32; 2] = [850.0, 1650.0];
     /// Where the edge shade begins and reaches full strength down the screen.
     pub const HOME_SIDE_Y: [f32; 2] = [110.0, 405.0];
@@ -536,6 +547,9 @@ pub const CONTROL_CAST_FOCUS: [(f32, f32, f32); 2] = [(5.0, 32.0, 0.34), (1.0, 6
 /// MEDIUM gray, deliberately not near-black: the focused-card drop-shadow only reads against a base
 /// this light (on the old near-black 25,25,29 a black shadow had almost nothing to darken).
 pub const SURFACE_APP: [f32; 4] = NEUTRAL_500;
+/// [`SURFACE_APP`] as the bytes a one-texel ground texture carries (the art ground's flat stand-in for art with a
+/// clear ground, [`crate::art_ground::SPEC`]). Pinned equal by a test.
+pub const SURFACE_APP_RGB8: [u8; 3] = [0x2c, 0x2c, 0x2e];
 /// Opaque sheet drawn over the hardware video plane when a detail page scrolls the hero away.
 /// Same stop as [`SURFACE_APP`] so the rising page and the cover are one surface. Different role:
 /// this hides the plane. It is not atmosphere, so [`scrim`] is the wrong token.
@@ -806,6 +820,9 @@ pub const CARD_ABSENT: [f32; 4] = COOL_850;
 /// the top bar's own tone). A logo is drawn contained on it ([`logo::CHANNEL_AREA`]), so a mark on a
 /// transparent ground reads the same whatever the channel's brand colour is.
 pub const CHANNEL_PLATE: [f32; 4] = COOL_825;
+/// [`CHANNEL_PLATE`] as the bytes a one-texel ground texture carries (a poster tile that contains a
+/// picture with a transparent ground, [`crate::art_fit::BackdropSpec::ground`]). Pinned equal by a test.
+pub const CHANNEL_PLATE_RGB8: [u8; 3] = [0x22, 0x27, 0x2d];
 /// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
 /// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,
 /// away from the neutral panel greys, so a missing poster never reads as a panel. The sentinel
@@ -849,6 +866,12 @@ pub const fn white(a: f32) -> [f32; 4] {
 /// Near-black scrim at alpha `a` — hero/scroll dimming.
 pub const fn scrim(a: f32) -> [f32; 4] {
     [SCRIM_INK[0], SCRIM_INK[1], SCRIM_INK[2], a]
+}
+
+/// The live banner's scrim ink at alpha `a`: `rgba(8,8,10)` of the handoff (SPEC-4), the primitive stop
+/// `NEUTRAL_950`, a hair off black so the banner's ground belongs to the app's neutral family.
+pub const fn live_scrim(a: f32) -> [f32; 4] {
+    [NEUTRAL_950[0], NEUTRAL_950[1], NEUTRAL_950[2], a]
 }
 
 /// Pure-black scrim at alpha `a` — HUD/modal dimming.
@@ -1394,8 +1417,21 @@ pub const PILL_KEYLINE_BG: [f32; 4] = scrim_black(0.55);
 /// Filled metadata chip (the About column's CC/SDH/AD accessibility badges). A COOL tint rather than
 /// plain white at a weight, so a chip reads as a plate rather than as a gap in the panel.
 pub const BADGE_FILL: [f32; 4] = with_a(COOL_150, 0.20);
+/// The player banner's LIVE badge fill, `#ff453a`: a state mark ("this channel is live"), allowed
+/// beside the no-red rule, which is about failure read-outs (owner default, Live TV PR4 / Q4).
+pub const LIVE_BADGE_FILL: [f32; 4] = RED_LIVE;
+/// Ink on [`LIVE_BADGE_FILL`].
+pub const LIVE_BADGE_INK: [f32; 4] = WHITE;
+/// The chip radius of the design system (`--radius-chip`): the filled metadata chip's corner, and the
+/// LIVE badge's.
+pub const RADIUS_CHIP: f32 = 7.0;
 /// No-op texture tint (structural: draw an RGBA texture unmodified).
 pub const TINT_WHITE: [f32; 4] = WHITE;
+/// The brightness the blurred copy a tile draws BEHIND its contained art keeps
+/// ([`crate::art_fit::backdrop_of`], baked into the copy when it is made): the picture's own colours at
+/// 55%, so the whole picture laid on top of it reads as the subject and the backdrop as its ground,
+/// never as two competing pictures. A flat ground ([`CHANNEL_PLATE`]) is drawn as it is, undimmed.
+pub const ART_BACKDROP_DIM: f32 = 0.55;
 
 // ── Review-score marks (detail hero ratings row) ─────────────────────────────
 // These used to be the ONE place the palette borrowed someone else's colour, justified by the
