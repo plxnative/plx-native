@@ -103,10 +103,11 @@ plx_base::dynlib! {
 
 plx_base::dynlib! {
     /// Tizen's key grab (`tizen_keyrouter`): the window claims a key so the TV's own shell does not act on it as
-    /// well. A table of its own: an image without it delivers the keys as before, popup and all.
+    /// well. A table of its own: an image without it delivers the keys as before, popup and all. There is no unset:
+    /// as in flutter-tizen, the grab goes with the window's surface, and EFL's unset waits without bound for the
+    /// key router, which a torn connection never answers.
     ecore_wl2_keygrab: ["libecore_wl2.so.1"] {
         fn ecore_wl2_window_keygrab_set(window: *mut c_void, key: *const c_char, modifiers: c_int, not_modifiers: c_int, priority: c_int, mode: c_int) -> u8;
-        fn ecore_wl2_window_keygrab_unset(window: *mut c_void, key: *const c_char, modifiers: c_int, any_modifiers: c_int) -> u8;
     }
 }
 
@@ -447,8 +448,10 @@ impl Window {
     }
 
     /// Grab the transport keys ([`crate::keys::grabbed`]) TOPMOST, after the show as flutter-tizen does: an ungrabbed
-    /// media key is delivered AND acted on by the TV (the retail "Not Available" popup over a pause). The call is
-    /// synchronous (EFL round-trips to the key router) and its answer is logged per key. HOST THREAD.
+    /// media key is delivered AND acted on by the TV (the retail "Not Available" popup over a pause). Each call
+    /// blocks until the compositor's key router, the seat and the keymap are ready (EFL round-trips without a bound,
+    /// as flutter-tizen relies on). The names it refused (a keysym the set's keymap lacks) are logged in one line.
+    /// HOST THREAD.
     fn grab_media_keys(&self) {
         if !loaded("ecore_wl2_keygrab", ecore_wl2_keygrab::load(None)) {
             return;
@@ -473,13 +476,7 @@ impl Window {
         self.initialised = false;
         // The keyboard's context goes before the window it types into.
         crate::ime::release();
-        if !self.window.is_null() && ecore_wl2_keygrab::load(None).ok() {
-            for name in crate::keys::grabbed() {
-                let key = CString::new(name).unwrap_or_default();
-                // SAFETY: the live window and table; the string outlives the call.
-                unsafe { ecore_wl2_window_keygrab_unset(self.window, key.as_ptr(), 0, 0) };
-            }
-        }
+
         // SAFETY: handles made by `create`, each cleared after use; the tables were live to make them.
         unsafe {
             for handler in self.handlers.drain(..) {

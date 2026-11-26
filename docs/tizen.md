@@ -414,7 +414,7 @@ keys TOPMOST after the window is shown (`BindKeys`, `tizen_window_ecore_wl2.cc`)
 
 `ecore::Window::show` now grabs every transport row of `keys::TABLE` (`keys::grabbed`: Play, Pause, the two Play/Pause toggle
 names `XF86PlayBack` and `XF86AudioPlayPause`, Stop, Rewind, Next, Forward). It uses `ecore_wl2_window_keygrab_set(win, name, 0,
-0, 0, TOPMOST)`, a `dynlib!` table of its own, and the grabs are released at destroy. TOPMOST gives the window the key while it
+0, 0, TOPMOST)`, a `dynlib!` table of its own. As in flutter-tizen there is no unset: the grab goes with the window's surface. TOPMOST gives the window the key while it
 is on top of the stack. The Tizen guide lists no privilege for it; the other modes are "not for third-party applications".
 Navigation keys are not grabbed.
 

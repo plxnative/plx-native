@@ -14,9 +14,10 @@
 //! documented as, or inferred from the Samsung remote's layout, and no run has pressed it. The first
 //! retail key dump replaces this table, and a row that turns out wrong is a wrong row here and nowhere else.
 //!
-//! The table's only reader is [`Decoder::decode`]; the unit test below states each name's expected action
-//! as a literal of its own, so a swapped pair (Play and Pause, Rewind and Left, the two pagers) fails it,
-//! which a test that read the table back through itself could not.
+//! The table has two readers: [`Decoder::decode`] (through [`lookup`]) and [`grabbed`] (the window's key grab).
+//! The unit test below states each name's expected action as a literal of its own, so a swapped pair (Play and
+//! Pause, Rewind and Left, the two pagers) fails it, which a test that read the table back through itself could
+//! not; `every_transport_key_is_grabbed_and_no_navigation_key_is` guards the second reader the same way.
 use plxnative_modules::host::{Action, Edge};
 
 /// How a row got into the table.
