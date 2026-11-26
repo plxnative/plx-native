@@ -116,7 +116,8 @@ pub(super) fn text_of(f: &Frame<'_>, bind: &str) -> Option<String> {
     }
 }
 
-/// The live info panel's summary: the programme, its airing line and its description. The airing line
+/// The live info panel's summary: the programme, its airing line and its description (the package's Info binds for a
+/// live model; the player draws no Info panel on a live channel any more, its banner is `live::words`). The airing line
 /// is worded here, at draw, from the guide's raw begin and end and the frame's `wall` time
 /// (`plx_ui::fmt::airing_line`, the one wording every Live TV surface shares); no wall time (a replay)
 /// is no line, never a guessed one.

@@ -81,6 +81,7 @@ impl PlayerScreen {
             }
             Key::Back | Key::Stop => {
                 if fresh {
+                    self.live.leave();
                     Self::ask(fx, PlayerReq::Exit);
                 }
                 Some(Handled::Yes)

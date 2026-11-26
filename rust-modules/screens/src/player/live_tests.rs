@@ -182,7 +182,7 @@ fn the_art_is_drawn_in_buffering_and_through_the_debounce_but_not_while_playing(
     // Playing: the first frame is up, the art fades and is gone
     let (ps, mut page) = live(101, PlaybackState::Playing);
     frames(&ps, &mut page, 0, 16);
-    assert_eq!(page.live.art, Art::Clear, "a channel already showing a frame never draws the art");
+    assert_eq!(page.live.art, Art::Settled, "a channel already showing a frame never draws the art");
     assert_eq!(page.live.art_alpha(16), 0.0);
     // A press while Playing covers at once, before the Tune is asked, and holds through the window
     down(&ps, &mut page, SDLK_UP, 0, 1_000);
@@ -198,10 +198,28 @@ fn the_art_is_drawn_in_buffering_and_through_the_debounce_but_not_while_playing(
     // its first frame is up: the art fades out and is gone
     let (landed, _) = live(102, PlaybackState::Playing);
     frames(&landed, &mut page, asked_at + 816, asked_at + 900);
-    assert!(matches!(page.live.art, Art::Fading { .. } | Art::Clear), "{:?}", page.live.art);
+    assert!(matches!(page.live.art, Art::Fading { .. } | Art::Settled), "{:?}", page.live.art);
     frames(&landed, &mut page, asked_at + 916, asked_at + 1_500);
-    assert_eq!(page.live.art, Art::Clear);
+    assert_eq!(page.live.art, Art::Settled);
     assert!(page.live.zap.is_idle());
+}
+
+/// **A rebuffer is not a start-up.** A channel that has shown its frame and then stalls (the session reports Buffering
+/// again) keeps the frozen picture: the art does not come back over it and the banner is not raised a second time.
+#[test]
+fn a_stall_after_the_first_frame_draws_no_art_and_no_banner() {
+    let _g = plx_base::testlock::serial();
+    let (mut ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    let late = 20_000;
+    frames(&ps, &mut page, late - 32, late);
+    assert_eq!((page.live.art, page.live.banner_alpha(late)), (Art::Settled, 0.0), "settled and quiet");
+    derive_state(&mut ps, PlaybackState::Buffering);
+    frames(&ps, &mut page, late + 16, late + 800);
+    assert_eq!((page.live.art, page.live.art_alpha(late + 800)), (Art::Settled, 0.0), "the stall draws no art");
+    derive_state(&mut ps, PlaybackState::Playing);
+    frames(&ps, &mut page, late + 816, late + 1_200);
+    assert_eq!(page.live.banner_alpha(late + 1_200), 0.0, "the stall's end raises no banner");
 }
 
 /// **A single BACK leaves, whatever the phase** (seen on the television: the first BACK after a tune did not).
@@ -221,8 +239,14 @@ fn a_single_back_leaves_at_every_phase() {
         // the debounce
         down(&ps, &mut page, SDLK_UP, 0, 1_000);
         assert_eq!(down(&ps, &mut page, 0, wcode, 1_100), (Handled::Yes, vec![PlayerReq::Exit]), "debounce, wcode {wcode}");
+        // …and the debounce the BACK interrupted closes on nothing: no tune follows the exit
+        assert_eq!(frames(&ps, &mut page, 1_116, 2_500), Vec::<PlayerReq>::new(), "no tune after a BACK, wcode {wcode}");
+        assert!(page.live.zap.is_idle());
         // the tune asked, not landed
-        let (asked_at, _) = until_asked(&ps, &mut page, 1_100);
+        let (ps, mut page) = live(101, PlaybackState::Playing);
+        frames(&ps, &mut page, 0, 64);
+        down(&ps, &mut page, SDLK_UP, 0, 1_000);
+        let (asked_at, _) = until_asked(&ps, &mut page, 1_016);
         assert!(matches!(page.live.zap, Zap::Tuning { .. }));
         assert_eq!(down(&ps, &mut page, 0, wcode, asked_at + 8), (Handled::Yes, vec![PlayerReq::Exit]), "tuning, wcode {wcode}");
         // …and the release of that press is swallowed, not a second exit

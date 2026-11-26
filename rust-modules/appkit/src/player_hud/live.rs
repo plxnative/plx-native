@@ -175,12 +175,8 @@ pub fn draw(p: Painter, layout: &LiveLayout, words: &Words, alpha: f32, measure:
         at(GAP);
         let r = at(PROGRESS_H);
         let track = Rect::new(r.x, r.y, layout.progress_w, PROGRESS_H);
-        p.rrect(track, PROGRESS_H * 0.5, PROGRESS_H * 0.5, theme::RESUME_TRACK);
-        // a fill narrower than its own radius would draw as a sliver of the wrong shape: it grows from a dot
-        let fill_w = (track.w * frac.clamp(0.0, 1.0)).max(if frac > 0.0 { PROGRESS_H } else { 0.0 });
-        if fill_w > 0.0 {
-            p.rrect(Rect::new(track.x, track.y, fill_w, PROGRESS_H), PROGRESS_H * 0.5, PROGRESS_H * 0.5, theme::RESUME_FILL);
-        }
+        // the shared played-progress rail: the fill and the track are split at the fraction and never share a pixel
+        plx_ui::widgets::progress_bar(p, track, PROGRESS_H * 0.5, PROGRESS_H, frac);
     }
     if let Some(next) = &words.next {
         at(GAP);

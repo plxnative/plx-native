@@ -679,7 +679,7 @@ impl PlayerScreen {
     /// Is the transport actually DRAWN this frame? Whenever the captions lift for it, unless the
     /// repair alert has the screen.
     fn hud_drawn(&self, ps: &plx_media::route::PlaybackSession, now: u32) -> bool {
-        // a live channel has no transport: its banner is drawn by [`Self::draw_live`]
+        // a live channel has no transport: its banner is drawn by [`Self::draw_live_banner`]
         !plx_media::route::is_live(ps) && self.subs_lift(ps, now) && !self.repair_alert.visible()
     }
 }
@@ -3052,7 +3052,7 @@ impl LogicalState for PlayerScreen {
         });
         c.bool(self.repair_alert.is_open()).bool(self.repair_alert.choice() == plx_ui::decision_alert::Choice::Destructive).u32(self.repair_scroll);
         c.u32(match self.live.zap { zap::Zap::Idle => 0, zap::Zap::Pending { .. } => 1, zap::Zap::Tuning { .. } => 2 })
-            .u32(match self.live.art { zap::Art::Clear => 0, zap::Art::Covering => 1, zap::Art::Fading { .. } => 2 });
+            .u32(match self.live.art { zap::Art::Clear => 0, zap::Art::Covering => 1, zap::Art::Fading { .. } => 2, zap::Art::Settled => 3 });
         c.option(match self.live.banner { zap::Banner::Hidden => None, zap::Banner::Shown { until } => Some(until) }.as_ref(), |c, until| { c.u32(*until); });
     }
     fn probe(&self, out: &mut String) {

@@ -111,30 +111,39 @@ impl Zap {
 /// The art ground's phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Art {
+    /// nothing drawn, and the stream has shown no frame yet since the tune (the state a page opens in)
     #[default]
     Clear,
     /// the picture is wanted: drawn whole
     Covering,
     /// the picture is no longer wanted: fading out since `since`
     Fading { since: u32 },
+    /// a frame has been shown since the tune: nothing drawn, and a later stall (a rebuffer) never brings the art
+    /// back; only a zap does
+    Settled,
 }
 
 impl Art {
-    /// One step: `wanted` is whether a picture must stand over the hole now (a zap in flight, or a live
-    /// stream with no frame yet).
-    pub fn step(&mut self, wanted: bool, now: u32) {
-        *self = match (*self, wanted) {
-            (_, true) => Art::Covering,
-            (Art::Covering, false) => Art::Fading { since: now },
-            (Art::Fading { since }, false) if now.wrapping_sub(since) >= ART_FADE_MS => Art::Clear,
-            (other, false) => other,
+    /// One step: `zapping` is whether a zap is in flight (its art stands over the hole whatever the stream says);
+    /// `no_frame` is whether the session has no picture on the panel (a stream still starting, or stalled). Only a
+    /// stream that has NEVER shown a frame since the tune is covered for lacking one: a stall mid-playback is the
+    /// frozen picture's, not the art's.
+    pub fn step(&mut self, zapping: bool, no_frame: bool, now: u32) {
+        *self = match (*self, zapping, no_frame) {
+            (_, true, _) => Art::Covering,
+            (Art::Clear, false, true) => Art::Covering,
+            (Art::Clear, false, false) => Art::Settled,
+            (Art::Covering, false, true) => Art::Covering,
+            (Art::Covering, false, false) => Art::Fading { since: now },
+            (Art::Fading { since }, false, _) if now.wrapping_sub(since) >= ART_FADE_MS => Art::Settled,
+            (other, false, _) => other,
         };
     }
 
     /// How much of the picture is drawn at `now`: 1 covering, a linear fade, 0 clear.
     pub fn alpha(self, now: u32) -> f32 {
         match self {
-            Art::Clear => 0.0,
+            Art::Clear | Art::Settled => 0.0,
             Art::Covering => 1.0,
             Art::Fading { since } => (1.0 - now.wrapping_sub(since) as f32 / ART_FADE_MS as f32).clamp(0.0, 1.0),
         }
@@ -177,9 +186,14 @@ impl Live {
     pub fn press(&mut self, dir: i32, o: &Observed<'_>) {
         self.zap.step(ZapEvent::Step { dir, lineup: o.lineup, playing: o.playing, now: o.now });
         if !self.zap.is_idle() {
-            self.art.step(true, o.now);
+            self.art.step(true, o.no_frame, o.now);
             self.reveal(o.now);
         }
+    }
+
+    /// BACK / STOP: the viewer is leaving, so no tune may follow the Exit the same frame the debounce would have closed.
+    pub fn leave(&mut self) {
+        self.zap = Zap::Idle;
     }
 
     /// Raise the banner for [`live::SHOW_MS`] more (Left, Right, OK, a tune, a press).
@@ -192,8 +206,7 @@ impl Live {
     pub fn tick(&mut self, o: &Observed<'_>) -> ZapEffect {
         self.zap.step(ZapEvent::Session { playing: o.playing, framed: !o.no_frame, now: o.now });
         let was_covering = self.art == Art::Covering;
-        let wanted = !self.zap.is_idle() || o.no_frame;
-        self.art.step(wanted, o.now);
+        self.art.step(!self.zap.is_idle(), o.no_frame, o.now);
         // compared in place: a frame allocates nothing, only a tune stores the new identity
         let changed = match (o.playing, &self.seen) {
             (Some(c), Some((sid, dvr, key))) => c.sid != *sid || c.dvr != *dvr || c.channel != *key,
@@ -207,7 +220,7 @@ impl Live {
             }
         }
         // the first frame of a tune: the banner's four seconds start when the picture does
-        if was_covering && !wanted {
+        if was_covering && self.art != Art::Covering {
             self.reveal(o.now);
         }
         self.zap.step(ZapEvent::Tick { now: o.now })
@@ -238,7 +251,7 @@ impl Live {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         let mut mix = |v: u64| h = (h ^ v).wrapping_mul(0x0100_0000_01b3);
         mix(match self.zap { Zap::Idle => 0, Zap::Pending { .. } => 1, Zap::Tuning { .. } => 2 });
-        mix(match self.art { Art::Clear => 0, Art::Covering => 1, Art::Fading { .. } => 2 });
+        mix(match self.art { Art::Clear => 0, Art::Covering => 1, Art::Fading { .. } => 2, Art::Settled => 3 });
         let alpha = self.banner_alpha(now);
         mix(match self.banner { Banner::Hidden => 0, Banner::Shown { .. } => 1 + u64::from(alpha > 0.0) });
         // a fade is a frame per tick for as long as it runs; its start is the deadline passing
@@ -351,16 +364,26 @@ mod tests {
     fn the_art_covers_from_the_first_press_and_fades_when_no_longer_wanted() {
         let mut art = Art::default();
         assert_eq!(art.alpha(0), 0.0);
-        art.step(true, 10);
+        art.step(true, false, 10);
         assert_eq!((art, art.alpha(10)), (Art::Covering, 1.0));
-        art.step(false, 100);
+        art.step(false, false, 100);
         assert_eq!(art, Art::Fading { since: 100 });
         assert!(art.alpha(100 + ART_FADE_MS / 2) > 0.4 && art.alpha(100 + ART_FADE_MS / 2) < 0.6);
-        art.step(false, 100 + ART_FADE_MS);
-        assert_eq!(art, Art::Clear);
+        art.step(false, false, 100 + ART_FADE_MS);
+        assert_eq!(art, Art::Settled);
+        // a stall after the first frame is not the art's: no frame, no zap, still settled
+        art.step(false, true, 5_000);
+        assert_eq!((art, art.alpha(5_000)), (Art::Settled, 0.0));
+        // …but a zap covers again
+        art.step(true, false, 6_000);
+        assert_eq!(art, Art::Covering);
         // wanted again mid-fade: back to whole at once
         let mut art = Art::Fading { since: 5 };
-        art.step(true, 50);
+        art.step(true, false, 50);
+        assert_eq!(art, Art::Covering);
+        // a stream that has shown nothing yet is covered for lacking a frame
+        let mut art = Art::default();
+        art.step(false, true, 0);
         assert_eq!(art, Art::Covering);
     }
 }
