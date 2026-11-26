@@ -110,7 +110,8 @@ impl ArtFit {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BackdropSpec {
     /// Texels on the copy's short side; the long side keeps the picture's aspect, at most
-    /// [`LONG_SIDE_RATIO`] times as long.
+    /// [`LONG_SIDE_RATIO`] times as long. 0 asks for NO copy ([`backdrop_of`] makes none of 0 texels), which
+    /// is how a request wants only the ink box ([`BackdropSpec::INK`]).
     pub short_side: u8,
     /// A picture within [`POSTER_FIT_TOLERANCE`] of this shape (`w`, `h`) is one the tile covers
     /// whatever the copy, so it is given none; `None` makes a copy of every picture.

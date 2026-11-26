@@ -377,8 +377,10 @@ pub mod logo {
     pub const CARD_BOTTOM_INSET: f32 = 48.0;
     /// A Live TV channel's logo on its plate ([`CHANNEL_PLATE`](super::CHANNEL_PLATE), 250x140): the
     /// ink area an ordinary wordmark is sized to. Chosen so a 6.5:1 wordmark reaches the width limit
-    /// and a 2.6:1 mark stands 61 px tall, which is where the handoff's LTV-17 board puts them (its own
-    /// per-logo sizes follow an ink-area measure of each source, which a texture's full size is not).
+    /// and a 2.6:1 mark stands 61 px tall, which is where the handoff's LTV-17 board puts them. The
+    /// board's per-logo sizes follow an ink-area measure of each source, and so does the plate now: it is
+    /// fitted to the logo's INK box (`art_fit::ink_of`), not its canvas (`hero_logo::fit_ink`). The number
+    /// was chosen against the board's two sizes and is unchanged by that.
     pub const CHANNEL_AREA: f32 = 10_000.0;
     /// The channel logo's slot is this tall, and no mark is taller (the handoff's 218 x 84 box).
     pub const CHANNEL_H_MAX: f32 = 84.0;

@@ -31,7 +31,8 @@ use std::os::raw::c_int;
 
 /// The size a channel's logo is asked for at: twice the 218 x 84 slot it is drawn in, the same margin
 /// the other art keeps for the focus pop and the TV's own scaling. The request COVERS this box, so the
-/// texture keeps the logo's own aspect ([`hero_logo::fit`] contains it again).
+/// texture keeps the logo's own aspect (and its canvas: [`hero_logo::fit_ink`] contains the mark's ink box
+/// in the slot, whatever the margin around it).
 pub const LOGO_RES: (c_int, c_int) = (436, 168);
 
 /// The number's inset from the plate's top-left corner (the handoff's 14 / 10).
