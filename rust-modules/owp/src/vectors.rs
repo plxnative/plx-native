@@ -292,6 +292,7 @@ fn every_vendored_table_has_a_runner() {
         .collect();
     vendored.sort();
     let mut run: Vec<String> = RUNNERS.iter().map(|(name, _)| (*name).to_owned()).collect();
+    run.push("party".to_owned());
     run.sort();
     assert_eq!(vendored, run);
 }

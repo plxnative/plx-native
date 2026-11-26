@@ -13,3 +13,6 @@ pub mod timeline;
 
 #[cfg(test)]
 mod vectors;
+
+#[cfg(test)]
+mod party_trace;
