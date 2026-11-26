@@ -20,6 +20,9 @@ namespace PlxHost
 
         // The probe script flips this in its build copy; the committed value keeps the shipping behaviour.
         internal const ProbeMode Mode = ProbeMode.Off;
+        // The TV-only player_set_video_frame_buffer_type(player, int) (exported by this firmware's libcapi-media-player, absent from the public
+        // headers; its values are not documented). -1 skips the call.
+        internal const int BufferType = -1;
 
         internal const string ToolLib = "libcapi-media-tool.so.0";
         internal const string TbmLib = "libtbm.so.1";
@@ -32,6 +35,9 @@ namespace PlxHost
 
         [DllImport(MediaPlayerNative.MediaLib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int player_set_display(IntPtr player, int type, IntPtr display);
+
+        [DllImport(MediaPlayerNative.MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_set_video_frame_buffer_type(IntPtr player, int type);
 
         [DllImport(MediaPlayerNative.MediaLib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int player_set_media_packet_video_frame_decoded_cb(IntPtr player, PacketCallback cb, IntPtr userData);
@@ -97,6 +103,11 @@ namespace PlxHost
                         PlxApp.Log("frameprobe: player_set_ecore_wl_display(NONE, window) rc=" + d);
                     }
                 }
+            }
+            if (BufferType >= 0)
+            {
+                int b = player_set_video_frame_buffer_type(player, BufferType);
+                PlxApp.Log("frameprobe: player_set_video_frame_buffer_type(" + BufferType + ") rc=" + b);
             }
             int rc = player_set_media_packet_video_frame_decoded_cb(player, Cb, IntPtr.Zero);
             PlxApp.Log("frameprobe: mode " + Mode + ": player_set_media_packet_video_frame_decoded_cb rc=" + rc);
