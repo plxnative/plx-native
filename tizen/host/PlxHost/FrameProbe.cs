@@ -23,7 +23,9 @@ namespace PlxHost
 
         internal const string ToolLib = "libcapi-media-tool.so.0";
         internal const string TbmLib = "libtbm.so.1";
-        internal const int PLAYER_DISPLAY_TYPE_NONE = 2;
+        // 4 since Tizen 4.0 (OVERLAY 0, EVAS 3, NONE 4; flutter-tizen tizen_interop 6.0 bindings). The 3.0 header's 2 is a deprecated value this
+        // build converts and then refuses with INVALID_PARAMETER (-22), measured.
+        internal const int PLAYER_DISPLAY_TYPE_NONE = 4;
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate void PacketCallback(IntPtr pkt, IntPtr userData);
