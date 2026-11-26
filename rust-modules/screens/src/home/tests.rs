@@ -4086,7 +4086,7 @@ fn deliver_hero_art(path: &str) {
     });
     plx_ui::tex::accept(plx_ui::tex::PosterReady {
         key: plx_machine::machine::PosterKey(key as u32),
-        result: Ok(plx_ui::tex::Decoded { w: 16, h: 9, rgba: vec![0; 16 * 9 * 4].into_boxed_slice() }),
+        result: Ok(plx_ui::tex::Decoded { w: 16, h: 9, rgba: vec![0; 16 * 9 * 4].into_boxed_slice(), backdrop: None }),
     });
     let mut budget = plx_ui::frame::Budget::new();
     budget.begin_frame(0);

@@ -1396,6 +1396,10 @@ pub const PILL_KEYLINE_BG: [f32; 4] = scrim_black(0.55);
 pub const BADGE_FILL: [f32; 4] = with_a(COOL_150, 0.20);
 /// No-op texture tint (structural: draw an RGBA texture unmodified).
 pub const TINT_WHITE: [f32; 4] = WHITE;
+/// The tint of the blurred copy a tile draws BEHIND its contained art ([`crate::art_fit::ArtFit`]): the
+/// picture's own colours at 55% brightness, so the whole picture laid on top of it reads as the subject
+/// and the backdrop as its ground, never as two competing pictures.
+pub const ART_BACKDROP_TINT: [f32; 4] = dim(TINT_WHITE, 0.55);
 
 // ── Review-score marks (detail hero ratings row) ─────────────────────────────
 // These used to be the ONE place the palette borrowed someone else's colour, justified by the

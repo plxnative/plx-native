@@ -68,3 +68,56 @@ fn art_at_its_tiles_aspect_is_untouched_and_a_poster_in_a_landscape_tile_is_crop
     // an undecoded texture answers the whole window, never a NaN
     assert_eq!(art_uv(&headshot("k"), 0.0, 0.0, cast_circle(1.0)), plx_gfx::gfx::UV_FULL);
 }
+
+/// **Only Live TV's programme posters contain their art.** Every other row's style keeps the cover
+/// fit it always had (Home, Library, Search, the person page, the strips of stills); the contained
+/// fit is a row's declaration, never a global.
+#[test]
+fn only_the_programme_poster_style_contains_its_art() {
+    use crate::art_fit::ArtFit;
+    assert_eq!(RowStyle::PROGRAMME.fit, ArtFit::ContainOnBlur);
+    assert!(RowStyle { fit: ArtFit::Cover, ..RowStyle::PROGRAMME } == RowStyle::HOME, "otherwise HOME's tile and motion");
+    for style in [RowStyle::HOME, RowStyle::CHANNEL, RowStyle::EPISODE, RowStyle::STILL, RowStyle::CAST, RowStyle::PROFILES, crate::poster_grid::STYLE] {
+        assert_eq!(style.fit, ArtFit::Cover);
+    }
+}
+
+/// The picture and its blurred copy come back from ONE resolve: `resolve_card_art` hands the tile the
+/// copy's texture beside the picture's, and a picture that arrived without one answers 0.
+#[test]
+fn a_card_resolves_the_blurred_copy_with_its_picture() {
+    use crate::tex::{Decoded, PosterReady, Source, Warm};
+    use plx_machine::machine::PosterKey;
+    struct Always;
+    impl Source for Always {
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Option<PosterKey> { Some(PosterKey(7)) }
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Warm { Warm::Known }
+        fn logo(&self, _: u16, _: &str) -> Option<PosterKey> { None }
+        fn logo_warm(&self, _: u16, _: &str) -> Warm { Warm::Known }
+        fn unresident(&self, _: PosterKey, _: bool) {}
+        fn idle(&self) -> bool { true }
+    }
+    struct Up(u32);
+    impl crate::tex::Uploader for Up {
+        fn upload(&mut self, d: &Decoded) -> crate::tex::Tex { self.0 += 1; crate::tex::Tex { id: self.0, w: d.w, h: d.h } }
+        fn warm(&mut self, _: crate::tex::Tex) {}
+        fn free(&mut self, _: crate::tex::Tex) {}
+    }
+    static SOURCE: Always = Always;
+    let _guard = plx_base::testlock::serial();
+    crate::tex::install(&SOURCE);
+    for (w, h, expect_copy) in [(375u16, 375u16, true), (250, 375, false)] {
+        crate::tex::reset_for_test(usize::MAX);
+        let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None };
+        crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(picture.with_backdrop()) });
+        let mut budget = crate::frame::Budget::new();
+        budget.begin_frame(0);
+        let mut present = plx_machine::present::Present::new();
+        let mut handle = plx_machine::machine::PresentHandle::of(&mut present);
+        crate::tex::prepare(&mut budget, &mut Up(10), &mut handle, || 0);
+        let facts = crate::tile::TileFacts { owner: 880_000 + w as usize, thumb: "/library/metadata/7/thumb/1", ..Default::default() };
+        let image = resolve_card_art(Painter::root(), Rect::new(0.0, 0.0, 250.0, 375.0), &Art::Poster(Some(facts)));
+        assert_eq!((image.tex, image.w, image.h), (11, w as f32, h as f32), "{w}x{h}");
+        assert_eq!(image.backdrop != 0, expect_copy, "{w}x{h}: {image:?}");
+    }
+}

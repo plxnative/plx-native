@@ -495,6 +495,19 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
     }
 }
 
+/// **The posters contain their art on a blurred copy; the plates do not read the fit.** On now and the
+/// Channels shelf stand on `RowStyle::PROGRAMME` (owner 2026-11-26, "square should fit with blurred bg",
+/// over the cover-crop default of #1557), Recent's plates on the cover-fit `CHANNEL` style, and a 2:3
+/// poster draws as it does on Home (`art_fit`'s tests pin the placement itself).
+#[test]
+fn the_poster_rows_contain_their_art_and_the_plates_keep_the_cover_fit() {
+    use plx_ui::art_fit::ArtFit;
+    assert_eq!(NOW_STYLE.fit, ArtFit::ContainOnBlur);
+    assert_eq!(RECENT_STYLE.fit, ArtFit::Cover);
+    let tile = |s: &RowStyle| (s.w, s.h, s.gap, s.focus_scale, s.radius);
+    assert_eq!(tile(&NOW_STYLE), tile(&RowStyle::HOME), "the tile, its pitch and its pop are Home's");
+}
+
 /// Recent only: a stored Recent that holds every channel, with no programme on, is one row of plates.
 #[test]
 fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {

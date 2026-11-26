@@ -215,6 +215,12 @@ struct Pslot {
     /// cooldown is armed ([`PosterSource::unresident`]) or the slot's eviction history is
     /// otherwise cleared (recovery, recycle) — a new deadline is something to wake for again.
     evict_wake_sent: bool,
+    /// This key was asked for at the poster tile's box ([`is_poster_request`]): its decoded picture
+    /// is made a blurred copy ([`plx_ui::art_fit::backdrop_of`]) for a tile that contains its art
+    /// to draw behind it. Set at the claim, and a property of the key (the request box is part of
+    /// it), so it never changes for a slot's life; logos, stills, backdrops, headshots and the
+    /// app's own baked art are never asked for at it and never pay for a copy.
+    contain: bool,
 }
 impl Pslot {
     const ZERO: Pslot = Pslot {
@@ -239,7 +245,15 @@ impl Pslot {
         evict_attempts: 0,
         evict_cooldown_until: None,
         evict_wake_sent: false,
+        contain: false,
     };
+}
+
+/// Is `(w, h, png)` the request of a poster tile's art ([`plx_ui::widgets::POSTER_RES`], a JPEG)?
+/// What decides a decoded picture is given a blurred copy: only art a poster tile draws can be
+/// contained over one.
+fn is_poster_request(w: c_int, h: c_int, png: bool) -> bool {
+    !png && (w, h) == plx_ui::widgets::POSTER_RES
 }
 
 /// How long a slot waits after its `n`th transient failure: 1 s, 2 s, 4 s, 8 s, 16 s, then 30 s
@@ -1090,6 +1104,12 @@ type Hit = Option<PosterKey>;
 /// outside that scope remain eligible.
 /// A refusal claims no source slot; a follow-up present samples placement again.
 fn lookup(srv: ServerId, key_s: &str, touch: Touch) -> (Hit, Warm) {
+    lookup_art(srv, key_s, touch, false)
+}
+
+/// [`lookup`] for a request whose picture may be contained over a blurred copy of itself
+/// (`contain`: [`is_poster_request`]), which the claim records on its slot ([`Pslot::contain`]).
+fn lookup_art(srv: ServerId, key_s: &str, touch: Touch, contain: bool) -> (Hit, Warm) {
     // An empty key names no request (an unknown server, or no art), so it claims no slot.
     // `Warm::Known` (not `Full`) so a prefetch loop walks on to the
     // next candidate instead of retiring this frame's one warm here.
@@ -1341,6 +1361,7 @@ fn lookup(srv: ServerId, key_s: &str, touch: Touch) -> (Hit, Warm) {
         set_key(s, key_s);
         s.srv = srv; // captured HERE, on the main thread — the worker asks no one which server
         s.state = P_WANT;
+        s.contain = contain;
         s.visible = touch == Touch::Draw;
         s.ahead = touch == Touch::Ahead;
         s.use_ = use_;
@@ -1382,13 +1403,14 @@ impl tex::Source for PosterSource {
     fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Option<PosterKey> {
         let sid = ServerId::from_raw(srv);
         let key = built_key(sid, path, w, h, png)?;
+        let contain = is_poster_request(w, h, png);
         if !trace::armed() {
-            return lookup(sid, &key, Touch::Draw).0;
+            return lookup_art(sid, &key, Touch::Draw, contain).0;
         }
         let id = trace::draw_id(srv, path, w, h, png);
         let kid = trace::key_id(srv, key.as_bytes());
         trace::set_current(id);
-        let hit = lookup(sid, &key, Touch::Draw).0;
+        let hit = lookup_art(sid, &key, Touch::Draw, contain).0;
         let gate = match plx_ui::card_motion::verdict() {
             Some(plx_ui::card_motion::Verdict::Unknown) => trace::Gate::Unknown,
             Some(plx_ui::card_motion::Verdict::Moving) => trace::Gate::Moving,
@@ -1409,7 +1431,7 @@ impl tex::Source for PosterSource {
         match built_key(srv, path, w, h, png) {
             Some(k) => {
                 if trace::armed() { trace::set_current(trace::draw_id(srv.raw(), path, w, h, png)); }
-                let r = lookup(srv, &k, Touch::Warm).1;
+                let r = lookup_art(srv, &k, Touch::Warm, is_poster_request(w, h, png)).1;
                 if trace::armed() { trace::set_current(0); }
                 r
             }
@@ -1421,7 +1443,7 @@ impl tex::Source for PosterSource {
     /// ([`ahead_victim`]), which is what keeps a screenful of lookahead from evicting itself.
     fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
         let srv = ServerId::from_raw(srv);
-        built_key(srv, path, w, h, png).map_or(Warm::Known, |k| lookup(srv, &k, Touch::Ahead).1)
+        built_key(srv, path, w, h, png).map_or(Warm::Known, |k| lookup_art(srv, &k, Touch::Ahead, is_poster_request(w, h, png)).1)
     }
     fn logo(&self, srv: u16, logo: &str) -> Option<PosterKey> {
         logo_probe(ServerId::from_raw(srv), logo)
@@ -1582,7 +1604,7 @@ pub(crate) fn begin_frame() -> Vec<ResourceOutcome> {
 /// microseconds) so the library owns what it uploads.
 pub(crate) fn drain_decoded() {
     loop {
-        let (idx, px, w, h, current) = {
+        let (idx, px, w, h, current, contain) = {
             let mut g = store();
             let Some(i) = (0..PT_CAP).find(|&i| g.slots[i].state == P_DECODED) else {
                 break;
@@ -1595,7 +1617,7 @@ pub(crate) fn drain_decoded() {
             // Retain the decoded-byte charge until tex::accept publishes its pending bytes.
             // A brief double charge is safe; a gap would let the workers over-admit decodes.
             if !current { s.state = P_FAILED; }
-            (i, px, w, h, current)
+            (i, px, w, h, current, s.contain)
         };
         if !current {
             if px != 0 { img::img_free(px as *mut c_uchar); }
@@ -1607,11 +1629,17 @@ pub(crate) fn drain_decoded() {
             // SAFETY: the worker decoded exactly w*h RGBA bytes at `px` (img::img_decode_rgba's
             // contract) and handed the pointer over under the lock; it is freed right below.
             let rgba: Box<[u8]> = unsafe { std::slice::from_raw_parts(px as *const u8, n) }.into();
-            Ok(Decoded {
+            let picture = Decoded {
                 w: w as u16,
                 h: h as u16,
                 rgba,
-            })
+                backdrop: None,
+            };
+            // The blurred copy a tile that contains its art draws behind it: made here, once, for art
+            // asked for at the poster tile's box ([`Pslot::contain`]) from the pixels just copied
+            // (`art_fit::backdrop_of`: a few thousand taps and ~1-2 KB), and carried with the
+            // picture into the cache.
+            Ok(if contain { picture.with_backdrop() } else { picture })
         } else {
             Err(PosterError::Decode)
         };
@@ -2624,6 +2652,34 @@ mod tests {
         store().slots = [Pslot::ZERO; PT_CAP];
     }
 
+    /// **Only art asked for at the poster tile's box is given a blurred copy.** The claim records it
+    /// on the slot, whatever the touch (a draw, a warm, a lookahead), so `drain_decoded` pays for a
+    /// copy of a poster-tile request and of nothing else (a still, a hero logo, a backdrop, a
+    /// headshot, a PNG).
+    #[test]
+    fn only_a_poster_tile_request_is_marked_for_a_blurred_copy() {
+        use plx_ui::widgets::POSTER_RES;
+        assert!(is_poster_request(POSTER_RES.0, POSTER_RES.1, false));
+        assert!(!is_poster_request(POSTER_RES.0, POSTER_RES.1, true), "a PNG is a logo or a cut-out");
+        for (w, h) in [(420, 236), (600, 240), (300, 300), (1280, 720), (250, 140)] {
+            assert!(!is_poster_request(w, h, false), "{w}x{h}");
+        }
+        let (_fresh, sid, _) = one_server();
+        plx_ui::card_motion::begin_frame(crate::app::clock::now());
+        for (case, (touch, contain)) in [(Touch::Draw, true), (Touch::Warm, true), (Touch::Ahead, true), (Touch::Draw, false)].into_iter().enumerate() {
+            let key = key_for(sid, "/library/metadata/42/thumb", POSTER_RES.0, POSTER_RES.1, 0);
+            {
+                let mut g = store();
+                g.slots = [Pslot::ZERO; PT_CAP];
+                g.frame = 1;
+            }
+            lookup_art(sid, &key, touch, contain);
+            let slot = store().slots.iter().position(|s| s.state == P_WANT).expect("the request claimed a slot");
+            assert_eq!(store().slots[slot].contain, contain, "case {case}");
+        }
+        store().slots = [Pslot::ZERO; PT_CAP];
+    }
+
     /// The store's precondition, asserted where it actually lives: [`lookup`] claims no slot for
     /// an empty key (no request could be built), and length is no part of the answer.
     #[test]
@@ -2831,6 +2887,7 @@ mod tests {
                 w: 2,
                 h: 2,
                 rgba: vec![0; BYTES].into_boxed_slice(),
+                backdrop: None,
             }),
         };
         tex::accept(decoded(PosterKey(0)));
@@ -2974,7 +3031,7 @@ mod tests {
 
         let decoded = |key| PosterReady {
             key,
-            result: Ok(Decoded { w: 2, h: 2, rgba: vec![0; BYTES].into_boxed_slice() }),
+            result: Ok(Decoded { w: 2, h: 2, rgba: vec![0; BYTES].into_boxed_slice(), backdrop: None }),
         };
         let mut budget = plx_ui::frame::Budget::new();
         let mut present = plx_machine::present::Present::new();

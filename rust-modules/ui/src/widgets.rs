@@ -2,6 +2,7 @@
 //! Button, CircleButton, TabPill, TransportButton, PageDots, Badge, plus the shared art-card
 //! core (`card`/`draw_card`) and the poster-resolve helper. (Multi-line text wrapping
 //! now lives in the `TextView` primitive in `text_view.rs`.)
+use crate::art_fit::{place, ArtFit, Placement};
 use crate::hstack::{Align as StackAlign, HStack, Item as HItem};
 use crate::vstack::{Anchor as VAnchor, VStack};
 use crate::label::{HAlign, Label, VAlign};
@@ -935,12 +936,15 @@ pub struct ArtImage {
     pub tex: u32,
     pub w: f32,
     pub h: f32,
+    /// The texture of the picture's blurred copy ([`crate::tex::Decoded::backdrop`]) when it came
+    /// with one, else 0: what a tile that CONTAINS its art ([`crate::art_fit::ArtFit`]) draws behind it.
+    pub backdrop: u32,
     pub shown: f32,
 }
 
 impl ArtImage {
     /// No texture: the skeleton (or ground) is the whole picture.
-    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, shown: 1.0 };
+    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, backdrop: 0, shown: 1.0 };
 }
 
 /// A not-yet-loaded skeleton falls back to a rimmed fill (no shadow until the art arrives).
@@ -958,7 +962,7 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |q| resolve_tex_wh_on(q.srv, q.path, q.w, q.h, c_int::from(q.png)));
+    let crate::tex::ArtTex { id: tex, w, h, backdrop } = card_art_request(art).map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
@@ -967,7 +971,7 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
         }
     }
     let shown = admission.as_ref().map_or(1.0, |scope| scope.arrival(tex != 0));
-    ArtImage { tex, w, h, shown }
+    ArtImage { tex, w, h, backdrop, shown }
 }
 
 /// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, and whether
@@ -1038,6 +1042,17 @@ pub fn card_named(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad
 #[allow(clippy::too_many_arguments)]
 pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad: f32, focused: bool,
     scale: f32, f: f32, led: Option<ArtImage>) {
+    card_fitted(p, frame, art, fan_name, rad, focused, scale, f, led, ArtFit::Cover)
+}
+
+/// [`card_named_led`] for a row that declares how its art meets the tile ([`RowStyle::fit`], which
+/// `card_row`'s tile draws pass). Only a poster's art is fitted: [`ArtFit::ContainOnBlur`] contains a
+/// picture that is not within [`crate::art_fit::POSTER_FIT_TOLERANCE`] of the tile's shape over its own
+/// blurred copy ([`crate::art_fit::place`]); every other art, and a poster that came without a
+/// copy, is covered as it always was.
+#[allow(clippy::too_many_arguments)]
+pub fn card_fitted(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad: f32, focused: bool,
+    scale: f32, f: f32, led: Option<ArtImage>, fit: ArtFit) {
     // Text prewarming visits an offscreen page. This leaf has no text: starting
     // image work here would bypass on-screen admission, and pollute its history.
     if p.is_recording() { return; }
@@ -1058,7 +1073,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             // also re-pointed `current`; the moment that stopped, the Library grid of a friend's
             // library drew skeletons for most tiles and OUR films for the few ratingKeys that
             // happen to collide — both servers number from 1, so collisions are the normal case.
-            let ArtImage { tex: t, w: tw, h: th, .. } = image;
+            let ArtImage { tex: t, w: tw, h: th, backdrop, .. } = image;
             if let Some(name) = neutral_collection_name(m.as_ref()) {
                 // A collection with no artwork of its own: nothing will ever resolve, so a skeleton
                 // would read as loading forever. It wears its mark and name instead, and no state
@@ -1068,7 +1083,17 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             }
             if t != 0 {
                 if shown < 1.0 { crate::placeholder::skeleton_under(p, r, rad); }
-                pa.tex_carded(t, art_uv(&art, tw, th, r), r, rad, theme::TINT_WHITE, f);
+                match place(fit, art_crop(&art), tw, th, r, backdrop != 0) {
+                    Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),
+                    // The tile's one card pass (rounded coverage, shadow, sheen, pop) is the blurred
+                    // copy's, over the whole tile; the picture is laid whole on it with square corners:
+                    // it touches the tile only along straight edges (a square or 16:9 never reaches a
+                    // corner, and `place` covers anything near enough to the tile's shape to).
+                    Placement::Contained { inner, backdrop_uv } => {
+                        pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::ART_BACKDROP_TINT, f);
+                        pa.tex(t, inner, 0.0, theme::TINT_WHITE);
+                    }
+                }
                 // A collection whose thumb is the server's composite is drawn as our baked fan,
                 // which leaves its name to be set live — on every tile, focused or not.
                 if let Some(m) = m.filter(|m| m.kind == TileKind::Collection && m.composite_thumb) {
