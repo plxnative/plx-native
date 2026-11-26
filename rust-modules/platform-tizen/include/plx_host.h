@@ -242,6 +242,7 @@ extern "C" {
 #define PLX_HOST_EVENT_PLAYER_STALL 27       /* a position read has not returned for several seconds */
 #define PLX_HOST_EVENT_PLAYER_TRACK 28       /* a = command id, b = native audio index selected; -1 refused (see player_verb) */
 #define PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE 29 /* a = native audio index, b = language code bytes, first char lowest; 0 unknown */
+#define PLX_HOST_AUDIO_LANGUAGE_REPORTS 32      /* the most PLAYER_AUDIO_LANGUAGE events the host posts at one PREPARED */
 
 /* player_verb's verb */
 #define PLX_HOST_PLAYER_VERB_PLAY 1

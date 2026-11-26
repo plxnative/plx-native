@@ -521,7 +521,7 @@ namespace PlxHost
         private const int NativeThrew = int.MinValue;
 
         // The most native audio tracks whose languages are read and reported (plx_host.h, PLAYER_AUDIO_LANGUAGE).
-        private const int LanguageReports = 32;
+        private const int LanguageReports = Native.PLX_HOST_AUDIO_LANGUAGE_REPORTS;
 
         // The player's audio tracks as read ONCE at PREPARED: the count, the current index and each track's language code in the player's own
         // order (null = none given). The language reads are what the library's track choice needs; the log line is built from the same read.

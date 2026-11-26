@@ -66,8 +66,8 @@ pub const EVENT_PLAYER_TRACK: u32 = 28;
 /// b = the code's ASCII bytes, first character in the lowest byte, 0 when the player has none; [`language_of_word`]).
 pub const EVENT_PLAYER_AUDIO_LANGUAGE: u32 = 29;
 
-/// The most native audio tracks whose `PLAYER_AUDIO_LANGUAGE` the host posts (`plx_host.h`; `LanguageReports` in
-/// `PlxPlayer.cs`): a report past it is dropped by the driver, so that track's language reads as unknown.
+/// `PLX_HOST_AUDIO_LANGUAGE_REPORTS`: the most native audio tracks whose `PLAYER_AUDIO_LANGUAGE` the host posts at one
+/// PREPARED; a report past it is dropped by the driver, so that track's language reads as unknown.
 pub const AUDIO_LANGUAGE_REPORTS: usize = 32;
 
 /// The language code a `PLAYER_AUDIO_LANGUAGE` word carries: two or three ASCII letters, first character in the lowest
@@ -433,6 +433,7 @@ mod tests {
             ("PLX_HOST_EVENT_PLAYER_STALL", i64::from(EVENT_PLAYER_STALL)),
             ("PLX_HOST_EVENT_PLAYER_TRACK", i64::from(EVENT_PLAYER_TRACK)),
             ("PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE", i64::from(EVENT_PLAYER_AUDIO_LANGUAGE)),
+            ("PLX_HOST_AUDIO_LANGUAGE_REPORTS", AUDIO_LANGUAGE_REPORTS as i64),
             ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
             ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
             ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),
