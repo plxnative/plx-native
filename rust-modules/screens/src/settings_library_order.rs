@@ -19,9 +19,10 @@
 //! saved order names it by, which survives a rebuild of the section table (whose indices
 //! ([`LibraryOrderRow::section`]) do not). The mode, the focus, the sentence and the rows' keys all
 //! follow a library by it. A library whose server's machine id is not learned yet has no identity an
-//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why; it stays where it stands
-//! while the named libraries move around it, and a drop's command leaves it out (the store places it by
-//! its default rule).
+//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why; it stands still on the
+//! page while the named libraries move around it, and a drop's command leaves it out. The store
+//! places it by its own rule (right after its default predecessor), so once the store publishes, the
+//! row may sit elsewhere than where the page held it; the page never applies that rule itself.
 //!
 //! **What the store says and what the page shows are two things, and the state between them has a
 //! name** ([`Shown`]). The page reads the publication through ONE adapter ([`Published`]); after a
@@ -274,7 +275,8 @@ enum Shown {
     Published,
     /// A drop sent this order (the libraries an order can name, as the shown rows had them) and the
     /// store has not published it yet: the page keeps its own rows, whatever else the store
-    /// publishes meanwhile (an earlier drop's echo, say), until the store says exactly this order
+    /// publishes meanwhile (an earlier drop's echo, say), until the store says this order (of the
+    /// libraries it names; one that gained a machine id meanwhile does not make it another order)
     /// or [`ECHO_PATIENCE_MS`] of the tick clock have passed since `since`, the first tick after the
     /// drop (`None` until one lands): an absolute reading of the clock, never an accumulated delta.
     AwaitingEcho { order: Vec<LibraryRef>, since: Option<u32> },
@@ -631,7 +633,9 @@ impl LibraryOrderPage {
             }
             Shown::AwaitingEcho { order, since } => {
                 let since = *since.get_or_insert(now_ms);
-                let echoed = named_order(rows_of(directory)) == *order;
+                // the order sent, among the libraries it named: a library learned meanwhile (a machine
+                // id arriving) joins the publication's named set without making the echo another order
+                let echoed = named_order(rows_of(directory)).into_iter().filter(|lib| order.contains(lib)).eq(order.iter().cloned());
                 gave_up = !echoed && now_ms.wrapping_sub(since) >= ECHO_PATIENCE_MS;
                 if echoed || gave_up {
                     true

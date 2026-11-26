@@ -93,6 +93,21 @@ fn order(page: &LibraryOrderPage) -> Vec<usize> {
     page.state.shown.iter().map(|r| r.section).collect()
 }
 
+/// **What the real store publishes** for the order `sent` over the table `default` (the server's
+/// order): plex's own rule, [`plx_plex::plex::library_order::effective`], which places a library no
+/// order names (no machine id yet) right after its default predecessor. A fixture of an echo is built
+/// by it, never written by hand, so it is a publication the store can produce.
+fn published(default: &[LibraryOrderRow], sent: &[(String, i64)]) -> Vec<LibraryOrderRow> {
+    use plx_plex::plex::library_order::{effective, Lib};
+    use plx_plex::plex::session::{LibraryOrder, OrderedLib};
+    let libs: Vec<Lib<'_>> = default.iter().map(|row| Lib { machine_id: &row.machine_id, key: row.key }).collect();
+    let record = LibraryOrder {
+        libs: sent.iter().map(|(machine_id, key)| OrderedLib { machine_id: machine_id.clone(), key: *key, ..Default::default() }).collect(),
+        ..Default::default()
+    };
+    effective(&libs, Some(&record)).into_iter().map(|index| default[index].clone()).collect()
+}
+
 fn page_of(snap: &DirectorySnapshot) -> LibraryOrderPage {
     LibraryOrderPage::new(EntryId(0), snap.view())
 }
@@ -171,15 +186,36 @@ fn a_move_steps_over_a_library_no_order_can_name_so_the_named_order_always_chang
     assert_eq!(keys, [3, 1, 4, 5, 6]);
     assert!(matches!(page.state.mode, Mode::Dropped(_)));
     assert!(matches!(page.state.basis, Shown::AwaitingEcho { .. }));
-    // the store's echo is that order: nothing snaps back
-    let echo = {
-        let mut rows = six();
-        rows[1].machine_id.clear();
-        rows.swap(0, 2);
-        snap(rows, RECORDED, WriteState::InFlight)
-    };
+    // the store's echo of that order, as the store places it: the unnamed row follows its default
+    // predecessor (Movies), so it no longer stands where the page held it, and nothing snaps back
+    let mut table = six();
+    table[1].machine_id.clear();
+    let echo = snap(published(&table, &libs), RECORDED, WriteState::InFlight);
+    let echoed: Vec<usize> = echo.view().library_order().iter().map(|r| r.section).collect();
+    assert_eq!(echoed, [2, 0, 1, 3, 4, 5], "the store's placement of the unnamed row, not the page's");
     step_page(&mut page, &echo, tick_ev());
     assert_eq!(page.state.basis, Shown::Published);
+}
+
+#[test]
+fn an_echo_is_still_the_order_sent_when_a_library_gains_its_machine_id_during_the_wait() {
+    // shown = [A, U (unnamed), B, ...]; the drop names the five that can be named
+    let mut table = six();
+    table[1].machine_id.clear();
+    let s = snap(table.clone(), OrderState::Server, WriteState::Idle);
+    let mut page = page_of(&s);
+    pick_up(&mut page, &s, 0);
+    press(&mut page, &s, Key::Down);
+    let Some(Sent::Set(libs)) = sent(&ok_lib(&mut page, &s, 0)).pop() else { panic!("a set") };
+    assert_eq!(libs.len(), 5);
+    // the machine id of U is learned while the write is out, so the publication names six libraries
+    let mut learned = table.clone();
+    learned[1].machine_id = "m0".into();
+    let echo = snap(published(&learned, &libs), RECORDED, WriteState::InFlight);
+    assert_eq!(echo.view().library_order().iter().filter(|r| LibraryRef::of(r).is_some()).count(), 6);
+    step_page(&mut page, &echo, tick_ev());
+    assert_eq!(page.state.basis, Shown::Published, "the order sent is in the publication, among the six: the wait ends on it");
+    assert!(matches!(page.state.mode, Mode::Dropped(_)), "and the place is announced, not given up on");
 }
 
 #[test]

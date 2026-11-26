@@ -741,7 +741,9 @@ committed anchors replayed DIVERGED from the first Home landing with every diffe
 anchors no longer match the shape (`plxnative-rec rerecord` accepts a fixture only when its shape moved), so they
 were recorded afresh against the synthetic server (`MOCK_PORT=32685 tests/focusfp.sh --rec --only 12,13`) and installed
 with `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a
-`ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter at zero (975 and
-1291 frames). The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122) moved the shape once more
-(to `2722707214457283267`); both anchors were re-recorded the same way and still replay SAME with those counts.
+`ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter at zero (998 and
+1343 frames). The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122, #1554) then moved the
+shape once more (to `2722707214457283267`, the screen half only); both anchors were re-recorded the same way, and the
+closed alphabet's owner-word pattern gained `library-order`. Targets and Resolve report SAME again with every
+difference counter at zero (975 and 1291 frames).
 `docs/ui-replay-v13-anchor.md` has the record.
