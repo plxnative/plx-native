@@ -466,10 +466,9 @@ streams, served by `tests/mock_pms.py`):
 
 **The feature run** (the same emulator; an MKV with an English SubRip and a German ASS track, English selected server-side): the host
 logged `text tracks count=2 current=0 [0=en,1=de]` and `text track 0 -> 0`, and cues at [2098..3598], [4000..5500] and
-[5995..7495] ms for cues every 2 s lasting 1.5 s. With the stock package the renderer answered `subtitle: ASS refused: Unavailable`:
-libass and the subtitle fonts are not yet in the Tizen package (a separate packaging change), so until then the player shows "Styled
-subtitle support is unavailable in this installation". With the host build of libass-plx and the subtitle fonts packed into a local,
-uncommitted package, the line "TWO 08 top bold & / TWO 08 bottom" was drawn at 16.2 s (the cue runs 16.0-17.5 s).
+[5995..7495] ms for cues every 2 s lasting 1.5 s. With the package as `make PLATFORM=tizen tizen-tpk` builds it (which stages
+`libass-plx` and the subtitle fonts, "The subtitle renderer" above), the line "TWO 07 top bold & / TWO 07 bottom" was drawn at 15.1 s
+(the cue runs 14.0-15.5 s) and nothing logged `ASS refused` (2026-11-27). The player had stripped SubRip's `<b>`.
 
 **Not measured on a retail Samsung set:** whether its player raises the callback for an embedded text track and on which thread, its
 text track order and language codes, which tags it strips, how `player_select_track(TEXT)` behaves, and `mov_text`.
