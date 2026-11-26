@@ -369,7 +369,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   (the Open Watch Party reader, `plx_owp::json`: the scan keeps the length, and the visitor marks the same strings
   and numbers as the scan) and `owp_party` (the Open Watch Party session, `plx_owp::party`: calls and answers to
   its open effects, some with dead IDs; one `Done` per call, every `Open` closed, one command per lane, no effect
-  on a dead ID, and no deadline after close). Each target
+  on a dead ID, and no deadline left once `close` has run and every open effect has its answer). Each target
   asserts only what its code promises (no panic, the documented bounds, round trips) and a crash fails the
   run, with the input in `fuzz/artifacts/<target>/`. The package is a top-level `fuzz/` with its own
   `[workspace]`, so no shipped `Cargo.toml` names it and no shipped build changes; it depends on the layer

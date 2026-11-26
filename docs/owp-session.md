@@ -50,8 +50,9 @@ attached. The reads ride on every input, so a step or a status always sees the p
   an ID no longer live is ignored.
 - The session closes every connection it gives up, also one still opening. One the host reported closed or
   failed gets no `Close`.
-- A connection that already sent `create`, `join` or `resume` outlives a cancel: its answer gets `leave` and
-  a close, or it closes at its 10 s answer timeout.
+- A connection that already sent `create`, `join` or `resume` outlives a cancel. A `joined` answer gets
+  `leave` and a close, and an `error` answer only a close. Without an answer it closes at its 10 s answer
+  timeout.
 
 ## Time
 
@@ -64,6 +65,8 @@ attached. The reads ride on every input, so a step or a status always sees the p
 - A `now_ms` earlier than the last input's counts as the last one: the session's time never goes back.
 - A deadline keeps its whole delay, also past 2147483647 ms. A host whose timers can't wait that long wakes
   early, and that `Wake` does nothing.
+- After `close` the host keeps sending `Wake` until `next_wake_ms()` is `None`. A connection that outlives the
+  cancel closes on one of those, and a list fetch in flight is abandoned.
 
 ## Randomness
 
@@ -78,7 +81,8 @@ waits for `Drawn`.
   timer past 2^31 ms, the fetch's 5 s, a computed position past 2^53, the time rules above, and the close of
   a connection given up before it opens.
 - The fuzz target `owp_party` feeds calls and answers, some with dead IDs. It checks for no panic, one `Done`
-  per call, every `Open` closed, one command per lane, no effect on a dead ID, and no deadline after close.
+  per call, every `Open` closed, one command per lane, no effect on a dead ID, and no deadline left once
+  `close` has run and every open effect has its answer.
 
 `Party` is registered in `ci/machines.ini`, with two child machines, `Link` (one connection) and `Lane` (one
 adapter's commands). `transition` does every write.

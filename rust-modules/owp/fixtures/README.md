@@ -1,8 +1,9 @@
 # Open Watch Party fixtures
 
 Copied unchanged from [edde746/openwatchparty](https://github.com/edde746/openwatchparty) at revision
-`d8c3c2abc753c0486c955f39e020258c166b93d8`, under the Apache License 2.0 in `LICENSE`. The tests in `src/vectors.rs` read them;
-`relays.json` is also the public relay list the crate embeds.
+`d8c3c2abc753c0486c955f39e020258c166b93d8`, under the Apache License 2.0 in `LICENSE`. The tests in `src/vectors.rs` read them, except
+`vectors/party.json`, which `src/party_trace.rs` runs against `plx_owp::party`; `relays.json` is also the
+public relay list the crate embeds.
 
 | file | upstream path | sha256 |
 |---|---|---|
