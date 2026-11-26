@@ -372,8 +372,9 @@ request for ends the zap on **`AppMsg::LiveTuneRefused`** (sent by `app::playbac
 on an inference from timing; BACK / STOP are `Cancel`. **`Art`** is driven by one `ArtEvent` a frame (`Zapping`, `NoFrame`,
 `Frame`): `Waiting` before anything is known, `Covering` from the first press and while the stream has shown no frame yet,
 `Fading` once one exists, then `Settled`: a later stall or rebuffer never brings the art back, only a zap does. It is drawn by
-`plx_ui::art_ground` (the target programme's art over the video plane's hole, scaled 1.08 at 0.85 brightness, softened
-through the shared glass blur where the frame has one and sharp where it does not: never black). **`Banner`** (`Entering`,
+`plx_ui::art_ground` (the target programme's art over the video plane's hole, scaled 1.08 at 0.85 brightness: one textured quad of a blurred copy made once per
+image (`art_fit::BackdropSpec`, requested with the art, `tex::resolve_art_on`), never the live glass, so it is as soft over a
+bound video plane as anywhere; art with a clear ground stands on the app's flat ground: never black). **`Banner`** (`Entering`,
 `Shown { until }`) is raised on every stream the app starts (`AppMsg::PlayerStart`, through `Live::started`), on every press, and on
 Left, Right and OK; `Entering` is the page's first state, before it has a clock (the `PlayerStart` of the first mount is
 sent before the page exists), and its first frame stamps the deadline. It is held while a zap is in flight or no picture

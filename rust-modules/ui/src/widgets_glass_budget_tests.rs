@@ -332,8 +332,6 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
     // a fixture that names it in a string.
     const CHROME: &[&str] = &[
         "ui/src/widgets.rs",
-        // the Live TV player's art ground: one `Glass::DYNAMIC_BACKDROP.backdrop` call over the art it just drew
-        "ui/src/art_ground.rs",
         // the standing hold hint: one `Glass::DYNAMIC_BACKDROP.backdrop` call, region-budgeted
         "ui/src/hold_hint.rs",
         // the library's scroll capsule: the nav pill's live glass over the page it tucked away

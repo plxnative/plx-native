@@ -3200,7 +3200,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `alt_sources::SHAPE[1]` carry it). Previous pin: 0xa2bc_fa1b_e96e_0118.
 // The live player's banner, zap and art phases join the Player and Live TV screens' canon (Live TV PR4: `zap`, `art`,
 // `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0xfada_30c7_dc22_0af4;
+const SCREEN_SHAPES_PIN: u64 = 0xeb60_634f_6b5f_c9ac;
 
 #[cfg(test)]
 mod arg_tests {
