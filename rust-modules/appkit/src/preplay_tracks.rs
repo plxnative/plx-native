@@ -6,7 +6,7 @@
 //! pushes the pages it is asked for (`PickPage`), shows [`root_form`] / [`audio_form`] /
 //! [`subtitle_form`] on its own `FormTable`, resolves a focused row to a [`Pick`] ([`pick_of`]),
 //! and commits with [`commit`]. BACK pops a page before it dismisses, and a push or pop slides the
-//! two pages, exactly as the in-player menus do (`track_menu`, `more_menu`).
+//! two pages: the pages are `ui::menu`'s (one stack, one slide, one header with the back mark).
 //!
 //! **Not a second track list.** Audio rows are [`crate::track_menu::audio_track_row`], the
 //! in-player Audio tab's own row; the Subtitles page is `metadata::sub_layout::sub_sections`
@@ -40,11 +40,10 @@ use plx_data::metadata::track_names::TrackNames;
 use plx_data::metadata::{PreplayPick, Stream, SubPick};
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
 use plx_machine::machine::Measure;
-use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
-use plx_ui::page_stack::{self, PageStack, PopoverPanel};
-use plx_ui::panel_motion::PanelMotion;
+use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
+use plx_ui::menu::{Class, Event, Host, Menu, Out, Page};
 use plx_ui::table::{Row, Section};
-use plx_ui::{Painter, Rect};
+use plx_ui::Rect;
 
 use plx_media::route::PreplayItem;
 use crate::track_menu::{audio_track_row, flat_row, in_lang_row};
@@ -415,45 +414,54 @@ impl PickerCore {
     }
 }
 
-/// **The Audio & Subtitles panel's state, with no screen**: the [`PickerCore`], the pages pushed
-/// over the root and the slide between them. The page showing is the stack's top (the root when
-/// empty), never a field of its own.
+/// **The Audio & Subtitles panel's state, with no screen**: the [`PickerCore`] (the tracks and the choice made
+/// so far) and the [`Menu`] that shows its pages (`ui::menu`: the stack, the slide, the placement, the glass).
+/// The page showing is the menu's top (the root when nothing is pushed), never a field of its own.
 pub struct PickerState {
     core: PickerCore,
-    pages: PageStack<PickPage, PickRow>,
-    pub form: FormTable<PickRow, (), PickPage>,
-    pub motion: PanelMotion,
+    menu: Menu<PickPage, PickRow, ()>,
     /// The drawn rect of what opened the panel: `[x, y, w, h]` as bits, like every panel argument.
     anchor: [u32; 4],
-    /// The panel stands OVER its opener and grows out of it ([`Self::over_opener`]); otherwise it
-    /// hangs beside it.
-    over_opener: bool,
+}
+
+/// `page` (`None` asks for the root), built from the core: its rows, its header and the row focus opens on.
+fn page_of(core: &PickerCore, page: Option<PickPage>) -> Option<Page<PickRow, (), PickPage>> {
+    let page = page.unwrap_or(PickPage::Root);
+    Some(Page::new(core.page_form(page), PickerCore::title_of(page).unwrap_or_default()).initial(core.page_initial(page)))
 }
 
 impl PickerState {
+    /// A panel that hangs under or above its opener, never over it (the failure screen's): a sheet.
     pub fn new(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> Self {
+        Self::on(tracks, anchor, Host::Sheet { anchor })
+    }
+
+    fn on(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4], host: Host) -> Self {
         let mut s = Self {
             core: PickerCore::new(tracks),
-            pages: PageStack::new(),
-            form: FormTable::new(plx_ui::table_screen::BAND_BASE),
-            motion: PanelMotion::new(),
+            menu: Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE),
             anchor,
-            over_opener: false,
         };
-        s.form.table.compact = false;
-        let root = s.core.page_form(PickPage::Root);
-        s.form.set(root, None);
+        s.step(Event::ReplaceRoot { slide: None });
         s
     }
 
-    /// **The panel grows out of its opener** (a hero control: `Popover::morphing`) and so covers it
-    /// by the shared rule ([`plx_ui::popover::cover_opener`]), the opener being consumed by the
-    /// morph. Without this the panel hangs under or above its opener and never over it (the
-    /// failure screen's).
-    pub fn over_opener(mut self) -> Self {
-        self.over_opener = true;
-        self.motion = self.motion.spring_all_edges();
-        self
+    /// **The panel grows out of its opener** (a hero control: the menu's `Host::Grows`) and so covers it by the
+    /// shared rule, the opener being consumed by the morph.
+    pub fn over_opener(self) -> Self {
+        let anchor = self.anchor;
+        Self::on(self.core.tracks, anchor, plx_ui::detail_layout::hero_host(anchor))
+    }
+
+    /// The menu: what the host draws, registers stops on and answers focus questions with.
+    pub fn menu(&self) -> &Menu<PickPage, PickRow, ()> {
+        &self.menu
+    }
+
+    /// One step of the menu, its pages built from the core.
+    pub fn step(&mut self, ev: Event<'_, PickRow>) -> Out<()> {
+        let core = &self.core;
+        self.menu.step(ev, &mut |page| page_of(core, page))
     }
 
     pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
@@ -466,24 +474,24 @@ impl PickerState {
 
     /// The page showing.
     pub fn page(&self) -> PickPage {
-        self.pages.top().unwrap_or(PickPage::Root)
+        self.menu.top().unwrap_or(PickPage::Root)
     }
 
     pub fn depth(&self) -> usize {
-        self.pages.len()
+        self.menu.depth()
     }
 
-    /// OK on the row `id`.
+    /// OK on the row `id`: a drill-in pushes its page; a pick is carried forward and the page rebuilt with the check
+    /// moved. A row that is no pick (an index off the list) does nothing.
     pub fn ok(&mut self, id: PickRow) -> Outcome {
         match pick_of(id) {
-            Pick::Open(page) => {
-                self.push(page, id);
-                Outcome::Pushed
-            }
+            Pick::Open(_) => match self.step(Event::Ok(id.key().0)) {
+                Out::Moved => Outcome::Pushed,
+                _ => Outcome::Nothing,
+            },
             pick => match self.core.select(pick) {
                 Some(sel) => {
-                    let form = self.core.page_form(self.page());
-                    self.form.set_sliding(form, Some(&id));
+                    self.step(Event::Refresh { keep: Some(id) });
                     Outcome::Picked(sel)
                 }
                 None => Outcome::Nothing,
@@ -491,98 +499,23 @@ impl PickerState {
         }
     }
 
-    /// Open `page` above the current one (the one push, [`page_stack::push_page`]).
-    fn push(&mut self, page: PickPage, opener: PickRow) {
-        let built = self.built(page);
-        let initial = self.core.page_initial(page);
-        page_stack::push_page(&mut self.pages, &mut self.form, &mut self.motion, page, opener, initial.as_ref(), built);
-    }
-
     /// BACK: pop a page when there is one, else the host dismisses.
     pub fn back(&mut self) -> Back {
-        let core = &self.core;
-        if page_stack::pop_page(&mut self.pages, &mut self.form, &mut self.motion, |top| Self::built_of(core, top.unwrap_or(PickPage::Root))) {
-            Back::Popped
-        } else {
-            Back::Dismiss
+        match self.step(Event::Back) {
+            Out::Dismiss => Back::Dismiss,
+            _ => Back::Popped,
         }
     }
 
-    /// `page`, built: its rows and its title band (the standalone panel's size class is always the full one).
-    fn built(&self, page: PickPage) -> page_stack::Built<PickRow, (), PickPage> {
-        Self::built_of(&self.core, page)
-    }
-
-    fn built_of(core: &PickerCore, page: PickPage) -> page_stack::Built<PickRow, (), PickPage> {
-        page_stack::Built { form: core.page_form(page), title: PickerCore::title_of(page) }
-    }
-
-    /// The panel's natural rect: under the opener when there is room, above it when there is not;
-    /// cached against the table's layout revision (the slide springs toward it).
+    /// The panel's natural rect: the menu's one placement rule for its host.
     pub fn panel_rect(&self, measure: &dyn Measure) -> Rect {
-        self.motion.natural(self.form.table.layout_rev(), || {
-            if self.over_opener {
-                return plx_ui::detail_layout::hero_panel_rect(&self.form.table, self.anchor, measure);
-            }
-            let [x, y, w, h] = self.anchor.map(f32::from_bits);
-            plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), self.form.table.menu_panel_width(measure), self.form.table.measured_height())
-        })
-    }
-
-    pub fn shown_rect(&self, measure: &dyn Measure) -> Rect {
-        self.motion.shown(self.panel_rect(measure))
-    }
-
-    pub fn update(&mut self, dt: f32, measure: &dyn Measure) {
-        let natural = self.panel_rect(measure);
-        self.form.table.update(dt, natural.h);
-        self.motion.step(dt, natural);
-    }
-
-    pub fn draw(&self, appear: f32, measure: &dyn Measure) {
-        let natural = self.panel_rect(measure);
-        let p = Painter::root().alpha(appear).translate(0.0, plx_ui::popover::Popover::RISE * (1.0 - appear));
-        self.motion.draw(p, natural, 20.0, &self.form.table, measure);
-    }
-
-    /// [`draw`](Self::draw) for a panel that grows out of its opener: the glass and the page(s) ride
-    /// the MORPH (`Popover::panel` / `morph_rows`), as the Library's menu draws, with the glass
-    /// frozen ground (`Ground::Menu`) the droplet's join needs.
-    pub fn draw_morph(
-        &self,
-        pop: &plx_ui::popover::Popover,
-        base: Painter,
-        field: Option<&plx_ui::underlay::UnderlayField>,
-        measure: &dyn Measure,
-    ) {
-        let natural = self.panel_rect(measure);
-        let shown = self.motion.shown(natural);
-        let m = pop.content_painter_on(base, 0.0);
-        pop.panel(m, shown, 20.0, field, plx_ui::widgets::Ground::Menu);
-        pop.morph_rows(m, shown, 20.0, |m| self.motion.draw_rows(m, natural, &self.form.table, measure));
+        self.menu.panel_rect(measure)
     }
 
     /// The row identity under a focus key.
     pub fn row_at(&self, key: RowKey) -> Option<PickRow> {
-        self.form.index_of_key(key).and_then(|i| self.form.binding_at(i)).map(|b| b.id)
-    }
-}
-
-impl PopoverPanel for PickerState {
-    type Id = PickRow;
-    type Act = ();
-    type Dest = PickPage;
-    fn form(&self) -> &FormTable<PickRow, (), PickPage> {
-        &self.form
-    }
-    fn motion(&self) -> &PanelMotion {
-        &self.motion
-    }
-    fn panel_rect(&self, measure: &dyn Measure) -> Rect {
-        PickerState::panel_rect(self, measure)
-    }
-    fn shown_rect(&self, measure: &dyn Measure) -> Rect {
-        PickerState::shown_rect(self, measure)
+        let form = self.menu.form();
+        form.index_of_key(key).and_then(|i| form.binding_at(i)).map(|b| b.id)
     }
 }
 
@@ -695,7 +628,7 @@ mod tests {
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.ok(PickRow::OpenSubtitles), Outcome::Pushed);
         assert_eq!((p.page(), p.depth()), (PickPage::Subtitles, 1));
-        assert_eq!(p.form.focusable_len(), 3, "Off and the two tracks");
+        assert_eq!(p.menu().form().focusable_len(), 3, "Off and the two tracks");
         assert_eq!(p.back(), Back::Popped);
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.back(), Back::Dismiss, "at the root BACK leaves the panel");
@@ -836,11 +769,11 @@ mod tests {
         };
         let headline_bold = (plx_ui::theme::size::HEADLINE, true);
         let mut p = PickerState::new(tracks, [0u32; 4]);
-        assert_eq!(p.form.table.label_style(), headline_bold, "the root");
+        assert_eq!(p.menu().form().table.label_style(), headline_bold, "the root");
         p.ok(PickRow::OpenSubtitles);
-        assert_eq!(p.form.table.label_style(), headline_bold, "a pushed page");
+        assert_eq!(p.menu().form().table.label_style(), headline_bold, "a pushed page");
         assert_eq!(p.back(), Back::Popped);
-        assert_eq!(p.form.table.label_style(), headline_bold, "back on the root");
+        assert_eq!(p.menu().form().table.label_style(), headline_bold, "back on the root");
     }
 
     /// The panel hangs off its opener by one rule, root and pushed page alike: never over the opener,
@@ -870,8 +803,8 @@ mod tests {
         let pushed = p.panel_rect(&measure);
         let clear_of = |r: plx_ui::Rect| r.y + r.h <= opener.y || r.y >= opener.y + opener.h;
         assert!(clear_of(root) && clear_of(pushed), "never over the opener: {root:?} {pushed:?}");
-        let h = p.form.table.measured_height();
-        let want = plx_ui::popover::under_or_above_fit(opener, p.form.table.menu_panel_width(&measure), h);
+        let h = p.menu().form().table.measured_height();
+        let want = plx_ui::popover::under_or_above_fit(opener, p.menu().form().table.menu_panel_width(&measure), h);
         assert_eq!(pushed, want, "the pushed page is placed by the one anchor rule, off the opener's real rect");
         assert!(
             (pushed.y + pushed.h - opener.y).abs() <= 64.0 || (pushed.y - (opener.y + opener.h)).abs() <= 64.0,
