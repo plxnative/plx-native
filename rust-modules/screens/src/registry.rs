@@ -3048,7 +3048,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
 // The What's on page's Recent row replaces the lineup shelf: its shape lists the Recent channels
 // (`recent:[u32]`). Previous pin: 0x17bd_9205_2e59_cd6e. Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0x6353_575b_3c41_8806;
+// The Channels shelf keeps every channel reachable: the Live TV screen's stack has three shelves
+// (`Shelf{row,pop}` x 3). Previous pin: 0x6353_575b_3c41_8806. Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0x16f9_ab79_9300_dc0a;
 
 #[cfg(test)]
 mod arg_tests {

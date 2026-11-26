@@ -740,3 +740,9 @@ screen's shape, so `SCREEN_SHAPES_PIN` moved and the two current anchors, `v13-o
 `plxnative-rec rerecord`, `anchor: true` preserved; shape `2884821880834123965`). `make check-replay` replays
 them SAME in Targets and Resolve (925 and 1210 frames, every difference counter zero); the four historical
 fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The What's on page's Channels shelf (a third shelf on the Live TV screen, so every channel stays reachable) moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors, `v13-owned-input-content` and `13-by-id-filmography`, were observed
+refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape
+`13368307521658900119`). `make check-replay` replays them SAME in Targets and Resolve (919 and 1138 frames, every difference
+counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
