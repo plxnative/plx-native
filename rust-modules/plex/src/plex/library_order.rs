@@ -80,6 +80,7 @@ pub fn effective(default: &[Lib<'_>], record: Option<&LibraryOrder>) -> Vec<usiz
 fn place<'a>(default: &[Lib<'_>], named: impl Iterator<Item = (&'a str, i64)>) -> Vec<usize> {
     let mut placed: Vec<usize> = Vec::with_capacity(default.len());
     let mut is_placed = vec![false; default.len()];
+    let sequence: Vec<usize> = (0..default.len()).collect();
     for (machine_id, key) in named.filter(|(machine_id, _)| !machine_id.is_empty()) {
         let found = default.iter().position(|lib| lib.machine_id == machine_id && lib.key == key);
         if let Some(index) = found.filter(|index| !is_placed[*index]) {
@@ -90,17 +91,22 @@ fn place<'a>(default: &[Lib<'_>], named: impl Iterator<Item = (&'a str, i64)>) -
     // In default order, so a run of unnamed libraries chains behind the nearest named one: each
     // one's predecessor (`index - 1`) is already placed when it is reached.
     for index in 0..default.len() {
-        if is_placed[index] {
-            continue;
+        if !is_placed[index] {
+            insert_behind_predecessor(&mut placed, &sequence, index, index);
+            is_placed[index] = true;
         }
-        let at = match index.checked_sub(1) {
-            Some(before) => placed.iter().position(|placed| *placed == before).map_or(placed.len(), |at| at + 1),
-            None => 0,
-        };
-        placed.insert(at, index);
-        is_placed[index] = true;
     }
     placed
+}
+
+/// **The one insertion both orderings use**: puts `item`, which stands at `sequence[at]`, into `list`
+/// right after the nearest entry before it in `sequence` that `list` already holds, and at the front
+/// when it holds none. [`place`] files an unnamed library behind its default-order predecessor (always
+/// held by then, so the nearest is the immediate one) and [`merged`] files a carried entry behind
+/// whichever of its recorded predecessors survived.
+fn insert_behind_predecessor<T: PartialEq>(list: &mut Vec<T>, sequence: &[T], at: usize, item: T) {
+    let after = sequence[..at].iter().rev().find_map(|before| list.iter().position(|held| held == before));
+    list.insert(after.map_or(0, |after| after + 1), item);
 }
 
 /// **What the writer stores** when the profile chose `arrangement` (the favourites as the page showed
@@ -125,12 +131,10 @@ pub fn merged(previous: Option<&LibraryOrder>, arrangement: &[(String, i64)], pr
     }
     let fresh = list.len();
     if let Some(previous) = previous {
-        let absent = |machine_id: &str| !machine_id.is_empty() && !present.iter().any(|(m, _)| m == machine_id);
-        for (at, entry) in previous.libs.iter().enumerate().filter(|(_, lib)| absent(&lib.machine_id)) {
-            if list.iter().any(|(m, k)| *m == entry.machine_id && *k == entry.key) { continue; }
-            let after = previous.libs[..at].iter().rev()
-                .find_map(|before| list.iter().position(|(m, k)| *m == before.machine_id && *k == before.key));
-            list.insert(after.map_or(0, |after| after + 1), (entry.machine_id.clone(), entry.key));
+        let sequence: Vec<(String, i64)> = previous.libs.iter().map(|lib| (lib.machine_id.clone(), lib.key)).collect();
+        for (at, entry) in sequence.iter().enumerate()
+            .filter(|(_, (machine_id, _))| super::pins::is_absent_machine(machine_id, present.iter().map(|(m, _)| m.as_str()))) {
+            if !list.contains(entry) { insert_behind_predecessor(&mut list, &sequence, at, entry.clone()); }
         }
     }
     let carried = list.len() > fresh;
@@ -154,7 +158,7 @@ pub fn hub_library(hub_identifier: &str, key: &str) -> Option<i64> {
             return rest.parse().ok();
         }
     }
-    if let Some(rest) = hub_identifier.strip_prefix("custom.collection.") { return rest.split('.').next()?.parse().ok(); }
+    if super::collections::is_promoted_collection_hub(hub_identifier) { return super::collections::promoted_collection_section(hub_identifier); }
     if is_whole_server_hub(hub_identifier) { return None; }
     super::paging::query_value(key, "sectionID")?.parse().ok()
 }
@@ -289,6 +293,22 @@ mod tests {
         assert_eq!(merged(Some(&previous), &here, &here).unwrap(), pairs(&[("A", 4), ("B", 2)]));
     }
 
+    /// A carried entry goes behind the NEAREST predecessor that survived, which may be an entry carried
+    /// just before it, and a predecessor the profile unfavoured is skipped.
+    #[test]
+    fn a_carried_entry_follows_its_nearest_surviving_predecessor() {
+        let here = pairs(&[("A", 4)]);
+        // B/2 and B/9 are offline; A/9 is present but no longer a favourite. B/9's immediate predecessor
+        // B/2 was carried first, so it follows that; B/2's A/9 did not survive, so it follows A/4
+        let previous = record(&[("A", 4), ("A", 9), ("B", 2), ("B", 9)]);
+        assert_eq!(merged(Some(&previous), &here, &here).unwrap(), pairs(&[("A", 4), ("B", 2), ("B", 9)]));
+        // and with the arrangement putting A/4 last, the carried pair rides behind it
+        let two = pairs(&[("A", 4), ("A", 1)]);
+        let previous = record(&[("A", 1), ("B", 2), ("B", 9), ("A", 4)]);
+        assert_eq!(merged(Some(&previous), &pairs(&[("A", 4), ("A", 1)]), &two).unwrap(),
+            pairs(&[("A", 4), ("A", 1), ("B", 2), ("B", 9)]));
+    }
+
     #[test]
     fn whole_server_hubs_are_the_three_that_span_libraries() {
         for id in ["home.continue", "home.ondeck", "home.onDeck", "home.playlists"] { assert!(is_whole_server_hub(id), "{id}"); }
@@ -304,6 +324,7 @@ mod tests {
         assert_eq!(hub_library("show.recentlyadded.7", ""), Some(7));
         assert_eq!(hub_library("custom.collection.2.420.420", ""), Some(2));
         assert_eq!(hub_library("custom.collection.x.420.420", ""), None);
+        assert_eq!(hub_library("custom.collection.x.420.420", "/hubs/x?sectionID=3"), None, "a promoted collection is decided by its id alone");
         assert_eq!(hub_library("home.movies.recent", ""), None, "a whole-server hub spans libraries");
         assert_eq!(hub_library("home.ondeck", ""), None);
         // a `home.<type>.recent` hub per library: the library is in its key
