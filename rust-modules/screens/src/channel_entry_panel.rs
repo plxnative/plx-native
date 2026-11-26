@@ -15,8 +15,9 @@
 //! plays it through its own play path, and the player hands it to its zap machine (`player::zap`, one
 //! `PlayerReq::Tune`), so a number-entry tune and a zap share one tune path, one banner and one art ground.
 //!
-//! **The first digit rides on the argument** as a boot address, not an identity: the surface that is already up
-//! is the one surface, whichever digit opened it. The lineup is the current store's (one server's channels, in
+//! **The opening digits ride on the argument** as a boot address, not an identity: the surface that is already up
+//! (mounted, or parked for the next commit) is the one surface, whichever digit opened it, and keys that arrive
+//! before it mounts are appended to the parked argument ([`ChannelEntryArg::absorb`]), never a second panel. The lineup is the current store's (one server's channels, in
 //! number order), captured when the panel mounts.
 
 use std::borrow::Cow;
@@ -47,23 +48,36 @@ use super::channel_entry::{self as entry, Cand, Ev, Fx as EntryFx, NumberEntry, 
 use crate::registry::{AppLike, AppMsg, LiveTvLike, PageMemory};
 
 /// The fields [`ChannelEntryScreen::write`] canonicalises, for the recorder's shape pin (§5.4).
-pub const SHAPE: &str = "ChannelEntry{arg:ChannelEntryArg{host:u32,first:u8,playing:Option<{sid:u32,dvr:str,channel:str}>},entry:{Fresh{first:u8},Typing{digits:str,highlight:u32,last:u32},Done},table:TableViewMotion}";
+pub const SHAPE: &str = "ChannelEntry{arg:ChannelEntryArg{host:u32,digits:str,playing:Option<{sid:u32,dvr:str,channel:str}>},entry:{Fresh{digits:str},Typing{digits:str,highlight:Option<u32>,last:u32},Done{digits:str}},table:TableViewMotion}";
 
 /// The channel that is on screen when the panel opens, by identity: server, DVR and key.
 pub type PlayingKey = (ServerId, String, String);
 
-/// What the container is asked to present: the instance the choice is reported to, the digit that opened the panel,
-/// and the channel already on screen (the player's; `None` over the page).
+/// What the container is asked to present: the instance the choice is reported to, the digits that opened the panel
+/// (one key, or several that arrived in the same frame), and the channel already on screen (the player's; `None`
+/// over the page).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ChannelEntryArg {
     pub host: InstanceId,
-    pub first: u8,
+    pub digits: String,
     pub playing: Option<PlayingKey>,
+}
+
+impl ChannelEntryArg {
+    /// Open with the one digit `first` (0 to 9).
+    pub fn opened_by(host: InstanceId, first: u8, playing: Option<PlayingKey>) -> Self {
+        Self { host, digits: char::from(b'0' + first.min(9)).to_string(), playing }
+    }
+
+    /// A second request for this panel arrived before it mounted: its digits follow ours.
+    pub fn absorb(&mut self, later: &Self) {
+        self.digits.push_str(&later.digits);
+    }
 }
 
 impl LogicalState for ChannelEntryArg {
     fn write(&self, c: &mut Canon) {
-        c.u32(self.host.0).u8(self.first);
+        c.u32(self.host.0).str(&self.digits);
         match &self.playing {
             Some((sid, dvr, channel)) => {
                 c.u32(1).u32(u32::from(sid.raw())).str(dvr).str(channel);
@@ -107,9 +121,8 @@ pub struct ChannelEntryScreen {
     lineup: Vec<Channel>,
     /// The machine's view of it: each channel's number and whether it is the one on screen.
     cands: Vec<Cand>,
+    /// The one source of what is typed, what matches and what is highlighted.
     machine: NumberEntry,
-    /// What is on screen as the typed number: the machine's, kept while the panel fades out after the machine is done.
-    typed: String,
     form: FormTable<RowId, RowId, Infallible>,
 }
 
@@ -117,20 +130,19 @@ impl ChannelEntryScreen {
     pub fn new(entry: EntryId, arg: ChannelEntryArg, channels: &[Channel]) -> Self {
         let cands = channels
             .iter()
-            .map(|c| Cand {
-                number: c.vcn.clone(),
-                playing: arg
+            .map(|c| {
+                let playing = arg
                     .playing
                     .as_ref()
-                    .is_some_and(|(sid, dvr, channel)| *sid == c.sid && *dvr == c.dvr && *channel == c.channel),
+                    .is_some_and(|(sid, dvr, channel)| *sid == c.sid && *dvr == c.dvr && *channel == c.channel);
+                Cand::new(&c.vcn, playing)
             })
             .collect();
-        let machine = NumberEntry::open(arg.first);
+        let machine = NumberEntry::open_digits(&arg.digits);
         let mut form = FormTable::new(crate::registry::BAND);
         form.table.compact = true;
         form.table.lineup(true);
-        let typed = machine.typed();
-        let mut screen = Self { entry, arg, lineup: channels.to_vec(), cands, machine, typed, form };
+        let mut screen = Self { entry, arg, lineup: channels.to_vec(), cands, machine, form };
         screen.rebuild();
         screen
     }
@@ -141,12 +153,12 @@ impl ChannelEntryScreen {
 
     /// The matches of the digits typed so far, as lineup indices in lineup order.
     pub fn shown(&self) -> Vec<usize> {
-        entry::matches(&self.cands, &self.typed).collect()
+        entry::matches(&self.cands, self.machine.typed()).collect()
     }
 
     /// How many channels match the digits typed so far.
     fn shown_len(&self) -> usize {
-        entry::matches(&self.cands, &self.typed).count()
+        entry::matches(&self.cands, self.machine.typed()).count()
     }
 
     /// How many matches the window of [`LIST_ROWS`] rows leaves under it: the "+N more" count.
@@ -205,11 +217,10 @@ impl ChannelEntryScreen {
 
     /// Step the machine and perform what it asked for.
     fn step_machine<H: AppLike<Memory = PageMemory>>(&mut self, ev: Ev, fx: &mut Effects<'_, H>) {
+        // digits only ever grow (the opening ones are re-typed in place), so a change of length is a change of list
+        let before = self.machine.typed().len();
         let ask = self.machine.step(ev, &self.cands);
-        let typed = self.machine.typed();
-        // a finished machine types nothing: the panel keeps showing what was typed while it fades
-        if !matches!(self.machine, NumberEntry::Done) && typed != self.typed {
-            self.typed = typed;
+        if self.machine.typed().len() != before {
             self.rebuild();
             fx.invalidate(plx_machine::present::Provenance::Input);
         }
@@ -274,6 +285,12 @@ impl<H: AppLike<Memory = PageMemory>> Machine<H> for ChannelEntryScreen {
                 }
                 let h = self.frame(cx.measure).h;
                 self.form.table.update(tick.dt(), h);
+                Handled::Yes
+            }
+            // dismissed from outside (a press that missed the panel): it stops acting for the page, so its timer can
+            // no longer tune after the dismissal. The container already dismissed it: BACK's `Leave` is dropped.
+            ScreenEvent::Closing => {
+                self.machine.step(Ev::Back, &self.cands);
                 Handled::Yes
             }
             ScreenEvent::FocusMoved { to, .. } => {
@@ -389,14 +406,14 @@ impl LogicalState for ChannelEntryScreen {
     fn write(&self, c: &mut Canon) {
         self.arg.write(c);
         match &self.machine {
-            NumberEntry::Fresh { first } => {
-                c.u32(0).u8(*first);
+            NumberEntry::Fresh { digits } => {
+                c.u32(0).str(digits);
             }
             NumberEntry::Typing { digits, highlight, last } => {
-                c.u32(1).str(digits).u32(*highlight as u32).u32(*last);
+                c.u32(1).str(digits).u32(highlight.map_or(0, |h| h as u32 + 1)).u32(*last);
             }
-            NumberEntry::Done => {
-                c.u32(2);
+            NumberEntry::Done { digits } => {
+                c.u32(2).str(digits);
             }
         }
         self.form.table.write_motion(c);
@@ -425,14 +442,14 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
         let p = f.painter.alpha(appear).translate(dx, dy);
         let field = f.underlay;
         let [head, list, more] = self.bands(r, measure);
-        let typed = &self.typed;
+        let typed = self.machine.typed();
         let shown = self.shown_len();
         let left = shown.saturating_sub(LIST_ROWS);
         let frame = self.frame(measure);
         let text_x = |band: Rect| band.x + CONTENT_X - SIDE;
         plx_ui::profile::phase("dt.channel_entry", || {
             plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
-            if let (Some(band), Ok(run)) = (head, std::ffi::CString::new(typed.as_str())) {
+            if let (Some(band), Ok(run)) = (head, std::ffi::CString::new(typed)) {
                 let w = Label::new(run.as_ptr(), theme::size::DISPLAY, theme::TEXT_PRIMARY)
                     .bold()
                     .h(HAlign::Left)

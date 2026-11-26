@@ -397,7 +397,7 @@ A digit typed on the What's on page or over the live player opens **one register
 lineup face (`TableView::lineup`, `Row::lead`: the number in its own column, the station beside it) and "+N more" under
 the window. **What it decides is one pure machine**, `channel_entry::NumberEntry` (`Fresh`, `Typing`, `Done`; events
 `Digit`, `Moved`, `Touch`, `Ok`, `Back`, `Tick`; one effect, `Seat`, `Tune` or `Leave`; time passed in): the digits
-narrow the lineup by PREFIX; a prefix that fits exactly ONE channel tunes at once, anything else only seats the highlight
+narrow the lineup by PREFIX of each number's DIGITS (`6.1` is `61`: there is no dot key; the row shows `6.1`); a prefix that fits exactly ONE channel tunes at once, anything else only seats the highlight
 (the exact match, else the first that is not on screen) and waits `IDLE_MS` (2.5 s) after the last key, which restarts on
 every key; OK tunes the highlight, BACK closes with no tune; the channel already on screen is tagged "Playing" and never
 retuned. The panel reports a choice as `AppMsg::LiveChannelPicked` to the instance named on its argument and starts
@@ -406,3 +406,7 @@ nothing itself, so a pick takes the host's own tune path: the page's `ContentReq
 following, exactly as a zap. The page opens it as `ContentPanel::ChannelEntry` (`Style::Compact`); the player asks
 `PlayerReq::OpenChannelEntry`, presented as `Style::PlayerPanel` (`bridge::open_channel_entry`), which leaves the host
 live so the video plane keeps presenting under it, and the digit drops a zap still pending (`Live::cancel_zap`).
+It is one surface however many keys ask for it: a request for a panel that is mounted is refused (the key reaches it as
+input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
+as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed
+from outside (a press that misses it) hears `Closing` and stops acting, so its timer cannot tune afterwards.

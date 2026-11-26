@@ -1484,7 +1484,7 @@ impl ContentPanel {
             // Over a page the panel is a compact surface, so the page under it stays live and cached.
             Self::ChannelEntry { first } => (
                 Style::Compact,
-                AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg { host, first, playing: None }),
+                AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg::opened_by(host, first, None)),
             ),
             Self::Tracks { page } => (
                 Style::Alert,
@@ -2385,6 +2385,16 @@ impl AppArg {
     pub fn is_library_family(&self) -> bool {
         matches!(self, AppArg::Library | AppArg::LibraryCollections { .. } | AppArg::LibraryRecommended { .. })
     }
+
+    /// **A second request for this surface arrived while the first is still parked** (two keys in one frame, before
+    /// the commit that mounts it): the surface is one, so the later request is folded into the parked argument
+    /// rather than presented again. Only number entry carries anything to fold (its later digits); every other
+    /// surface's second request is simply refused by the caller.
+    pub fn absorb(&mut self, later: &AppArg) {
+        if let (AppArg::ChannelEntry(parked), AppArg::ChannelEntry(later)) = (self, later) {
+            parked.absorb(later);
+        }
+    }
 }
 
 pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,LiveTv,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
@@ -2392,7 +2402,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryC
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
-     ChannelEntry{host:u32,first:u8,playing:Option<{sid:u32,dvr:str,channel:str}>},\
+     ChannelEntry{host:u32,digits:str,playing:Option<{sid:u32,dvr:str,channel:str}>},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
@@ -2905,7 +2915,7 @@ pub fn every_surface_arg() -> Vec<AppArg> {
         }),
         AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg {
             host: plx_machine::machine::InstanceId(1),
-            first: 2,
+            digits: "2".into(),
             playing: None,
         }),
         AppArg::TracksPanel(crate::tracks_panel::TracksPanelArg { page: 1 }),
@@ -3240,7 +3250,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
 // Number entry (Live TV PR5) joins as `AppArg::ChannelEntry` (canon tag 16) with the panel's `channel_entry_panel::SHAPE`.
 // Previous pin: 0xeb60_634f_6b5f_c9ac.
-const SCREEN_SHAPES_PIN: u64 = 0xdb60_6c85_9627_dd05;
+const SCREEN_SHAPES_PIN: u64 = 0x62a1_9fdc_6c66_d317;
 
 #[cfg(test)]
 mod arg_tests {
