@@ -170,6 +170,19 @@ pub struct PlaybackSession {
     metric_request: Option<crate::player::backend::LogicalRequestId>,
     /// Pure addressed facts awaiting the app runner's single monotonic clock and backend owner.
     pending_metric_lifecycle: Vec<crate::player::backend::RequestLifecycle>,
+    /// **The pre-play pick the landed plan will spend once its engine confirms the start**
+    /// ([`PickSpend`]). Held for the PLAN, not for one route transaction: a cold resume's rebuild flight
+    /// or a recovery starts the same landed plan under a transaction of its own. Set by [`apply_plan`]
+    /// for a playable, non-preview plan of the viewer's own and nothing else; moved to
+    /// [`Self::confirmed_pick_spends`] by [`settle_route_start`]'s ordinary `Started` edge, the only
+    /// confirmation (the reducer refuses a superseded attempt's result before it gets that far). A failed
+    /// start leaves it, so a retry that starts spends it; the next landing replaces it, a new request
+    /// ([`clear_track_selection`]) and a full stop ([`retire_stopped_playback`]) drop it unspent.
+    pick_spend_on_start: Option<PickSpend>,
+    /// Starts the engine confirmed and the loop has not yet drained ([`Self::take_confirmed_pick_spends`],
+    /// then [`spend_confirmed_picks`]): one typed effect per confirmed start, the session's hand-off to
+    /// the metadata owner it has no handle on.
+    confirmed_pick_spends: Vec<PickSpend>,
     /// Viewer pause goal captured for an explicit same-item reconfiguration. The physical Feed
     /// hold is executor state and cannot describe a URI attempt's viewer intent.
     reconfigure_pause_goal: Option<bool>,
@@ -1495,6 +1508,19 @@ impl PlaybackSession {
         std::mem::take(&mut self.pending_metric_lifecycle)
     }
 
+    /// The runner consumes each confirmed start once: [`spend_confirmed_picks`] is the one caller.
+    pub fn take_confirmed_pick_spends(&mut self) -> Vec<PickSpend> {
+        std::mem::take(&mut self.confirmed_pick_spends)
+    }
+
+    /// The engine confirmed a start. The pick the landed plan holds (if any) becomes one effect for the
+    /// loop, once: a second confirmation finds nothing.
+    fn confirm_pick_spend(&mut self) {
+        if let Some(spend) = self.pick_spend_on_start.take() {
+            self.confirmed_pick_spends.push(spend);
+        }
+    }
+
     /// A common terminal verdict, after recovery is exhausted or the viewer leaves. Physical
     /// command refusal alone must never call this; its source episode can still recover.
     pub fn finish_metric_request(&mut self,
@@ -1905,6 +1931,8 @@ impl PlaybackSession {
         attempt_origin: crate::player::attempt_metrics::Origin::Fresh,
         metric_request: None,
         pending_metric_lifecycle: Vec::new(),
+        pick_spend_on_start: None,
+        confirmed_pick_spends: Vec::new(),
         reconfigure_pause_goal: None,
         backends: plx_playback_contract::BackendSet::FEED,
         uri_preflight_port: None,
@@ -2017,6 +2045,8 @@ impl PlaybackSession {
             attempt_origin,
             metric_request: _,
             pending_metric_lifecycle: _,
+            pick_spend_on_start: _,
+            confirmed_pick_spends: _,
             reconfigure_pause_goal,
             backends,
             uri_preflight_port: _,
@@ -2111,6 +2141,8 @@ impl PlaybackSession {
             attempt_origin: *attempt_origin,
             metric_request: None,
             pending_metric_lifecycle: Vec::new(),
+            pick_spend_on_start: None,
+            confirmed_pick_spends: Vec::new(),
             reconfigure_pause_goal: *reconfigure_pause_goal,
             backends: *backends,
             uri_preflight_port: None,
@@ -2328,6 +2360,8 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession) {
     clear_url(ps);
     ps.sess.clear();
     ps.request = None;
+    // an abandoned playback never spends: nothing will start under the plan that held the pick
+    ps.pick_spend_on_start = None;
     if ps.engine_failure == Some(crate::player::RuntimeFailure::ServerStopped) {
         ps.engine_failure = None;
     }
@@ -3664,6 +3698,9 @@ pub fn abort_route_start(ticket: RouteStartTransaction, result: RouteStartResult
 /// a live route. An Original failure remains `OriginalTrialPhase::Failed` with the retained HLS
 /// rollback projection until the explicit rollback edge.
 pub fn settle_route_start(ps: &mut PlaybackSession, ticket: RouteStartAttempt, result: RouteStartResult) -> bool {
+    // The ordinary transaction's `Started` is the ONE edge that confirms a viewer's playback started,
+    // whichever backend settled it (an Original trial's `Started` is a mid-playback handoff, not a start).
+    let mut confirmed_start = false;
     let deferred = {
         let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
         let ordinary = control.phase == ControlPhase::Starting(ticket.serial, ticket.attempt);
@@ -3678,6 +3715,7 @@ pub fn settle_route_start(ps: &mut PlaybackSession, ticket: RouteStartAttempt, r
         control.last_start_result = Some((ticket, result));
         match (ordinary, result) {
             (true, RouteStartResult::Started) => {
+                confirmed_start = true;
                 let effects = control
                     .start_deferred
                     .take()
@@ -3711,6 +3749,9 @@ pub fn settle_route_start(ps: &mut PlaybackSession, ticket: RouteStartAttempt, r
             }
         }
     };
+    if confirmed_start {
+        ps.confirm_pick_spend();
+    }
     if let Some(effects) = deferred {
         apply_deferred_original_effects(ps, effects);
         let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
@@ -11537,6 +11578,8 @@ fn clear_track_selection(s: &mut PlaybackSession) {
     s.cur_sub_sid = 0;
     s.selection_known = false;
     s.held_pick = None;
+    // a new request supersedes the plan whose start the pick was waiting for
+    s.pick_spend_on_start = None;
     s.cur_sub_sidecar = false;
     s.cur_sub_client_drawable = false;
     s.cur_sub_ordinal = -1;
@@ -12125,6 +12168,25 @@ pub fn pump_play(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata
         uri_offer })
 }
 
+/// One start the engine confirmed, for the pre-play pick held for that file: what
+/// `MetadataCmd::SpendPick` is sent with. Built by [`apply_plan`] for a playable, non-preview plan,
+/// released by [`settle_route_start`]'s `Started` edge, drained by [`spend_confirmed_picks`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickSpend {
+    pub sid: plx_plex::plex::ServerId,
+    pub rk: String,
+    pub part_id: i64,
+}
+
+/// The loop's half of the hand-off: send each confirmed start's `SpendPick` to the metadata owner,
+/// the session having no handle on it. The ONE place a pick is spent (`metadata::pick_step`
+/// `PickEvent::Started` stays its only writer).
+pub fn spend_confirmed_picks(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::MetadataStore) {
+    for PickSpend { sid, rk, part_id } in ps.take_confirmed_pick_spends() {
+        meta.run(plx_data::stores::metadata::MetadataCmd::SpendPick { sid, rk, part_id });
+    }
+}
+
 /// MAIN THREAD ONLY: the one place a resolved [`Session`] is installed, + the player's audio-track
 /// request. Everything here was previously written from inside `build_stream`, i.e. from whatever
 /// thread ran it.
@@ -12187,15 +12249,17 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     // retry that carries the failure screen's pair (`ResolveEnv::picks_in_force`) is a start all the same,
     // and the pick must not outlive it to be applied to a later Resume. `source_ready` is the same
     // predicate that says the plan has a source to start.
+    //
+    // **The spend is on the engine's confirmation, not on this landing**: the plan only NAMES the pair here
+    // (`pick_spend_on_start`, below, once the landing has its route transaction), and
+    // [`settle_route_start`]'s `Started` edge releases it as one effect the loop drains
+    // ([`spend_confirmed_picks`]). An engine that then fails to start spent nothing.
     let preview = ps.request.as_ref().is_some_and(|r| r.preview);
-    let started = plan.playing.as_ref().filter(|_| source_ready && !preview)
-        .map(|item| (item.sid, item.rk.clone(), plan.part_id));
+    let pick_to_spend = plan.playing.as_ref().filter(|_| source_ready && !preview)
+        .map(|item| PickSpend { sid: item.sid, rk: item.rk.clone(), part_id: plan.part_id });
     meta.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(
         plan.playing,
     ));
-    if let Some((sid, rk, part_id)) = started {
-        meta.run(plx_data::stores::metadata::MetadataCmd::SpendPick { sid, rk, part_id });
-    }
     // main thread only — `up_next()`/`with_queue()` lend out of this (see their docs). The rows
     // arrive already projected: the worker never retained a `Metadata` tree to install here.
     { let s = &mut *ps; {
@@ -12265,6 +12329,9 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
         let attempt_origin = s.attempt_origin;
         let metric_request = s.metric_request;
         let pending_metric_lifecycle = std::mem::take(&mut s.pending_metric_lifecycle);
+        // A start already confirmed but not yet drained is a fact about the PREVIOUS playback and still
+        // spends; what the previous landing merely held is superseded by this one (`None` below).
+        let confirmed_pick_spends = std::mem::take(&mut s.confirmed_pick_spends);
         let reconfigure_pause_goal = s.reconfigure_pause_goal;
         *s = PlaybackSession {
             attempt_view: crate::player::attempt_view::AttemptView::EMPTY,
@@ -12279,6 +12346,8 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             attempt_origin,
             metric_request,
             pending_metric_lifecycle,
+            pick_spend_on_start: None,
+            confirmed_pick_spends,
             reconfigure_pause_goal,
             backends: s.backends,
             uri_preflight_port: s.uri_preflight_port.clone(),
@@ -12423,6 +12492,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     }
     settle_landing_selection(ps);
     let start = prepare_playback_landing(ps, source_ready);
+    ps.pick_spend_on_start = start.and(pick_to_spend);
     // The session's audio choice reaches the Feed's demuxer copy at the start (`SelectAudio`) — main thread only.
     if let Some(ord) = plan.feed_audio_ordinal {
         crate::player::route_fx::set_audio_track(ps, ord);

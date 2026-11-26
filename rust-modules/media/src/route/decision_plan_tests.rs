@@ -1781,65 +1781,182 @@ fn a_transcode_profile_names_the_codecs_of_the_attempts_own_caps() {
     plx_plex::plex::reset_servers_for_test();
 }
 
+/// The fixture of the pick-spend tests: a movie page holding the viewer's subtitles-Off pick for file 9001,
+/// and the plans resolved from it (the page's copy of the item, the pick applied, as the resolve does).
+struct PickRig {
+    ps: crate::route::PlaybackSession,
+    store: plx_data::stores::metadata::MetadataStore,
+    sid: plx_plex::plex::ServerId,
+    off: plx_data::metadata::PreplayPick,
+    _g: plx_base::testlock::Serial,
+}
+
+impl PickRig {
+    const URL: &'static str = "https://example.invalid/m1.mkv";
+
+    fn new() -> Self {
+        use plx_data::metadata::{PreplayPick, SubPick};
+        use plx_data::stores::metadata::MetadataCmd;
+        let mut ps = crate::route::PlaybackSession::IDLE;
+        let guard = fresh_registry(&mut ps);
+        let sid = plx_plex::plex::ServerId::from_raw(0);
+        let mut store = plx_data::stores::metadata::MetadataStore::default();
+        let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+        plx_data::metadata::install_for_test(store.state_mut(), Some(plx_data::metadata::Detail {
+            sid,
+            rk: "m1".into(),
+            kind: "movie".into(),
+            part: "/library/parts/9001/1/file.mkv".into(),
+            audio: vec![stream(11)],
+            subs: vec![stream(21)],
+            ..Default::default()
+        }));
+        let off = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Off };
+        assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
+        Self { ps, store, sid, off, _g: guard }
+    }
+
+    /// A plan resolved NOW (the pick, if it is still held, applied to the item).
+    fn plan(&self, url: &str) -> Plan {
+        let mut playing = self.store.view().cached_playing(self.sid, "m1").expect("the page is the cache");
+        playing.apply_picks(&self.store.view().picks_of(self.sid, "m1"), 9001);
+        Plan { sid: self.sid, url: url.into(), part_id: 9001, playing: Some(playing), ..Default::default() }
+    }
+
+    /// The plan lands and the native Load is claimed, which is as far as `apply_plan` and the loop's
+    /// synchronous acceptance go: nothing has said yet whether the engine started.
+    fn land(&mut self, plan: Plan) -> Option<RouteStartAttempt> {
+        let start = super::apply_plan(&mut self.ps, &mut self.store, plan, "m1", CandidatePurpose::NewCandidate);
+        start.and_then(claim_route_start_attempt)
+    }
+
+    /// The engine's answer for `attempt`, then the loop's drain.
+    fn settle(&mut self, attempt: RouteStartAttempt, result: RouteStartResult) -> bool {
+        let settled = settle_route_start(&mut self.ps, attempt, result);
+        spend_confirmed_picks(&mut self.ps, &mut self.store);
+        settled
+    }
+
+    fn picks(&self) -> Vec<plx_data::metadata::PreplayPick> {
+        self.store.view().picks_of(self.sid, "m1").to_vec()
+    }
+}
+
 /// **(b) A pick is spent by a playback that STARTS, not by a plan that was refused** (#1532): a refused
 /// plan installs its item too (the verdict feeds the read-out), but nothing played, so BACK and Play must
-/// still find the pick; the playable plan that follows spends it. A hero preview is not the viewer's
-/// playback and spends nothing, and a playable retry that carries the failure screen's pair (planned under
-/// no pick) still spends the pick held for its file, or the page's next Resume would apply it. Through the
-/// real `apply_plan`, the one place the spend is sent from.
+/// still find the pick; the playable plan that follows spends it once the engine confirms it. A hero
+/// preview is not the viewer's playback and spends nothing, and a playable retry that carries the failure
+/// screen's pair (planned under no pick) still spends the pick held for its file, or the page's next
+/// Resume would apply it. Through the real `apply_plan` and the real `settle_route_start`.
 #[test]
-fn a_refused_plan_keeps_the_pick_and_the_playable_one_spends_it() {
-    use plx_data::metadata::{PreplayPick, SubPick};
-    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
-    let mut ps = crate::route::PlaybackSession::IDLE;
-    let _g = fresh_registry(&mut ps);
-    let sid = plx_plex::plex::ServerId::from_raw(0);
-    let mut store = MetadataStore::default();
-    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
-    plx_data::metadata::install_for_test(store.state_mut(), Some(plx_data::metadata::Detail {
-        sid,
-        rk: "m1".into(),
-        kind: "movie".into(),
-        part: "/library/parts/9001/1/file.mkv".into(),
-        audio: vec![stream(11)],
-        subs: vec![stream(21)],
-        ..Default::default()
-    }));
-    let off = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Off };
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
-    let planned = |url: &str, store: &MetadataStore| {
-        let mut playing = store.view().cached_playing(sid, "m1").expect("the page is the cache");
-        playing.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
-        Plan { sid, url: url.into(), part_id: 9001, playing: Some(playing), ..Default::default() }
-    };
-    // the plans are resolved at their presses; the first install marks the page's copy as played
-    let url = "https://example.invalid/m1.mkv";
-    let (refused, playable) = (planned("", &store), planned(url, &store));
-    let (preview, retry) = (planned(url, &store), planned(url, &store));
-    let install = |ps: &mut crate::route::PlaybackSession, store: &mut MetadataStore, plan: Plan| {
-        let start = super::apply_plan(ps, store, plan, "m1", CandidatePurpose::NewCandidate);
-        settle_plan_start_in_unit_test(ps, start);
-    };
-    install(&mut ps, &mut store, refused);
-    assert_eq!(store.view().picks_of(sid, "m1"), [off], "a refused first attempt spent nothing");
-    ps.request = Some(PlaybackRequest {
-        sid, rk: "m1".into(), part: "/library/parts/9001/1/file.mkv".into(), vcodec: "h264".into(), acodec: "ac3".into(),
-        title: "Film".into(), ctx: String::new(), preview: true, live: None, version: None, show_rk: String::new(),
+fn a_refused_plan_keeps_the_pick_and_the_started_one_spends_it() {
+    use plx_data::stores::metadata::MetadataCmd;
+    let mut rig = PickRig::new();
+    let off = rig.off;
+    let (refused, playable) = (rig.plan(""), rig.plan(PickRig::URL));
+    let (preview, retry) = (rig.plan(PickRig::URL), rig.plan(PickRig::URL));
+    assert!(rig.land(refused).is_none(), "a refused plan has no start to wait for");
+    spend_confirmed_picks(&mut rig.ps, &mut rig.store);
+    assert_eq!(rig.picks(), [off], "a refused first attempt spent nothing");
+    rig.ps.request = Some(PlaybackRequest {
+        sid: rig.sid, rk: "m1".into(), part: "/library/parts/9001/1/file.mkv".into(), vcodec: "h264".into(),
+        acodec: "ac3".into(), title: "Film".into(), ctx: String::new(), preview: true, live: None, version: None,
+        show_rk: String::new(),
     });
-    install(&mut ps, &mut store, preview);
-    assert_eq!(store.view().picks_of(sid, "m1"), [off], "a hero preview is not the viewer's playback");
-    ps.request = None;
-    install(&mut ps, &mut store, playable);
-    assert!(store.view().picks_of(sid, "m1").is_empty(), "the playback that started under the pick spent it");
+    let previewed = rig.land(preview).expect("a preview's plan is playable");
+    assert!(rig.settle(previewed, RouteStartResult::Started));
+    assert_eq!(rig.picks(), [off], "a hero preview is not the viewer's playback");
+    rig.ps.request = None;
+    let attempt = rig.land(playable).expect("a playable plan");
+    spend_confirmed_picks(&mut rig.ps, &mut rig.store);
+    assert_eq!(rig.picks(), [off], "the plan's landing is not the start");
+    assert!(rig.settle(attempt, RouteStartResult::Started));
+    assert!(rig.picks().is_empty(), "the playback that started under the pick spent it");
 
-    // the retry that carries the failure screen's pair is planned under no pick (`picks_in_force`), yet its
-    // start is the start the pick was waiting for
-    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: off }));
-    let mut under_retry = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+    // the retry that carries the failure screen's pair is planned under no pick (`picks_in_force`), yet
+    // its start is the start the pick was waiting for
+    assert!(rig.store.run(MetadataCmd::PatchTracks { sid: rig.sid, rk: "m1".into(), pick: off }));
+    let mut under_retry = ResolveEnv::snapshot(&rig.ps, rig.store.view(), rig.sid, "m1");
     under_retry.selection_before_retry = Some(SelectionBeforeRetry {
         retry_part_id: 9001, audio_sid: 0, sub_sid: 0, subtitle_override: None, sub_mode: SubMode::Track, memory: Vec::new(),
     });
     assert!(under_retry.picks_in_force().is_empty(), "setup: the retry is planned under no pick");
-    install(&mut ps, &mut store, retry);
-    assert!(store.view().picks_of(sid, "m1").is_empty(), "a start that was not fed the pick still spends it");
+    let attempt = rig.land(retry).expect("the retry's plan is playable");
+    assert_eq!(rig.picks(), [off], "the retry's landing is not its start either");
+    assert!(rig.settle(attempt, RouteStartResult::Started));
+    assert!(rig.picks().is_empty(), "a start that was not fed the pick still spends it");
+}
+
+/// **An engine that fails to start spends nothing**: the viewer picks subtitles Off and presses Play, the
+/// plan lands, the engine then fails (`StartFailed`, and `NoRoute` is the same edge), and the failure screen
+/// shows. BACK and Play is a fresh launch: it must find the pick, be planned under it, and spend it only
+/// when THAT start is confirmed.
+#[test]
+fn a_plan_that_lands_and_then_fails_to_start_keeps_the_pick_for_the_next_launch() {
+    for failure in [RouteStartResult::StartFailed, RouteStartResult::NoRoute] {
+        let mut rig = PickRig::new();
+        let off = rig.off;
+        // the plans are resolved at their presses; the first install marks the page's copy as played
+        let (first, second) = (rig.plan(PickRig::URL), rig.plan(PickRig::URL));
+        let attempt = rig.land(first).expect("a playable plan");
+        assert!(rig.settle(attempt, failure));
+        assert_eq!(rig.picks(), [off], "{failure:?}: the viewer's Off outlives a start that never happened");
+        // BACK, Play: the resolve snapshots the picks of a launch with no retry pair
+        let env = ResolveEnv::snapshot(&rig.ps, rig.store.view(), rig.sid, "m1");
+        assert_eq!(env.picks_in_force(), [off], "{failure:?}: the fresh launch is planned under the pick");
+        let attempt = rig.land(second).expect("the second launch's plan");
+        assert!(rig.settle(attempt, RouteStartResult::Started));
+        assert!(rig.picks().is_empty(), "{failure:?}: the launch that started spent it");
+    }
+}
+
+/// **A superseded or abandoned attempt never spends**: an attempt's own `Started` after its transaction was
+/// replaced is refused by the reducer, and what the replaced plan held went with it.
+#[test]
+fn a_superseded_attempt_does_not_spend_the_pick() {
+    let mut rig = PickRig::new();
+    let off = rig.off;
+    let (a, b, refused, third) = (rig.plan(PickRig::URL), rig.plan(PickRig::URL), rig.plan(""), rig.plan(PickRig::URL));
+    let first = rig.land(a).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+    // a second launch lands, and a refused one replaces it before its engine answers
+    let second = rig.land(b).expect("the second launch");
+    assert!(rig.land(refused).is_none());
+    assert!(!rig.settle(first, RouteStartResult::Started), "the first attempt's late Started is refused");
+    assert!(!rig.settle(second, RouteStartResult::Started), "the replaced launch's Started is refused too");
+    assert_eq!(rig.picks(), [off], "no superseded or abandoned attempt spent the pick");
+    // a transaction aborted before any Load result spends nothing either
+    let attempt = rig.land(third).expect("a third launch");
+    assert!(abort_route_start(RouteStartTransaction { serial: attempt.serial }, RouteStartResult::StartFailed));
+    assert!(!rig.settle(attempt, RouteStartResult::Started));
+    assert_eq!(rig.picks(), [off]);
+}
+
+/// **The pick is held for the PLAN, not for one route transaction**: a start that failed and is retried
+/// under a transaction of its own (`begin_route_start` from `Failed`, as a cold resume's rebuild or a
+/// recovery does) is the same landed plan starting, and its confirmation spends the pick. A playback the
+/// viewer left in between (a full stop) is abandoned, and the same later start spends nothing.
+#[test]
+fn a_retry_of_the_landed_plan_under_a_new_transaction_spends_and_a_stopped_one_does_not() {
+    let mut rig = PickRig::new();
+    let plan = rig.plan(PickRig::URL);
+    let first = rig.land(plan).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+    let retry = begin_route_start().expect("a failed route owns no engine: a new transaction");
+    assert_ne!(retry.serial, first.serial, "setup: the retry is a transaction of its own");
+    let second = claim_route_start_attempt(retry).expect("the retry's attempt");
+    assert!(rig.settle(second, RouteStartResult::Started));
+    assert!(rig.picks().is_empty(), "the landed plan's start spent the pick under its retry's transaction");
+
+    drop(rig); // the rig holds the process-wide test lock
+    let mut rig = PickRig::new();
+    let off = rig.off;
+    let plan = rig.plan(PickRig::URL);
+    let first = rig.land(plan).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+    retire_stopped_playback(&mut rig.ps);
+    let retry = begin_route_start().expect("a new transaction");
+    let second = claim_route_start_attempt(retry).expect("the retry's attempt");
+    assert!(rig.settle(second, RouteStartResult::Started));
+    assert_eq!(rig.picks(), [off], "an abandoned playback never spends");
 }

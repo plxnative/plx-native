@@ -215,13 +215,14 @@ pub struct MetadataState {
     /// (`MetadataView::picks_of`) and applies it to the item it plans, and the panel is seeded from it
     /// ([`PreplayTracks::pick`]). **One lifecycle, one writer ([`pick_step`]), three events**: the viewer's
     /// choice (`MetadataCmd::PatchTracks`); the START of a playable, non-preview playback of the item's
-    /// file (`MetadataCmd::SpendPick`, sent by `route::apply_plan`, so Resume after an in-player change
-    /// reads the server's selection and not a stale pick, while a refused first attempt keeps the pick for
-    /// the next one). **The spend is on the plan's landing, not the engine's confirmation**: an engine that
-    /// then fails to start has spent the pick, and BACK then Play is a fresh launch without it. The
-    /// confirming edge (`route::settle_route_start` `Started`, whichever backend) has the session but no
-    /// store, so spending there needs a typed hand-off from the session to the loop; not built. The last
-    /// event is the page's end (`clear`, `clear_item`, `reset`, and the landing of another item).
+    /// file (`MetadataCmd::SpendPick`, so Resume after an in-player change reads the server's selection and
+    /// not a stale pick, while a refused first attempt keeps the pick for the next one). **The spend is on the
+    /// engine's confirmation, not on the plan's landing**: `route::apply_plan` only names the pair on the
+    /// session, `route::settle_route_start`'s `Started` edge (whichever backend) releases it as one typed
+    /// effect, and the loop sends it (`route::spend_confirmed_picks`). An engine that fails to start
+    /// (`NoRoute`, `StartFailed`), and a superseded or abandoned attempt, spend nothing, so BACK then Play still
+    /// finds the pick. The last event is the page's end (`clear`, `clear_item`, `reset`, and the landing of
+    /// another item).
     /// A re-read of the SAME page touches nothing: the viewer's Off must outlive the watch toggle's
     /// read-back.
     picks: Vec<(plx_plex::plex::ServerId, String, PreplayPick)>,
@@ -3151,7 +3152,7 @@ enum PickEvent<'a> {
     /// The viewer chose `pick` for `(sid, rk)` in the Audio & Subtitles panel (`MetadataCmd::PatchTracks`).
     Chose { sid: plx_plex::plex::ServerId, rk: &'a str, pick: PreplayPick },
     /// A playable, non-preview playback of the item `(sid, rk)` started on the file whose part is `part_id`
-    /// (`MetadataCmd::SpendPick`, sent by `route::apply_plan`): the pick for that file, whether or not that
+    /// (`MetadataCmd::SpendPick`, sent by the loop once the engine confirmed the start): the pick for that file, whether or not that
     /// playback was planned under it, is the viewer's word for a start that has now happened.
     Started { sid: plx_plex::plex::ServerId, rk: &'a str, part_id: i64 },
     /// The page the picks were chosen on ended: it closed ([`clear`], [`clear_item`], [`reset`]) or

@@ -242,7 +242,8 @@ pub enum MetadataCmd {
     /// which applies it to the item it plans.
     PatchTracks { sid: ServerId, rk: String, pick: crate::metadata::PreplayPick },
     /// A playable, non-preview playback of `(sid, rk)` has STARTED on the file whose part is `part_id`
-    /// (`route::apply_plan`): a pick is the viewer's word for the first start and no more, so the
+    /// (sent by the loop once the engine confirmed it, `route::spend_confirmed_picks`; a plan that landed
+    /// but never started spends nothing): a pick is the viewer's word for the first start and no more, so the
     /// pick held for that file is spent, whether or not that playback was planned under it (a retry that
     /// carries the failure screen's pair is not). The only spend; nothing else but the page's own close or
     /// replacement removes a pick.

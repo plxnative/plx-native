@@ -578,7 +578,7 @@ fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
 
 /// **A pick is spent by the playback it started** (#1532), and a re-read of the page does not spend it:
 /// on a SHOW page the loaded page's key is the show's while the pick is keyed by the episode. Pick Off,
-/// Play (`SpendPick`, sent by `apply_plan` for a playable plan), turn English on in the player, stop,
+/// Play (`SpendPick`, sent by the loop once the engine confirmed the start), turn English on in the player, stop,
 /// Resume: the second start reads the server's selection, not the stale Off. Installing a playing item
 /// is not a start, and another item's playback leaves the pick.
 #[test]

@@ -2327,6 +2327,9 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         #[cfg(feature = "play-feed")]
         park_on_decoder_release(app);
         app.adapters.player.sync_request_metrics(&mut app.player.session);
+        // The starts the engine confirmed (`route::settle_route_start`, whichever backend) spend the pick held
+        // for their file: the session has no handle on the metadata owner, so the effect is drained here.
+        plx_media::route::spend_confirmed_picks(&mut app.player.session, app.runtime.metadata_mut());
         // The subtitle registries' colour fact, delivered to the session's readout for the Subtitles
         // menu to read (a field, not a registry): whichever backend plays.
         plx_media::player::deliver_subtitle_ink(&mut app.player.session);
@@ -9685,6 +9688,47 @@ pub(in crate::app) mod lifecycle_regression_tests {
             ("Remote Show", "Next", 2, 20),
         );
         assert_eq!(meta.current().unwrap().sid, rig.sid);
+    }
+
+    /// **The loop spends the viewer's pick when the engine confirms the start**, the only sender of
+    /// `SpendPick`: the plan's landing and the frames after it leave the pick held, a failed start leaves it
+    /// too, and the confirming `Started` (the session's typed effect, drained by `playback_tick`) spends it.
+    #[test]
+    fn the_loop_spends_the_pick_when_the_engine_confirms_the_start() {
+        use plx_data::metadata::{PreplayPick, SubPick};
+        use plx_data::stores::metadata::MetadataCmd;
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::new() else {
+            eprintln!("SKIPPED pick spend: lifecycle fixture worker could not be spawned");
+            return;
+        };
+        let sid = rig.sid;
+        let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+        plx_data::metadata::install_for_test(rig.app.runtime.metadata_mut().state_mut(), Some(plx_data::metadata::Detail {
+            sid,
+            rk: "1".into(),
+            kind: "movie".into(),
+            part: "/library/parts/1/file.mkv".into(),
+            audio: vec![stream(11)],
+            subs: vec![stream(21)],
+            ..Default::default()
+        }));
+        let off = PreplayPick { part_id: 1, audio_sid: 11, sub: SubPick::Off };
+        assert!(rig.app.runtime.metadata_mut().run(MetadataCmd::PatchTracks { sid, rk: "1".into(), pick: off }));
+        rig.request();
+        rig.resolve();
+        assert!(!plx_media::route::url(&rig.app.player.session).is_empty(), "setup: the plan landed playable");
+        frame(&mut rig.app, 16);
+        assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "a landed plan has not started");
+        let transaction = plx_media::route::begin_route_start().unwrap();
+        assert!(plx_media::route::prepare_route_start(transaction));
+        let attempt = plx_media::route::claim_route_start_attempt(transaction).unwrap();
+        assert!(plx_media::route::settle_route_start(
+            &mut rig.app.player.session, attempt, plx_media::route::RouteStartResult::Started,
+        ));
+        assert_eq!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1"), [off], "the drain is the loop's, next tick");
+        frame(&mut rig.app, 32);
+        assert!(rig.app.runtime.metadata_mut().view().picks_of(sid, "1").is_empty(), "the confirmed start spent the pick");
     }
 
     #[test]
