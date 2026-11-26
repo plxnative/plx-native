@@ -345,7 +345,7 @@ def build_locked(host, darwin, target, prefix, work, sources):
     verify_library(output, darwin, shutil.which('readelf') if host else str(cross) + 'readelf')
     stage_dir = Path(os.environ['PLX_ASS_STAGE']).resolve() if os.environ.get('PLX_ASS_STAGE') else ROOT / 'pkg'
     if darwin and stage_dir != ROOT / 'pkg':
-        raise ValueError('PLX_ASS_STAGE is the Tizen package's and needs a Linux build')
+        raise ValueError('PLX_ASS_STAGE stages the Tizen package copy, which needs a Linux build')
     stage_dir.mkdir(parents=True, exist_ok=True)
     staged = stage_dir / name
     candidate = staged.with_name(staged.name + '.' + str(os.getpid()) + '.new')
