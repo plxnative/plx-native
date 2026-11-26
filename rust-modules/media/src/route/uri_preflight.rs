@@ -41,6 +41,28 @@ pub struct SourceSubtitleStream {
     pub language: String,
 }
 
+/// **The Part's embedded subtitle streams, as a qualifier reads them** ([`OriginalRequest::subtitle_streams`]).
+/// Only a qualifier whose driver hands the selected track's cues to the app reads them, and only a build with
+/// `uri-captions` (Tizen) has one: without the feature (webOS) this holds nothing and costs nothing (a zero-sized
+/// value), and [`From`] a list drops it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubtitleStreams(#[cfg(feature = "uri-captions")] Vec<SourceSubtitleStream>);
+
+impl std::ops::Deref for SubtitleStreams {
+    type Target = [SourceSubtitleStream];
+    #[cfg(feature = "uri-captions")]
+    fn deref(&self) -> &[SourceSubtitleStream] { &self.0 }
+    #[cfg(not(feature = "uri-captions"))]
+    fn deref(&self) -> &[SourceSubtitleStream] { &[] }
+}
+
+impl From<Vec<SourceSubtitleStream>> for SubtitleStreams {
+    #[cfg(feature = "uri-captions")]
+    fn from(streams: Vec<SourceSubtitleStream>) -> Self { Self(streams) }
+    #[cfg(not(feature = "uri-captions"))]
+    fn from(_: Vec<SourceSubtitleStream>) -> Self { Self() }
+}
+
 /// Captured product evidence shared by boot's executor configuration and one resolve's IO port.
 /// Callable operations and certified firmware behavior are separate facts, and the display path is
 /// a third: what the installed driver reports of it, read once when the composition installs the
@@ -326,7 +348,7 @@ pub struct OriginalRequest {
     pub subtitle_source: Option<SourceSubtitle>,
     /// Every subtitle stream embedded in the Part, in PMS's order (external sidecars are not in the
     /// file and are not listed). Empty when the Part has none or the plan did not read them.
-    pub subtitle_streams: Vec<SourceSubtitleStream>,
+    pub subtitle_streams: SubtitleStreams,
     /// Off is an actual viewer choice, distinct from no subtitle streams being present.
     /// The current URI driver has no native disable operation.
     pub subtitle_choice: TrackChoice,
@@ -1228,7 +1250,7 @@ mod tests {
             dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto,
             dolby_vision_base_layer_only: false, uri_opt_in,
             standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false, audio_language: String::new(),
-            subtitle_source: None, subtitle_streams: Vec::new(), subtitle_choice: TrackChoice::Unspecified,
+            subtitle_source: None, subtitle_streams: SubtitleStreams::default(), subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,
             quality_allows_original: true, link_allows_original: true, auto_allows_original: true,
@@ -1409,7 +1431,7 @@ mod tests {
             dolby_vision_base_layer_only: false, uri_opt_in: false,
             standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false, audio_language: String::new(),
             subtitle_source: None,
-            subtitle_streams: Vec::new(),
+            subtitle_streams: SubtitleStreams::default(),
             subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1920, 1080)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,

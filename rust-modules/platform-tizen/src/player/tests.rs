@@ -961,7 +961,7 @@ fn request(standard: StandardDirectPlay, audio_sid: i64, audio_ordinal: Option<i
         has_multiple_audio_tracks: false,
         audio_language: String::new(),
         subtitle_source: None,
-        subtitle_streams: Vec::new(),
+        subtitle_streams: Default::default(),
         subtitle_choice: TrackChoice::Unspecified,
         source_kbps: None,
         raster: None,
@@ -1149,7 +1149,7 @@ fn subtitled(streams: Vec<SourceSubtitleStream>, sid: u64) -> OriginalRequest {
     req.subtitle_choice = TrackChoice::Selected(sid);
     req.selection.subtitle_sid = sid as i64;
     req.subtitle_source = Some(SourceSubtitle { codec, embedded: true });
-    req.subtitle_streams = streams;
+    req.subtitle_streams = streams.into();
     req
 }
 
@@ -1181,7 +1181,7 @@ fn a_selected_embedded_text_subtitle_is_offered_with_every_stream_mapped() {
     // Subtitles Off on such a Part still maps them: a later pick has its index.
     let mut off_choice = request(plays(), 31342, Some(0));
     off_choice.subtitle_choice = TrackChoice::Off;
-    off_choice.subtitle_streams = vec![text_sub(9, 0, "srt", "eng")];
+    off_choice.subtitle_streams = vec![text_sub(9, 0, "srt", "eng")].into();
     let Verdict::Known(known) = resolver().qualify(&off(), off_choice) else { panic!("off is certified") };
     assert_eq!(known.source.check_of(nine), Some(&NativeTrackCheck::Sole));
     assert_eq!(known.certified_subtitle_source, None, "nothing selected, nothing to render");

@@ -1828,9 +1828,9 @@ pub enum SubWrite {
 
 /// Every embedded subtitle stream of the playing Part, for a qualifier whose driver hands the selected track's cues to
 /// the app (`uri-captions`, the Tizen build). A build without such a driver (webOS) sends none: its qualifier never
-/// reads them.
+/// reads them, and [`SubtitleStreams`](super::uri_preflight::SubtitleStreams) holds nothing there.
 #[cfg(feature = "uri-captions")]
-fn uri_subtitle_streams(playing: Option<&plx_data::metadata::PlayingItem>) -> Vec<super::uri_preflight::SourceSubtitleStream> {
+fn uri_subtitle_streams(playing: Option<&plx_data::metadata::PlayingItem>) -> super::uri_preflight::SubtitleStreams {
     playing.map_or_else(Vec::new, |item| item.subs.iter()
         .enumerate()
         .filter(|(_, sub)| !sub.external)
@@ -1840,12 +1840,12 @@ fn uri_subtitle_streams(playing: Option<&plx_data::metadata::PlayingItem>) -> Ve
             codec: sub.codec.to_lowercase(),
             language: sub.lang_code.clone(),
         })
-        .collect())
+        .collect()).into()
 }
 
 #[cfg(not(feature = "uri-captions"))]
-fn uri_subtitle_streams(_: Option<&plx_data::metadata::PlayingItem>) -> Vec<super::uri_preflight::SourceSubtitleStream> {
-    Vec::new()
+fn uri_subtitle_streams(_: Option<&plx_data::metadata::PlayingItem>) -> super::uri_preflight::SubtitleStreams {
+    super::uri_preflight::SubtitleStreams::default()
 }
 
 /// Pick the stream URL for an item: direct-play only what the pipeline decodes natively (H264/
