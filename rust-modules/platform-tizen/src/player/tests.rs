@@ -1378,33 +1378,36 @@ fn off_or_a_newer_pick_supersedes_an_unanswered_subtitle_pick() {
 /// settle (or time out) on the host's answer, and no cue is handed over while it is unanswered.
 #[test]
 fn a_pick_whose_verb_the_host_refuses_leaves_the_earlier_pick_pending() {
-    for answer in [Some(1), None] {
+    for answer in [true, false] {
         let (mut driver, fake) = rig();
         let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
-        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+        // French (native 0) is the settled track.
+        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(12)), DispatchResult::Queued);
+        fake.post(epoch, PlayerKind::Track, 2, 0);
+        poll(&mut driver);
+        // English (native 1) is asked; a pick of French again is then refused by the host's queue.
+        assert_eq!(dispatch(&mut driver, a, 3, pick_sub(11)), DispatchResult::Queued);
         fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
-        assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Refused(Failure::Busy));
+        assert_eq!(dispatch(&mut driver, a, 4, pick_sub(12)), DispatchResult::Refused(Failure::Busy));
         fake.with(|s| s.refuse_verb = None);
+        // The player already raises English cues: with English unanswered none is handed over as French's.
         fake.with(|s| s.cues.push(cue(epoch, 1_000, 1_500, "ENGLISH 00")));
         assert!(poll(&mut driver).is_empty());
-        assert!(captions(&mut driver).is_empty(), "no cue while the earlier pick is unanswered: {answer:?}");
-        match answer {
-            Some(index) => {
-                fake.post(epoch, PlayerKind::Track, 2, index);
-                assert_eq!(poll(&mut driver), [
-                    observation(a, Observation::TrackSelected(seen(SUB_EN))),
-                    DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Subtitle,
-                        choice: TrackChoice::Selected(11) },
-                ], "the earlier pick still settles");
-                fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
-                poll(&mut driver);
-                assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
-            }
-            None => {
-                fake.advance(TIMING.control_timeout_ms);
-                assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(2),
-                    operation: pick_sub(11), failure: Failure::TimedOut }], "the earlier pick still times out");
-            }
+        assert!(captions(&mut driver).is_empty(), "no cue while the earlier pick is unanswered (answer: {answer})");
+        if answer {
+            fake.post(epoch, PlayerKind::Track, 3, 1);
+            assert_eq!(poll(&mut driver), [
+                observation(a, Observation::TrackSelected(seen(SUB_EN))),
+                DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle,
+                    choice: TrackChoice::Selected(11) },
+            ], "the earlier pick still settles");
+            fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+            poll(&mut driver);
+            assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+        } else {
+            fake.advance(TIMING.control_timeout_ms);
+            assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(3),
+                operation: pick_sub(11), failure: Failure::TimedOut }], "the earlier pick still times out");
         }
     }
 }
