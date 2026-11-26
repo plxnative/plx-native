@@ -4,8 +4,10 @@
 //! ([`super::ass_source`]), at the render ordinal the session says the app draws ([`embedded_subtitle_drawn_by_app`]).
 //! From there the subtitle is drawn exactly as a Feed play's embedded text track is, with the viewer's Style and Timing.
 //!
-//! The cues arrive already free of the source's markup (the native player strips it), so the track is written as the
-//! plain dialect: braces and backslashes in the text are drawn as they are, and a newline breaks the line.
+//! The cues arrive already stripped of the source's tags (the native player removes SubRip's `<b>`/`<i>` and ASS override
+//! blocks), so the track is written in the plain dialect: the shared converter's common floor, under which a newline
+//! breaks the line, exactly as for an embedded text track on a Feed play (a literal `{...}` left in a cue is read as an
+//! override block there too).
 //!
 //! [`UriDriver::delivers_captions`]: plx_playback_contract::uri::UriDriver::delivers_captions
 //! [`embedded_subtitle_drawn_by_app`]: crate::route::embedded_subtitle_drawn_by_app
@@ -101,17 +103,17 @@ mod tests {
         let events = shown(1);
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!((events[0].0, events[0].1), (2_003, 1_500));
-        assert!(events[0].2.ends_with("TWO 01 top\NTWO 01 bottom"), "the newline is a line break: {:?}", events[0].2);
+        assert!(events[0].2.ends_with(r"TWO 01 top\NTWO 01 bottom"), "the newline is a line break: {:?}", events[0].2);
         // The same cue again (the player re-raised it) is one event.
         assert_eq!(sink.deliver(live, Some((12, 1)), Some(2_100_000_000), &batch[..1]), 1);
         assert_eq!(shown(1).len(), 1);
 
         // A pick of the stream at ordinal 0: a fresh source, the old cues gone.
         crate::player::request_subtitle(0);
-        assert_eq!(sink.deliver(live, Some((11, 0)), Some(4_000_000_000), &[caption(live, 11, 4_001, "{brace} kept")]), 1);
+        assert_eq!(sink.deliver(live, Some((11, 0)), Some(4_000_000_000), &[caption(live, 11, 4_001, "FRENCH 02")]), 1);
         let events = shown(0);
         assert_eq!(events.len(), 1, "{events:?}");
-        assert!(events[0].2.contains("brace} kept"), "a brace is drawn as it is: {:?}", events[0].2);
+        assert!(events[0].2.ends_with("FRENCH 02"), "{:?}", events[0].2);
         assert!(shown(1).is_empty(), "the old track's source was replaced");
 
         // Nothing drawn (Off): nothing pushed.
