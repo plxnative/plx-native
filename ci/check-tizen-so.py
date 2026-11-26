@@ -200,6 +200,11 @@ def header_struct(text: str, name: str) -> list[tuple[str, str]]:
     return fields
 
 
+def header_struct_names(text: str) -> list[str]:
+    """The names of every `typedef struct NAME { ... } NAME;` of the header, in order."""
+    return [name for name, alias in re.findall(r"typedef\s+struct\s+(\w+)\s*\{.*?\}\s*(\w+)\s*;", strip_c_comments(text), re.S) if name == alias]
+
+
 def csharp_struct(text: str, name: str) -> list[tuple[str, str]]:
     """(type, name) of the public fields of `struct NAME { ... }`, in order."""
     text = strip_c_comments(text)
@@ -277,7 +282,8 @@ def check_abi(header_text: str, cs_text: str) -> list[str]:
     for name in sorted(set(theirs) & set(ours)):
         if theirs[name] != ours[name]:
             problems.append(f"{name}: the header says (returns {theirs[name][0]}, {theirs[name][1]} parameter(s)), the host's DllImport says (returns {ours[name][0]}, {ours[name][1]} parameter(s))")
-    for struct in ("PlxHostApi", "PlxHostEvent"):
+    # Every struct the header types (the table, the event, the cue) is marshalled by value by the host, so each is mirrored field for field.
+    for struct in header_struct_names(header_text):
         c_fields, cs_fields = header_struct(header_text, struct), csharp_struct(cs_text, struct)
         want = [(_cs_type_of(t), _norm(n)) for t, n in c_fields]
         have = [(t, _norm(n)) for t, n in cs_fields]
