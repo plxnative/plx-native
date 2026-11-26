@@ -217,7 +217,7 @@ struct Pslot {
     /// otherwise cleared (recovery, recycle) — a new deadline is something to wake for again.
     evict_wake_sent: bool,
     /// What this slot's request asked derived from its picture ([`Derive`]: a blurred copy, or the flat
-    /// ground of a picture with transparency, and/or the ink box), made of the decoded picture in [`drain_decoded`]. Set at the
+    /// ground of a picture with transparency, or the ink box), made of the decoded picture in [`drain_decoded`]. Set at the
     /// claim and part of the slot's identity (the hit loop in [`lookup_art`] matches on it), so a slot
     /// never answers a request with a picture that lacks the copy it declared, and art nobody asked
     /// a copy for never pays for one.
@@ -1632,7 +1632,7 @@ pub(crate) fn drain_decoded() {
             };
             // What the request asked derived ([`Pslot::derive`]): the blurred copy a tile draws behind its
             // contained art (a few thousand taps, ~1-4 KB), the Live TV art ground's full-screen one
-            // (`art_ground::SPEC`, ~7 KB), and/or a channel logo's ink box (one pass over the alpha). Made
+            // (`art_ground::SPEC`, ~7 KB), or a channel logo's ink box (one pass over the alpha; never both). Made
             // here, once, from the pixels just copied (`art_fit::attach_derived`), and carried with the
             // picture into the cache.
             Ok(match derive {

@@ -85,7 +85,7 @@ pub trait Source {
     /// source's LRU.
     ///
     /// `derive` is what this request wants derived from the picture and delivered with it: a blurred
-    /// copy, and/or its ink box ([`crate::art_fit::Derive`]; `None` asks for nothing). It is part of
+    /// copy, or its ink box ([`crate::art_fit::Derive`] is one or the other; `None` asks for nothing). It is part of
     /// the request's identity: the same art asked for with and without is two entries, so a request can
     /// never be answered with a picture that lacks what it declared.
     fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Option<PosterKey>;
@@ -447,7 +447,9 @@ pub struct Decoded {
     pub backdrop: Option<Box<Decoded>>,
     /// What the request found of this picture's ink ([`crate::art_fit::ink_of`]) when its request asked for
     /// it ([`crate::art_fit::Derive::INK`]): found once when the picture arrives, held in the same
-    /// [`Entry`] and gone with it. `None` when the request asked for none, or the picture has no ink.
+    /// [`Entry`] and gone with it. `None` when the request did not ask for the box, or the buffer was unreadable. A
+    /// picture with no visible texel is NOT `None`: it answers `Some(Ink::Clear)`, and a plate draws the channel's
+    /// name for it, where `None` draws the whole texture.
     pub ink: Option<Ink>,
 }
 
