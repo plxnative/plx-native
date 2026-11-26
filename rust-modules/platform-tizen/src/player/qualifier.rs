@@ -18,7 +18,7 @@
 //!   ([`UriDecline::NotCertified`]): there is no index to ask for. UNMEASURED on a retail set: the native order
 //!   (`docs/tizen.md`, "The audio track is selected").
 //! - **An embedded TEXT subtitle is certified, and drawn by the app** (measured on the emulator, 2026-11-26,
-//!   `docs/tizen.md`, "Subtitles"): the host player raises a text track's cues to the library and draws nothing itself,
+//!   `docs/tizen.md`, "Selected text subtitles"): the host player raises a text track's cues to the library and draws nothing itself,
 //!   so the app draws them with its own renderer ([`super::machine::CAPS`]). Every subtitle stream embedded in the Part is
 //!   mapped at its position among them, with its identity check (`Sole` for one, else its language, matched against the
 //!   native TEXT tracks' languages as audio is), so the selected one starts and a pick mid-play can be asked for. Only a
@@ -41,7 +41,7 @@ use plx_playback_contract::{TrackKind, TrackSelection};
 pub struct TizenQualifier;
 
 /// The embedded subtitle codecs (PMS's names) whose cues the emulator's player was measured raising as text: SubRip and
-/// ASS in Matroska (`docs/tizen.md`, "Subtitles"). The player hands ASS over with its override blocks stripped, so the app
+/// ASS in Matroska (`docs/tizen.md`, "Selected text subtitles"). The player hands ASS over with its override blocks stripped, so the app
 /// draws it as plain text, without the file's styling or positions.
 pub const MEASURED_TEXT_CODECS: [&str; 3] = ["srt", "subrip", "ass"];
 

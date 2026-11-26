@@ -10,8 +10,8 @@ THE CONTRACT has three sides that cannot see one another, in three languages: th
 object the linker made. `abi` compares the first two as text and runs ANYWHERE (it is a step of `make check`'s Python gates and of
 the CI job): the `plx_host_*` functions the header declares are exactly the ones the host P/Invokes, and the host's mirror of the callback
 table (`PlxHostApi`) lists the same fields in the same order, which is the only thing that keeps the struct's layout equal on both sides.
-`map` writes the linker's version script from the header: the three names global, everything else local, so SDL, FreeType and every
-Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide the three exports too). `verify` reads the linked library
+`map` writes the linker's version script from the header: the header's `plx_host_*` names global, everything else local, so SDL,
+FreeType and every Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide those exports too). `verify` reads the linked library
 with the build host's binutils (`readelf`, `nm`) and needs Linux:
 
   * DT_NEEDED is an allowlist, not a deny-list: the C runtime, libgcc_s, and libGLESv2.so.2 (which must be there: the renderer's GL imports

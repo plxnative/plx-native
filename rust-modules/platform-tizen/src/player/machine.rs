@@ -66,7 +66,7 @@ use std::collections::VecDeque;
 /// PREPARED; a Part's sole subtitle stream needs no language, but is still asked, because the verb is what turns the
 /// cues on), and settled when the host's `PLAYER_TRACK` echoes it. From then on each cue of that track is a
 /// [`UriCaption`] ([`Machine::cues`]). The player draws nothing of its own: measured on the emulator (2026-11-26,
-/// `docs/tizen.md`, "Subtitles"), with and without the cue callback. Which codecs are offered is the qualifier's
+/// `docs/tizen.md`, "Selected text subtitles"), with and without the cue callback. Which codecs are offered is the qualifier's
 /// certification, not this flag.
 ///
 /// `subtitle_off` is `true` by construction: since the player draws nothing, Off needs no host call. Its

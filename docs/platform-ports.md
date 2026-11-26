@@ -1127,7 +1127,7 @@ Ecore names to `remote_token_key` pairs".
 ### 7. Entry, shutdown and the host doorway
 
 - Entry: webOS is `src/main.c` calling `plex_run`; desktop is the `plxnative-sim` bin; Tizen is a shared library
-  exporting the three calls below.
+  exporting the calls below (the header's `plx_host_*` functions).
 - Return (review B1, C2; critic F1, F8). `run_application` returns `Exit { code, release }` instead of `-> !`
   (`release` is `Release::Complete | Retained`). An early-boot refusal returns its code, and a played session
   returns after `run::shutdown` and the telemetry guard drop (F29). The executable entries own the process end:
@@ -1389,7 +1389,7 @@ Ecore names to `remote_token_key` pairs".
   artifact root has exactly one `plx_platform_*` in its normal dependency tree.
 - Tizen link shape: `cargo rustc --crate-type staticlib` of `plx_platform_tizen` (F24), then `cc -shared
   -Wl,--whole-archive` over it plus `svg.o` and a STATIC SDL2 + SDL2_ttf built from the pins in `ci/dependencies.json`
-  (`tizen/build-sdl.sh`), with `-z defs`, a version script that exports only the header's three `plx_host_*` names and
+  (`tizen/build-sdl.sh`), with `-z defs`, a version script that exports only the header's `plx_host_*` names and
   `-lGLESv2` (decision D3). No `main.c`, `access.c`, `exit.c`, `starfish.c` or `video_plane.c`, and none of
   `sentry_context.o`, `crashtrace.o` or libass: nothing the emulator build reaches references them. No cdylib crate type,
   so `ci/test_no_host_staticlib.py` is untouched. `docs/tizen.md` is the build's page.
@@ -2008,7 +2008,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   MediaView, an ElmSharp window or a NUI window), so the host calls the native player directly (D1 = P1).
 - As landed (PR A, the host ABI and the C# player): `plx_host.h` is version 2: `player_open` and `player_verb`
   appended to `PlxHostApi` (size-gated, both or neither), player events through `plx_host_post` carrying an epoch
-  (three exports then; `plx_host_post_cue` came later for subtitle cues, `docs/tizen.md`, "Selected text subtitles"), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
+  (three exports then; `plx_host_post_cue` came later for subtitle cues: `docs/tizen.md`, "Selected text subtitles"), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
   own in `Hosted` (lossless but for position and buffering). A v1 host or NULL pointers is "no playback", never a
   refused start. The host is `PlxPlayer.cs` over `libcapi-media-player.so.0` (`PlayerNative.cs`): one video thread, a
   host-side position poll, events posted straight from native callbacks. The window is found host-side
@@ -2026,8 +2026,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `TizenQualifier` certifies the selected stream wherever it sits; whether the native index follows PMS's order on a retail
   set is unmeasured, `docs/tizen.md`, "The audio track is selected"), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
   and never a converted PMS output. `subtitle_choice = Off` (any subtitle stream, none selected) is carried: the driver states
-  `subtitle_off` (the host gives the player no subtitle, and the emulator run in `docs/tizen.md`, "Subtitles off", showed
-  none drawn from a default-flagged embedded track), so `SubtitleOff` is refused only on evidence without it. A selected
+  `subtitle_off` (the native player draws no subtitle of its own: the emulator runs in `docs/tizen.md`, "Subtitles off" and
+  "Selected text subtitles", showed it drawing none, whether or not a text track was selected and the cue callback registered), so `SubtitleOff` is refused only on evidence without it. A selected
   embedded TEXT subtitle (every embedded subtitle stream SubRip or ASS) is drawn by the app from the host player's cues
   (`plx_host_post_cue`, `docs/tizen.md`, "Selected text subtitles"), a picture or unmeasured one still fails `subtitle_track`, a sidecar is `requires_client_subtitle`, and Boost Dialog, Auto on a
   non-local link and a relay are refused before the qualifier is asked; with no Feed and `qualify_pms` Unknown each ends as

@@ -1,6 +1,6 @@
 //! The hosted contract's logic (`docs/platform-ports.md`, Target shape 7), with no Ecore and no EGL in it.
 //!
-//! [`Hosted`] is everything behind the three C exports: the gate every host-bound callback enters through,
+//! [`Hosted`] is everything behind the header's `plx_host_*` C exports: the gate every host-bound callback enters through,
 //! the exactly-once completion, the bounded input queue, the copy of the host's callback table, and the
 //! start, post, stop and deliver steps. It is an instance (built by a `const fn`, held in one `static` by
 //! [`crate::exports`]) so a host test builds its own and drives it with a fake host table and injected
