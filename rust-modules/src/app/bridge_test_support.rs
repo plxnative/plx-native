@@ -107,6 +107,7 @@ impl TestCommandResources {
     }
     /// The session the commands in this fixture act on.
     pub(crate) fn session(&self) -> &plx_media::route::PlaybackSession { &self.player.session }
+    pub(crate) fn session_mut(&mut self) -> &mut plx_media::route::PlaybackSession { &mut self.player.session }
     pub(crate) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
         crate::app::content::CommandResources { player: &mut self.player,
             adapters: &mut self.adapters, menu_play_await: &mut self.menu_play_await, playback: &mut self.playback,

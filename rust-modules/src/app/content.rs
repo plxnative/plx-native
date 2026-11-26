@@ -2950,6 +2950,7 @@ mod failed_pick_tests {
     fn the_failure_panel_closes_when_the_retry_started_and_stays_up_when_it_did_not() {
         for started in [true, false] {
             let mut session = PlaybackSession::default();
+            plx_media::route::seed_request_for_test(&mut session, "m1");
             let (mut asked, mut closed) = (0, 0);
             commit_failed_pick(&mut session, &pick(), |_| { asked += 1; started }, || closed += 1);
             assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the pair is held either way");
@@ -2976,7 +2977,8 @@ mod failed_pick_tests {
             || closed = true,
         );
         assert!(!closed, "no request descriptor: the retry is refused and the panel stays");
-        assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the refused retry leaves the pair held for Try again");
+        assert_eq!(plx_media::route::failed_pick(&session), None,
+            "no request, no item the pick could belong to: nothing is held");
     }
 
     /// **Try again plays the pick it was made for**, through the real retry on a session that HAS a request:
@@ -3003,8 +3005,8 @@ mod failed_pick_tests {
 
     /// **The `content_command` arm itself**, not only the helper it calls: a pick committed on the failure
     /// screen reaches the session's held pick through the product runner (`execute_resource_command`), and
-    /// a retry that cannot start (this session has no request to resolve again) leaves the pair held for
-    /// Try again. The tracks name no part, so the selection PUT is not queued.
+    /// the retry (on a session with a request) stops and resolves again with the pick still held for it.
+    /// The tracks name no part, so the selection PUT is not queued.
     #[test]
     fn the_commit_arm_holds_the_failure_screens_pick_on_the_session() {
         use plx_appkit::preplay_tracks::{select, Pick, TrackSet};
@@ -3029,6 +3031,7 @@ mod failed_pick_tests {
             part: String::new(), audio: audio.clone(), subs: subs.clone(), pick: None,
         };
         let mut resources = crate::app::bridge::test_support::TestCommandResources::new();
+        plx_media::route::seed_request_for_test(resources.session_mut(), "1");
         assert_eq!(plx_media::route::failed_pick(resources.session()), None, "nothing held before the commit");
         let outcome = super::execute_resource_command(
             &mut d, &mut rig, &mut resources.borrow(), MachineId::Instance(instance),
