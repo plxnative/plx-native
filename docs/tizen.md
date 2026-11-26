@@ -1,7 +1,7 @@
 # The Tizen build for Samsung TVs and the TV emulator
 
 `PLATFORM=tizen` builds PlxNative for a Samsung Tizen television as a **hosted library**: a shared object, `libplx.so`, that a small
-.NET application (`tizen/host/PlxHost/`) loads and drives through three C functions. The design is `docs/platform-ports.md`
+.NET application (`tizen/host/PlxHost/`) loads and drives through the C functions its header exports (`plx_host_*`). The design is `docs/platform-ports.md`
 ("Target shape", W9); this page is how to build, check, install and read what comes out. Nothing here is verified on a retail set.
 
 ## Scope of the MVP
@@ -25,13 +25,14 @@
 | `mk/platform-tizen.mk` | the build; the `Makefile` includes it only when `PLATFORM=tizen`, so every webOS and desktop `make` is untouched |
 | `rust-modules/platform-tizen/` | the platform crate (`plx_platform_tizen`) and `include/plx_host.h`, the C contract, written once and read by both sides |
 | `tizen/build-sdl.sh` | static SDL2 + SDL2_ttf from the pins `sdl2` and `sdl2-ttf` in `ci/dependencies.json` (no HarfBuzz) |
+| `ci/build-libass.py` | the subtitle renderer `libass-plx` (the webOS recipe, shared: `tizen-libass` runs it with `PLX_ASS_STAGE`; "The subtitle renderer", below) |
 | `tizen/host/PlxHost/` | the .NET host: `PlxHost.csproj`, `tizen-manifest.xml`, `Program.cs` |
 | `tizen/package.py` | stages the package's `lib/` and `res/`, refuses without signing material, packs and checks the `.tpk` |
 | `ci/check-tizen-so.py` | the contract check: header against C# as text (`abi`), the linker's version script (`map`), the linked library (`verify`) |
 | `tools/tizen-log-receiver.py` | the UDP log receiver, with a lost-datagram report |
 
 Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tizen/out/`, `tizen/sdl-build/`, and under
-`tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/OFL.txt`, `res/dev-boot.json`,
+`tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/fonts/`, `res/libass-plx*.so.0`, `res/OFL.txt`, `res/dev-boot.json`,
 `res/log-host.txt`, `res/THIRD-PARTY-NOTICES.md`, `res/licenses/` and the icon.
 
 ## The targets
@@ -43,18 +44,21 @@ the television build by accident; the queries (`print-*`) answer under every `PL
 
 | Target | Needs | What it does |
 | --- | --- | --- |
-| `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
+| `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the header's `plx_host_*` functions, each one's return type and parameter count, every struct (`PlxHostApi`, `PlxHostEvent`, `PlxHostCue`) field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
 | `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for the selected target |
 | `tizen-sdl` | host tools and the selected compiler | the static SDL2 + SDL2_ttf under `tizen/sdl-build/<arch>` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
-| `tizen-so` | Linux x86_64 with `libgles-dev`, or the ARM NDK | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/<arch>/libplx.so` |
-| `tizen-verify` | GNU binutils (from the NDK on ARM) | `ci/check-tizen-so.py verify` on the linked library (below) |
-| `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
+| `tizen-libass` | the above, cmake and pkg-config | the subtitle renderer `tizen/out/<arch>/libass-plx-host.so.0` (x86_64) or `libass-plx.so.0` (armv7), stripped; `ci/build-libass.py` keeps the static stack under `vendor/libass-prefix-host` or `vendor/libass-prefix` (shared with the simulators and the webOS package) and relinks only the facade when it is current |
+| `tizen-so` | Linux x86_64 with `libgles-dev`, or the ARM NDK | `tizen-libass`, then `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/<arch>/libplx.so` |
+| `tizen-verify` | GNU binutils (from the NDK on ARM) | `ci/check-tizen-so.py verify` on the linked library and, with `--ass`, the renderer (below) |
+| `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` (the renderer, the fonts, the notices) and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
 | `tizen-tpk` | the above, .NET 8 SDK, a Samsung certificate profile | the signed `tizen/out/PlxNative-x86_64.tpk`; refuses at once, naming the missing variables, without the profile |
 | `tizen-tpk-nightly` | the above, .NET 8 SDK, OpenSSL, `RELEASE=1` | builds and verifies `plxnative-tizen-v<label>-<arch>.tpk` with throwaway signing |
 | `print-tizen-config` | any host | the configuration, one `NAME=value` per line (the CI job prints it) |
 
 The emulator link runs on x86_64 Linux. The ARM build uses the pinned webOS NDK on macOS or arm64
-Linux and the `armv7-unknown-linux-gnueabi` Rust target. Run `make setup-env` to install both.
+Linux and the `armv7-unknown-linux-gnueabi` Rust target. Run `make setup-env` to install both. The NDK has no
+x86_64 Linux build, so an x86_64 Linux machine (WSL included) builds only the emulator package; the armv7 one is CI's
+(`tizen-package.yml`) or a Mac's.
 
 ### What the link contains
 
@@ -63,14 +67,41 @@ UI's icons use) and a **static SDL2 + SDL2_ttf with its own FreeType**: a Tizen 
 surfaces. SDL never opens a window and its video subsystem is never initialised; the window, the EGL context and the keys are Tizen's own
 (Ecore_Wl2). The link line (`mk/platform-tizen.mk`) is `cc -shared` with `-Wl,-soname,libplx.so`, `-z defs` (an undefined symbol fails this
 link, not `dlopen` on the emulator: the library is loaded `BIND_NOW`), `-z relro -z now`, `--as-needed`, `--gc-sections`, and a **version
-script generated from the header** that makes the three `plx_host_*` names global and everything else local, so no SDL, FreeType or Rust
+script generated from the header** that makes the header's `plx_host_*` names global and everything else local, so no SDL, FreeType or Rust
 symbol is exported. The link is written to `libplx.so.part` and renamed, so a failed link never leaves a half-written library for
 `tizen-verify` to read.
 
+### The subtitle renderer
+
+The package carries a second native library, `libass-plx`, the same one the webOS package ships: the `plx_ass_*` facade (`src/ass.c`,
+`src/ass_fonts.c`, `src/ass_text.c`, `include/ass.h`) over a statically linked libass, FreeType, FriBidi, HarfBuzz and libunibreak. It is
+what draws every text subtitle (`player::ass`, `ass_source`) and what shapes Arabic and Hebrew UI text (`plx_gfx::rtl`). Without it a
+selected subtitle shows "Styled subtitle support is unavailable in this installation" and right-to-left text falls back to boxes.
+It is NOT linked into `libplx.so`: the application opens it at run time by absolute path from its application directory (`dynlib!`,
+candidates `libass-plx-host.so.0`, `libass-plx.so.0`), which on Tizen is `res/` (`DirectoryInfo.Resource`), so it is staged as
+`res/<name>` beside the fonts it reads.
+
+- **Built by the webOS recipe, not a parallel one.** `tizen-libass` runs `ci/build-libass.py` with `PLX_ASS_STAGE=tizen/out/<arch>`, which
+  only changes where the stripped library is published (never `pkg/`, which no Tizen goal writes). On armv7 it is the recipe's ARM
+  cross build, from the same inputs and under the same stamp key as the webOS one: the Tizen armv7 link already uses the same pinned webOS NDK, sysroot (glibc 2.12 symbols) and
+  `ci/arm-cc.py`, and the file is `libass-plx.so.0`. On x86_64 it is the recipe's Linux host build, `libass-plx-host.so.0`, compiled by the build host's
+  `cc` exactly as `libplx.so` is (and under the same `PLX_MAX_GLIBC` ceiling). The static stack is cached by the recipe's own content key
+  under `vendor/libass-prefix(-host)`, shared with the webOS package and the simulators.
+- **The fonts.** `tizen/package.py` stages every face of the UI text chain (`appfont.ttf`, `appfont-bold.ttf`, `appfont-cjk.ttf`,
+  `appfont-emoji.ttf`, the Arabic and Hebrew faces with their bold cuts; `ci/test_shipped_faces.py` holds the list to `text.rs`) and the
+  per-script subtitle faces with their manifest in `res/fonts/subs/`. The renderer's default face is `appfont-cjk.ttf`; `verify_tpk`
+  refuses a package that lacks a face the packaged manifest names.
+- **Checked.** `tizen-verify` holds the renderer to its own rules (below); `verify_tpk` requires exactly one renderer, under one of the two
+  names, byte-equal to the verified file, and no other ELF object outside `lib/`.
+- **Size.** The x86_64 emulator package grew from 15,043,205 to 25,621,891 bytes (a `tvdev` build with the dev-boot files, measured
+  2026-11-26). The renderer is 3.2 MB stripped and `appfont-cjk.ttf` 13.4 MB, both before compression.
+
 **Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
-in the documentation shipped with the product), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
+in the documentation shipped with the product), and carries the renderer (libass ISC, FreeType, FriBidi LGPL-2.1-or-later, HarfBuzz Old MIT,
+libunibreak zlib: `THIRD-PARTY-NOTICES.md` 1.2), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
 `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`, the set the `.ipk` ships); `tizen/package.py` stages them and
-`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 2.8 is this package's additional entry and states, heading by heading, which other sections of the file cover the `.tpk`; section 3 there describes the webOS package, so read 2.8 first.
+`verify_tpk` fails a package without the notices, `Zlib.txt`, `FreeType.txt` or the renderer's texts (`libass-ISC.txt`, `HarfBuzz-Old-MIT.txt`,
+`libunibreak-Zlib.txt`, `LGPL-2.1.txt`). `THIRD-PARTY-NOTICES.md` section 2.8 is this package's additional entry and states, heading by heading, which other sections of the file cover the `.tpk`; section 3 there describes the webOS package, so read 2.8 first.
 
 ### What `tizen-verify` checks
 
@@ -87,20 +118,27 @@ Beyond that: the soname is `libplx.so` and the library has neither a text reloca
 loader's (a versioned `GLIBC_*`/`GCC_*` symbol, never `GLIBC_PRIVATE`), an unversioned OpenGL ES 2.0 core function (the fixed `GLES2_CORE` list
 in the script; libGLESv2 has no symbol versions, and an ES 3.0 name such as `glBindVertexArray` or `glBlitFramebuffer` is refused) or one of
 the weak toolchain hooks; the **exported**
-symbols are exactly `plx_host_start`, `plx_host_post` and `plx_host_stop`, equal to the header's functions and to the C# `DllImport` names;
+symbols are exactly the header's `plx_host_*` functions (`plx_host_start`, `plx_host_post`, `plx_host_stop` and `plx_host_post_cue`), equal to
+the C# `DllImport` names;
 `TTF_Init`, `TTF_OpenFont`, `TTF_RenderUTF8_Blended`, `FT_Init_FreeType` and `SDL_FreeSurface` are code symbols of the library and none of
 `SDL_*`/`TTF_*`/`FT_*` is exported. On x86_64 the highest `GLIBC_x.y` version needed is at most `PLX_MAX_GLIBC` (default 2.40, the emulator image's
 glibc; the CI runner, ubuntu-24.04, links against 2.39). A newer build host is a failure that names the ceiling: link on an older host, raise `PLX_MAX_GLIBC`
 if you know the target's glibc, or `PLX_ALLOW_NEW_GLIBC=1` to report and continue. The parsers and every rule are unit-tested on canned
 `readelf`/`nm` text (`ci/test_tizen_so_check.py`). The ARM check also compares every required import and
-library name against `ci/testdata/tizen60-armv7-abi.json`. Its exports come from the Tizen 6.0 ARM
+library name against `ci/testdata/tizen60-armv7-abi.json` (the renderer's too). Its exports come from the Tizen 6.0 ARM
 rootstrap and the matching Tizen SDK compiler's `libgcc_s.so.1`. Both archives and their SHA-256
 digests are in `ci/dependencies.json` under `tizen60-abi-reference`. The inventory covers link-time
 imports. Runtime libraries loaded by name still need device verification.
 
+`--ass` verifies the renderer the same way, under its own rules (`verify_ass_object`): `DT_NEEDED` only `libc.so.6` (required), `libm.so.6`,
+`libpthread.so.0`, `librt.so.1`, `libgcc_s.so.1` and the loader (no `libGLESv2`, and no firmware FreeType, FriBidi, HarfBuzz or libass: the
+stack is static); the SONAME the build gives the architecture (`libass-plx-host.so.0` on x86_64, `libass-plx.so.0` on armv7); no text relocation
+or static TLS; every undefined symbol a versioned glibc/libgcc one; the exports exactly the `plx_ass_*` functions `include/ass.h` declares
+(so no `FT_`/`hb_`/`fribidi_`/`ass_` name leaks); the same glibc ceiling and, on armv7, the same Tizen 6.0 inventory.
+
 ### The contract with the host
 
-`rust-modules/platform-tizen/include/plx_host.h` is the single source. `PlxHost`'s `Native` class, its two structs and its
+`rust-modules/platform-tizen/include/plx_host.h` is the single source. `PlxHost`'s `Native` class, its structs (`PlxHostApi`, `PlxHostEvent`, `PlxHostCue`) and its
 `PLX_HOST_*` constants are written from it, and `tizen-abi` (and `ci/test_tizen_so_check.py`, so `make check`) fails on any difference.
 The thread rules, ownership, start/stop and the `launch_json` keys are the header's comment. What the host adds:
 
@@ -121,7 +159,8 @@ The thread rules, ownership, start/stop and the `launch_json` keys are the heade
 
 Version 2 of the table adds two requests, `player_open(epoch, uri, x, y, w, h)` and `player_verb(epoch, verb, arg0, arg1)`, and the events
 that answer them come back through `plx_host_post` with an `epoch` and two payload words. The header's PLAYER section is the contract.
-There are still exactly three exports. A version-1 host, a table that stops at `run_on_host`, or a version-2 table with a NULL player pointer is
+Version 2 has four exports: the fourth, `plx_host_post_cue`, hands the library a selected subtitle's cues ("Selected text subtitles", below) and
+changes neither the table nor the event layout, so the version stays 2 (the host and the library ship in one package). A version-1 host, a table that stops at `run_on_host`, or a version-2 table with a NULL player pointer is
 **accepted**: the library starts, logs `host: no media player: <why>` and plays nothing (the platform composes no URI driver for it). A host built
 from this tree leaves both pointers NULL when `dlopen("libcapi-media-player.so.0")` fails.
 
@@ -204,7 +243,7 @@ set (H6 stays OPEN: the library's thread, the overlay beneath an opaque `has_vid
 `rust-modules/platform-tizen/src/player/` holds `TizenUriDriver`, a Sans-IO `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements: it
 starts no worker and reads no global, its requests go out as `Hosted::player_open` / `player_verb` and every answer returns as one addressed event
 through `drain_player`. Every request and event carries the epoch, and an event of any other epoch (a completion after a stop) is dropped and counted.
-The driver states `progressive_uri`, `pause`, `seek`, `audio_track` and `subtitle_off`, and no HLS, packet feed, subtitle track or audio-off. `subtitle_off` holds by construction: the host never gives the player a subtitle (no `player_set_subtitle_path`, no text-track selection, no subtitle callback), and a `SelectTrack(Subtitle, Off)` is settled without a host call; "Subtitles off" (below) is the emulator run behind it. `audio_track` is settled
+The driver states `progressive_uri`, `pause`, `seek`, `audio_track`, `subtitle_track` and `subtitle_off`, and no HLS, packet feed or audio-off. `subtitle_off` holds by construction: the native player draws no subtitle of its own ("Subtitles off" and "Selected text subtitles", below), the host never calls `player_set_subtitle_path`, and a `SelectTrack(Subtitle, Off)` is settled without a host call (the app stops drawing and drops the cues that still come). `subtitle_track` is the app's own drawing of an embedded TEXT track from the player's cues ("Selected text subtitles", below). `audio_track` is settled
 by construction for a Part with one audio stream (no host call, as before the verb existed) and is a host call otherwise: the planner issues a `SelectTrack` for any
 title whose server-selected audio stream is stated, and for a stream with siblings the driver asks the host for the stream at the native
 index it chooses by the stream's language (the host reports each native track's before PREPARED), never by position alone (`PLX_HOST_PLAYER_VERB_AUDIO_TRACK`,
@@ -216,7 +255,7 @@ output (`qualify_pms` is Unknown); the codec table behind Standard is still `Cap
 (`player::MEDIA`) replaces `host::NO_MEDIA` in a `uri` build; it installs the driver only when the host's table offers a player and the run is not a controlled
 one, and returns the resolver only when the adapter accepted the driver. It names no LG binding and publishes no default backend.
 
-**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; and a client-drawn (sidecar) subtitle. `SubtitleOff` (the item has subtitle streams and none is selected, `subtitle_choice = Off` in `plan.rs`) is refused only where the driver's evidence cannot carry Off, so it no longer stops a Tizen play: that refusal ended every title with subtitles on the first retail report (a 2023 UA65CU7700, discussion #1460), and the one title there without subtitle streams played. A selected embedded subtitle still fails (`SubtitleNotCarried`: the driver states no `subtitle_track`, and nothing here draws one), so a profile whose subtitle preference picks a track gets the refusal until a subtitle render exists. With no Feed and `qualify_pms` Unknown, each refusal ends as the planner's typed `NoQualifiedBackend`, not as a play. So a title plays through this driver if it has no selected subtitle, an audio stream whose position among the Part's audio streams is known and, when the Part has several, whose PMS language exactly one native track (or the ordinal's own) reports ("The audio track is selected", below; a multi-audio title without one fails its start rather than play the player's default), a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. The resolver tests pin Off to a certified start and the others to their reasons.
+**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; and a client-drawn (sidecar) subtitle. `SubtitleOff` (the item has subtitle streams and none is selected, `subtitle_choice = Off` in `plan.rs`) is refused only where the driver's evidence cannot carry Off, so it no longer stops a Tizen play: that refusal ended every title with subtitles on the first retail report (a 2023 UA65CU7700, discussion #1460), and the one title there without subtitle streams played. A selected embedded subtitle is carried when every embedded subtitle stream of the Part is SubRip or ASS (`MEASURED_TEXT_CODECS` in `player/qualifier.rs`): the app draws it from the host player's cues ("Selected text subtitles", below). A selected picture subtitle (PGS, VobSub), a `mov_text` or other unmeasured text codec, or a Part where such a stream sits beside the selected one, still fails (`SubtitleNotCarried`). With no Feed and `qualify_pms` Unknown, each refusal ends as the planner's typed `NoQualifiedBackend`, not as a play. So a title plays through this driver if it has no selected subtitle (or a selected embedded SubRip or ASS one, in a Part whose embedded subtitle streams are all SubRip or ASS), an audio stream whose position among the Part's audio streams is known and, when the Part has several, whose PMS language exactly one native track (or the ordinal's own) reports ("The audio track is selected", below; a multi-audio title without one fails its start rather than play the player's default), a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. The resolver tests pin Off to a certified start and the others to their reasons.
 
 **A pick the driver cannot carry does not replace the playing title.** Picking another audio or subtitle track mid-play on a URI attempt that cannot switch natively used to re-plan the play, which retires the playing item first and, here, can only end in `NoQualifiedBackend`. The shared door (`route::request_viewer_reconfigure`) now asks `PlaybackSession::source_track_change_carriable()` first: true with a Feed (webOS) or when the URI resolver's provider says it can certify such an output (`OriginalQualifier::carries_source_track_change`, default true; `TizenQualifier` says false), and a pick nothing can carry is refused with `ViewerReconfigureRefusal::NoBackendCarriesTrack` before anything is retired or spent. **The Quality ladder is the same kind of request** (a rung asks the server to convert, and `request_transcode_refresh` only queues a `Retranscode` that the Feed engine's pump consumes): `PlaybackSession::quality_pick_carriable()` (the same provider flag) makes the More menu not offer the Quality rows and `set_quality` refuse a rung before it persists it or moves the route contract; unrefused, the pick left the title playing unchanged and the next re-resolve of it (a Home restore, a stall retry) planned under the new ceiling and ended in `NoQualifiedBackend`.
 
@@ -255,13 +294,15 @@ WSL2 Ubuntu 22.04 or newer is enough. Versions come from the repository's pins; 
 
 - the checkout on the branch named for the run, and `rustup` with the toolchain pinned in `rust-modules/rust-toolchain.toml`
   (the plain host target, no cross compiler; `make` installs nothing);
-- `gcc`, `make`, `curl`, `tar`, `python3` (3.10 is enough) and binutils (`apt install build-essential curl python3`);
-  `pkg-config` is not required (a "could not discover SDL2" warning from the crates' build scripts is expected and harmless);
+- `gcc`, `g++`, `make`, `curl`, `tar`, `python3` (3.10 is enough) and binutils (`apt install build-essential curl python3`);
+- `cmake` and `pkg-config` (`apt install cmake pkg-config`) for the subtitle renderer's static font stack (`tizen-libass`); a "could not
+  discover SDL2" warning from the crates' build scripts is expected and harmless;
 - `apt install libgles-dev`: the link stub for `libGLESv2.so`. Keep `libsdl2-dev` and `libsdl2-ttf-dev` off a build machine that
   only builds the library (the host unit tests link them, CI installs them); the library links its own static SDL by path and
   `tizen-verify` fails on a `libSDL2` in `DT_NEEDED` either way;
 - a checkout path without spaces (SDL's autoconf cannot build there; under WSL use a path in the Linux filesystem, not `/mnt/c/...`);
-- network to `raw.githubusercontent.com` (the nanosvg headers) and the SDL release hosts: every one of those downloads is pinned and
+- network to `raw.githubusercontent.com` (the nanosvg headers), the SDL release hosts and the libass stack's (FreeType, FriBidi, HarfBuzz,
+  libunibreak, libass): every one of those downloads is pinned and
   sha256-verified by `ci/deps.py` and cached machine-wide;
 - for the `.tpk`: a user-local .NET 8 SDK (`dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet`, with `DOTNET_ROOT` if elsewhere),
   `sdb`, network to nuget.org and the Samsung certificate profile below. The NuGet packages are exact-version pins in `PlxHost.csproj`
@@ -374,8 +415,63 @@ selection cleared (`PUT /library/parts/<id>?subtitleStreamID=0`, the state the r
 
 So on the emulator the native player draws no embedded subtitle the app did not set, including a default-flagged one, and the
 driver states `subtitle_off`. **The retail set is not measured**: the next nightly asks the tester to confirm that a title with
-subtitles shows none. A selected embedded subtitle is still refused (`SubtitleNotCarried`), and the emulator has no audio path, so
-sound is not determinable here.
+subtitles shows none. A selected embedded subtitle was refused then (`SubtitleNotCarried`); "Selected text subtitles" (below) is how
+a SubRip or ASS one is now drawn. The emulator has no audio path, so sound is not determinable here.
+
+## Selected text subtitles (emulator probe and run, 2026-11-26)
+
+A selected EMBEDDED text subtitle (SubRip or ASS) is drawn by the app from the host player's cues. The design:
+
+- **Which tracks are carried.** `TizenQualifier` certifies a selected embedded subtitle only when EVERY embedded subtitle stream of
+  the Part is SubRip or ASS (`MEASURED_TEXT_CODECS` in `rust-modules/platform-tizen/src/player/qualifier.rs`). A selected PGS, VobSub or
+  `mov_text` stream, or a SubRip/ASS one with such a sibling, stays declined (`SubtitleNotCarried`); a burned subtitle and an external
+  (PMS sidecar) one stay refused by the planner. External SRT is a later change.
+- **How the native track is chosen.** Every embedded subtitle stream is mapped at its position among them, with the same
+  `NativeTrackCheck` as audio: `Sole` for a lone stream, else the stream's language, matched by the shared language table against the
+  language the host reports for each native text track before `PREPARED` (`PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE`, 30). The driver asks for
+  the index with `PLX_HOST_PLAYER_VERB_TEXT_TRACK` (6); the host calls `player_select_track(PLAYER_STREAM_TYPE_TEXT, index)` and answers
+  `PLAYER_TRACK`, as for audio. A pick of another mapped embedded stream mid-play is asked of the host the same way
+  (`player_select_track(TEXT)`, measured mid-play above). While that request is unanswered no cue is handed over, and a poll judges its
+  cues before the events it settles: the host selects before it answers, so a cue then may already be the new track's, and it is dropped
+  rather than drawn as the old one's (the first cue or so of the new track can be lost).
+  Picking Off, or another track, from the track menu reaches the driver (`app::playback::commit_track`); only a refused pick re-resolves.
+- **How cues flow.** The host registers `player_set_subtitle_updated_cb` ONCE, at `PREPARED`, for a source with a text track (registration
+  in READY is what was measured; registering in PLAYING was not, so a mid-play pick after a start with subtitles Off finds the callback
+  already there), posts cues only once a text track was answered, and hands every cue to the library through the fourth export,
+  `plx_host_post_cue(const PlxHostCue *)` (a 40-byte struct: `size`, `epoch`, `position_ms`, `duration_ms`, `text`, `len`, `reserved`;
+  text at most `PLX_HOST_CUE_TEXT_MAX`, 4096 bytes), which has its own bounded lossy queue of 32. The driver turns each cue of the live
+  epoch into a `UriCaption`, the shared caption store's `ass_source` takes it, and the app's libass subtitle renderer draws it. The
+  cue's `position_ms` is the host's estimate: the last polled position plus the time since, while playing.
+- **Off.** There is no text-off verb: Off is the app no longer drawing, and the cues that still come are dropped.
+- `PLX_HOST_ABI_VERSION` stays 2: the table and the event layout are unchanged, and the host and the library ship in one package.
+
+**The probe** (the Tizen TV 10.0 x86_64 emulator; the scratch branch `claude/tizen-subtitle-probe`; MKV clips carrying SubRip and ASS
+streams, served by `tests/mock_pms.py`):
+
+- The callback's signature is `void (*)(unsigned long duration, char *text, void *user_data)`. `player_set_subtitle_updated_cb`
+  returned 0 both before prepare and in READY/PREPARED. The callbacks run on a thread of the player's own, not the main thread.
+- The embedded text track's cues arrive WITHOUT `player_set_subtitle_path`; text track 0 is current by default.
+- Track count and language: count=1 `[0=en]` for one clip, count=3 `[0=en,1=fr,2=de]` for another (ISO 639-1 codes).
+- `player_select_track(PLAYER_STREAM_TYPE_TEXT, n)` returned 0 at PREPARED and mid-play, in 4-5 ms; the next cue came from the new track.
+- Timing: a cue arrives when it is due (position 2003 ms for a cue at 2000 ms, duration 1500), and an EMPTY text with duration 0
+  arrives at the cue's end (position 3501). After a seek an empty cue arrives at once, and a cue spanning the landing point is not
+  re-sent. While paused, no callback fires.
+- Markup: the player removes SubRip `<b>`/`<i>` and ASS override blocks (`{\an8\i1}`). It keeps a literal `{brace}`, which the app's
+  shared text converter then reads as an override block, as on Feed. A line break arrives as `\n`, ASS `\N` as ` \n`, and `\h` stays
+  literal.
+- `player_set_subtitle_path` returned 0 for an http URL and for a local file; such a sidecar REPLACES the embedded track (its language
+  reads `un`). The app does not use it: the URL would carry the Plex token through the host.
+- The TV draws no subtitle of its own, with or without the callback.
+- `mov_text` (MP4) cue delivery is not measured, so it stays declined.
+
+**The feature run** (the same emulator; an MKV with an English SubRip and a German ASS track, English selected server-side): the host
+logged `text tracks count=2 current=0 [0=en,1=de]` and `text track 0 -> 0`, and cues at [2098..3598], [4000..5500] and
+[5995..7495] ms for cues every 2 s lasting 1.5 s. With the package as `make PLATFORM=tizen tizen-tpk` builds it (which stages
+`libass-plx` and the subtitle fonts, "The subtitle renderer" above), the line "TWO 07 top bold & / TWO 07 bottom" was drawn at 15.1 s
+(the cue runs 14.0-15.5 s) and nothing logged `ASS refused` (2026-11-27). The player had stripped SubRip's `<b>`.
+
+**Not measured on a retail Samsung set:** whether its player raises the callback for an embedded text track and on which thread, its
+text track order and language codes, which tags it strips, how `player_select_track(TEXT)` behaves, and `mov_text`.
 
 ## The window is opaque and has video (retail report and emulator run, 2026-11-26)
 
@@ -538,7 +634,9 @@ Not measured: a retail set, other layouts and languages (the `globe` key), the p
 
 `.github/workflows/tizen.yml`, job `tizen-so` ("Tizen library (link and verify, no emulator)"), on `ubuntu-24.04`, only for the
 paths it names (`rust-modules/**` is one: the library is the whole application, so a new `extern` symbol anywhere is this link's
-undefined symbol). It prints the configuration, runs `tizen-abi`, `tizen-so` and `tizen-verify`, then
+undefined symbol; the renderer's recipe, facade sources and the staged fonts are others). It restores the Linux simulator job's cache of the
+host libass stack (same path and key), prints the configuration, runs `tizen-abi`, `tizen-so` (which builds the renderer first) and
+`tizen-verify`, then
 `cargo test --lib -p plx_platform_tizen --features tizen` from `rust-modules`: the pattern of `ci.yml`'s host unit job, which already
 runs the crate with its default features (an empty library), so this pass adds the crate's own `tizen` tests. It uses no emulator, no
 .NET SDK and no certificate, is **not** a required check, and branch protection is not edited.

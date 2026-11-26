@@ -2,7 +2,7 @@
 //! Button, CircleButton, TabPill, TransportButton, PageDots, Badge, plus the shared art-card
 //! core (`card`/`draw_card`) and the poster-resolve helper. (Multi-line text wrapping
 //! now lives in the `TextView` primitive in `text_view.rs`.)
-use crate::art_fit::{place, ArtFit, BackdropSpec, Placement};
+use crate::art_fit::{place, ArtFit, Derive, Ink, Placement};
 use crate::hstack::{Align as StackAlign, HStack, Item as HItem};
 use crate::vstack::{Anchor as VAnchor, VStack};
 use crate::label::{HAlign, Label, VAlign};
@@ -939,12 +939,15 @@ pub struct ArtImage {
     /// The texture of the picture's blurred copy ([`crate::tex::Decoded::backdrop`]) when it came
     /// with one, else 0: what a tile that CONTAINS its art ([`crate::art_fit::ArtFit`]) draws behind it.
     pub backdrop: u32,
+    /// The bounding box of the picture's ink ([`crate::tex::Decoded::ink`]) when its request asked for
+    /// one ([`Derive::INK`]: a channel's logo), else `None`: what a tile sizes the MARK by, not the canvas.
+    pub ink: Option<Ink>,
     pub shown: f32,
 }
 
 impl ArtImage {
     /// No texture: the skeleton (or ground) is the whole picture.
-    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, backdrop: 0, shown: 1.0 };
+    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, backdrop: 0, ink: None, shown: 1.0 };
 }
 
 /// A not-yet-loaded skeleton falls back to a rimmed fill (no shadow until the art arrives).
@@ -963,13 +966,13 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
 }
 
 /// [`resolve_card_art`] for a tile that draws its art under `fit`: the request names the blurred copy
-/// that fit contains over ([`ArtFit::copy_request`]), and the answer carries it ([`ArtImage::backdrop`]).
+/// that fit contains over ([`ArtFit::derive_request`]), and the answer carries it ([`ArtImage::backdrop`]).
 pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFit) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let crate::tex::ArtTex { id: tex, w, h, backdrop } = card_art_request_fitted(art, fit)
-        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.backdrop));
+    let crate::tex::ArtTex { id: tex, w, h, backdrop, ink } = card_art_request_fitted(art, fit)
+        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.derive));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
@@ -978,12 +981,13 @@ pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFi
         }
     }
     let shown = admission.as_ref().map_or(1.0, |scope| scope.arrival(tex != 0));
-    ArtImage { tex, w, h, backdrop, shown }
+    ArtImage { tex, w, h, backdrop, ink, shown }
 }
 
 /// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, whether
 /// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG), and
-/// the blurred copy of it the tile that draws it will contain it over, if any.
+/// what the tile that draws it wants derived from it, if anything: the blurred copy it will contain it
+/// over, or the ink box it will size it by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArtRequest<'a> {
     pub srv: u16,
@@ -991,9 +995,9 @@ pub struct ArtRequest<'a> {
     pub w: c_int,
     pub h: c_int,
     pub png: bool,
-    /// The blurred copy to deliver with the picture ([`ArtFit::copy_request`]): a poster's, under a fit
-    /// that contains.
-    pub backdrop: Option<BackdropSpec>,
+    /// What to derive and deliver with the picture: a poster's blurred copy under a fit that contains
+    /// ([`ArtFit::derive_request`]), or a channel logo's ink box ([`Derive::INK`]).
+    pub derive: Option<Derive>,
 }
 
 /// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
@@ -1005,8 +1009,8 @@ pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
 }
 
 /// [`card_art_request`] for a tile that draws its art under `fit`: a POSTER's request names the
-/// blurred copy `fit` contains over; no other art does (a logo, a still, a headshot are never
-/// contained, whatever the row says). A screen that warms art for a row warms with the row's `fit`,
+/// blurred copy `fit` contains over, and a CHANNEL's its logo's ink box ([`Derive::INK`]); no other
+/// art asks for anything (a still, a headshot are never contained, whatever the row says). A screen that warms art for a row warms with the row's `fit`,
 /// so the warm and the draw name one key.
 pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequest<'a>> {
     let (srv, path, (w, h), png) = match art {
@@ -1015,8 +1019,12 @@ pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequ
         Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
         Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
     };
-    let backdrop = if matches!(art, Art::Poster(_)) { fit.copy_request() } else { None };
-    Some(ArtRequest { srv, path, w, h, png, backdrop })
+    let derive = match art {
+        Art::Poster(_) => fit.derive_request(),
+        Art::Channel { .. } => Some(Derive::INK),
+        _ => None,
+    };
+    Some(ArtRequest { srv, path, w, h, png, derive })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -3186,12 +3194,26 @@ pub struct ProfileChipRead<'a> {
     pub name_w: f32,
 }
 
+/// The bar's clock as the application captured it: the wall-clock face already worded in the
+/// television's clock style (`fmt::clock_face`) and its measured width. Rendering this view reads
+/// no clock and formats nothing; the owner re-captures it when the minute changes
+/// (`app::chrome::ChromeSnapshot::set_clock`).
+#[derive(Clone, Copy)]
+pub struct ClockRead<'a> {
+    pub text: &'a CStr,
+    pub w: f32,
+}
+
 /// The borrowed shared-chrome publication used by both its normal paint and a scrim lift.
+///
+/// `clock` is `None` only when the app has no wall time to show (no zone offset, a replay); the
+/// strip yields to the clock ([`TAB_CLOCK_CLEAR`]), the clock never to the strip.
 #[derive(Clone, Copy)]
 pub struct ChromeRead<'a> {
     pub profile: ProfileChipRead<'a>,
     pub labels: TabLabels<'a>,
     pub chip_expand: f32,
+    pub clock: Option<ClockRead<'a>>,
 }
 
 /// Measure and own the chip's two glyph runs when the application's captured profile changes, **or
@@ -7081,12 +7103,56 @@ pub const TOP_BAR_BOTTOM: f32 = TOP_BAR_Y + TAB_PILL_H + TAB_TRACK_PAD; // 130
 /// context margin, exactly as the season tabs use their advance.
 const TAB_GAP: f32 = 16.0;
 /// How wide the pill strip may grow before it starts scrolling. The row stays CENTERED, but it
-/// must never reach the profile chip (a focus stop of its own at `MARGIN_X`), so the viewport is
-/// the screen less a symmetric chip-clearing margin, less the track's own inset on both ends. The
+/// must never reach the profile chip (a focus stop of its own at `MARGIN_X`) NOR the bar's clock
+/// at the other end, so the viewport is the screen less a symmetric clearing margin (the wider of
+/// the two ends' needs, [`TAB_SIDE_CLEAR`]), less the track's own inset on both ends. The
 /// track stays glass while the pills scroll inside it ([`tab_glass_on`]): the width never decides
 /// the material.
-const TAB_SIDE_CLEAR: f32 = CHIP_FRAME.x + CHIP_D + theme::space::MD;
+const TAB_CHIP_CLEAR: f32 = CHIP_FRAME.x + CHIP_D + theme::space::MD;
+/// What the right end needs, from the screen's edge: the margin the clock's right edge stands on, the
+/// widest face it can wear ([`TOP_BAR_CLOCK_MAX_W`]) and [`BAND_AIR`] between it and the track. The strip
+/// yields to the clock (it scrolls past [`TAB_VIEW_MAX`]); the clock is never left out for the strip.
+const TAB_CLOCK_CLEAR: f32 = crate::consts::MARGIN_X + TOP_BAR_CLOCK_MAX_W + BAND_AIR;
+/// The centred track's clearance on both sides: the bar is symmetric, so the wider end sets it.
+const TAB_SIDE_CLEAR: f32 = if TAB_CLOCK_CLEAR > TAB_CHIP_CLEAR { TAB_CLOCK_CLEAR } else { TAB_CHIP_CLEAR };
 const TAB_VIEW_MAX: f32 = crate::consts::SCR_W - 2.0 * (TAB_SIDE_CLEAR + TAB_TRACK_PAD);
+
+/// **The bar's clock: a status, not a control** (Live TV handoff SPEC-1 item 2, "the clock goes in
+/// the TopBar on every screen"). Its right edge stands on the safe frame's right margin,
+/// [`crate::consts::MARGIN_X`] in from the screen's edge: the chip's mirror at the far end of the bar.
+pub const TOP_BAR_CLOCK_RIGHT: f32 = crate::consts::SCR_W - crate::consts::MARGIN_X;
+/// The clock's text size: BODY, regular, in [`theme::TEXT_SECONDARY`] (see [`draw_top_bar_clock`]).
+pub const TOP_BAR_CLOCK_SIZE: c_int = theme::size::BODY;
+/// **The widest face the clock can wear, in px at BODY regular**: the 12-hour face of the shipped
+/// language that words it longest, Spanish and Catalan "12:00 p. m." (U+202F around the "p. m."),
+/// measured at 146 with the shipped `appfont.ttf` across all 13 shipped languages (English 129,
+/// Portuguese 141; a 24-hour face is 80). Digits share one advance, so the hour and minute never
+/// change it. The strip's viewport is solved against this ([`TAB_CLOCK_CLEAR`]): the face is never
+/// elided and never left out. A face measured wider than this in a future language moves this
+/// constant and, with it, where the strip starts to scroll.
+pub const TOP_BAR_CLOCK_MAX_W: f32 = 146.0;
+
+/// **The clock's layout box** for a face `w` wide: its right edge on [`TOP_BAR_CLOCK_RIGHT`] and its
+/// height the bar's own pill row ([`TOP_BAR_Y`], [`TAB_PILL_H`]), so the face is centred on the bar
+/// the way a pill's label is (by the font's cap band, `Label`'s `VAlign::Middle`).
+pub fn top_bar_clock_frame(w: f32) -> Rect {
+    Rect::new(TOP_BAR_CLOCK_RIGHT - w, TOP_BAR_Y, w, TAB_PILL_H)
+}
+
+/// **Draw the bar's clock** on `p` (the bar's own painter, so the page's tuck, fade and lift carry
+/// it): BODY 28 regular in [`theme::TEXT_SECONDARY`], right-aligned on [`TOP_BAR_CLOCK_RIGHT`],
+/// centred on the bar, with the caption's soft text shadow (a 1 px offset copy: the glyph path has
+/// no blur). Tabular figures are the face's own (every digit shares one advance, as
+/// [`FIELD_KEY_W`] relies on), so a minute changing never moves the right-aligned run's left edge.
+/// Never focusable and never registers a stop.
+pub fn draw_top_bar_clock(p: Painter, clock: ClockRead<'_>) {
+    let frame = top_bar_clock_frame(clock.w);
+    let shadow = Rect::new(frame.x, frame.y + crate::caption_policy::CAPTION_SHADOW_DY, frame.w, frame.h);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, crate::caption_policy::CAPTION_SHADOW)
+        .h(HAlign::Right)
+        .draw(p, shadow);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, theme::TEXT_SECONDARY).h(HAlign::Right).draw(p, frame);
+}
 /// **The shared top bar's outermost drawn chrome, for the overscan audit**
 /// ([`crate::consts::SAFE`]) — the one band Home, the Library and Search all wear, i.e. the
 /// "main page" LG's checklist item #2 is about.
@@ -9813,6 +9879,10 @@ mod test_support;
 mod tab_strip_geometry_tests;
 
 #[cfg(test)]
+#[path = "widgets_top_bar_clock_tests.rs"]
+mod top_bar_clock_tests;
+
+#[cfg(test)]
 #[path = "widgets_control_face_tests.rs"]
 mod control_face_tests;
 
@@ -10070,6 +10140,7 @@ fn a_channel_logo_is_requested_as_a_png_and_every_other_card_art_as_a_jpeg() {
     let asked = card_art_request(&logo).expect("a logo is asked for");
     assert_eq!((asked.srv, asked.path, asked.png), (3, "/logos/7.png", true));
     assert_eq!((asked.w, asked.h), channel_tile::LOGO_RES);
+    assert_eq!(asked.derive, Some(Derive::INK), "the plate sizes the mark by its ink, so the request asks for the box");
     let thumb = card_art_request(&Art::Thumb { sid: 3, key: "/t/1", res: (10, 10) }).unwrap();
     assert!(!thumb.png);
     assert_eq!(card_art_request(&Art::Poster(None)), None);

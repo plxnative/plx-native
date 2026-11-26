@@ -2895,9 +2895,9 @@ mod tests {
         // The live player's banner, zap and art phases join the Player and Live TV screens' canon (only the screen
         // half moves): previously 0xcb36_5b40_2b40_643f.
         // The hero menus' `…` menu hosts Select Version and Audio & Subtitles as pages (the item menu's
-        // `Action::Pick`, its page depth): previously 0x4dc9_4255_d0b1_4f65.
-        assert_eq!(state_fp(), 0xdacb_10eb_7009_0921, "current V13 producer census");
-        assert_ne!(state_fp(), 0x4dc9_4255_d0b1_4f65, "the census before the hero menu's pages");
+        // `Action::Pick`, its page depth): previously 0x705f_6115_6a7b_0b8c.
+        assert_eq!(state_fp(), 0x206d_ac83_c50c_4704, "current V13 producer census");
+        assert_ne!(state_fp(), 0x705f_6115_6a7b_0b8c, "the census before the hero menu's pages");
         assert_ne!(state_fp(), 0xcb36_5b40_2b40_643f, "the census before the live player's zap, art and banner phases");
         assert_ne!(state_fp(), 0xd80b_045a_c4aa_fc9b, "the census before the Library order page and the table's lift and glide springs");
         assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");
