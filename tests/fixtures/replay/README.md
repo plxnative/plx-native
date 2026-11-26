@@ -771,3 +771,10 @@ Number entry (Live TV PR5) added the registered surface `AppArg::ChannelEntry` t
 (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape `8097297399644097420`).
 `make check-replay` replays them SAME in Targets and Resolve (908 and 1204 frames, every difference counter zero); the
 four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The Guide (Live TV PR6) added the Live TV screen's scope and its board's page and window to the screen's canon, which
+moved `SCREEN_SHAPES_PIN` again (`0x62a1_9fdc_6c66_d317` -> `0x5526_0309_3cae_faf9`), so the two current anchors were
+recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape
+`2110622538349771770`). `make check-replay` replays them SAME in Targets and Resolve (906 and 1198 frames, every
+difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
+has the record.
