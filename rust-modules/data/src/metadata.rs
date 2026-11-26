@@ -1933,8 +1933,11 @@ impl Detail {
     /// **Whether this page holds the item `(sid, rk)`** for a pre-play pick, and as what: the page IS
     /// that item and carries a file of its own (its own `kind` and `show_rk`), or it is a show page whose
     /// backfilled episode is `rk` ([`Self::play_episode_streaming`]; an `"episode"` of this show). The ONE
-    /// predicate `preplay_source` (what the picker shows) and `pick_step`'s `Chose` (where a pick may
-    /// land) both ask.
+    /// item-identity predicate `preplay_source` (what the picker shows) and `pick_step`'s `Chose` (where a
+    /// pick may land) both ask. It is only that: `preplay_source` also refuses an item that has played
+    /// since the page loaded (`played_since_load`), a page with no audio list and a part that names no
+    /// file, and `Chose` asks none of those (it takes `pick.part_id > 0` and nothing about the version or
+    /// the part's listing, since it has no `version` to resolve the part against).
     pub fn held_item(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<(&str, &str)> {
         if self.sid != sid {
             return None;
