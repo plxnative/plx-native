@@ -1101,6 +1101,21 @@ fn a_pick_on_no_file_is_not_held_for_the_retry() {
     }
 }
 
+/// **An audio-only pick inherits the attempt's subtitle only from the same file**: the standing subtitle is a
+/// track of the attempt's file, so a `Server` pick on ANOTHER file of the item holds no subtitle override.
+#[test]
+fn a_server_pick_on_another_file_does_not_inherit_the_attempts_subtitle() {
+    let mut ps = PlaybackSession::default();
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    let server = |part_id| plx_data::metadata::PreplayPick { part_id, audio_sid: 22, sub: plx_data::metadata::SubPick::Server };
+    memory::hold_pick_for_retry(&mut ps, &server(PART));
+    assert_eq!(ps.held_pick.map(|h| (h.part_id, h.sub_sid)), Some((PART, 12)), "control: the same file keeps its subtitle");
+    memory::hold_pick_for_retry(&mut ps, &server(PART + 1));
+    assert_eq!(ps.held_pick.map(|h| (h.part_id, h.sub_sid)), Some((PART + 1, 0)), "another file: no subtitle override");
+}
+
 /// **A pick on the failure screen is what Try again plays** (`hold_pick_for_retry`): the retry's
 /// selection is the viewer's pair instead of the failed attempt's, Off included; an audio-only pick keeps
 /// the subtitle the attempt stood on; and the request that consumes it clears the hold, so it never

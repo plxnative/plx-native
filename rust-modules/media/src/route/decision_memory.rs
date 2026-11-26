@@ -720,7 +720,11 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
     let sub_sid = match pick.sub {
         SubPick::Off => 0,
         SubPick::Track(id) => id,
-        SubPick::Server => super::standing_selection(ps).map_or(0, |held| held.sub_sid),
+        // The attempt's subtitle belongs to the attempt's FILE: a pick on another file of the item
+        // inherits none of it (no subtitle override).
+        SubPick::Server => super::standing_selection(ps)
+            .filter(|held| held.part_id == pick.part_id)
+            .map_or(0, |held| held.sub_sid),
     };
     ps.held_pick = Some(super::HeldSelection { part_id: pick.part_id, audio_sid: pick.audio_sid, sub_sid });
 }
