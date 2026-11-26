@@ -139,10 +139,6 @@ impl Art {
             Art::Fading { since } => (1.0 - now.wrapping_sub(since) as f32 / ART_FADE_MS as f32).clamp(0.0, 1.0),
         }
     }
-
-    pub fn is_clear(self) -> bool {
-        self == Art::Clear
-    }
 }
 
 /// The banner's phase: never shown, or shown until a deadline (then it fades, [`live::FADE_MS`]).
@@ -198,9 +194,14 @@ impl Live {
         let was_covering = self.art == Art::Covering;
         let wanted = !self.zap.is_idle() || o.no_frame;
         self.art.step(wanted, o.now);
-        let id = o.playing.map(|c| (c.sid, c.dvr.clone(), c.channel.clone()));
-        if id != self.seen {
-            self.seen = id;
+        // compared in place: a frame allocates nothing, only a tune stores the new identity
+        let changed = match (o.playing, &self.seen) {
+            (Some(c), Some((sid, dvr, key))) => c.sid != *sid || c.dvr != *dvr || c.channel != *key,
+            (None, None) => false,
+            _ => true,
+        };
+        if changed {
+            self.seen = o.playing.map(|c| (c.sid, c.dvr.clone(), c.channel.clone()));
             if self.seen.is_some() {
                 self.reveal(o.now);
             }
@@ -356,7 +357,7 @@ mod tests {
         assert_eq!(art, Art::Fading { since: 100 });
         assert!(art.alpha(100 + ART_FADE_MS / 2) > 0.4 && art.alpha(100 + ART_FADE_MS / 2) < 0.6);
         art.step(false, 100 + ART_FADE_MS);
-        assert!(art.is_clear());
+        assert_eq!(art, Art::Clear);
         // wanted again mid-fade: back to whole at once
         let mut art = Art::Fading { since: 5 };
         art.step(true, 50);

@@ -101,7 +101,7 @@ pub fn words(channel: Option<&Channel>, name: &str, wall: Option<Wall>) -> Words
         // over has no "next" until the guide re-reads)
         out.next = out.time_line.as_ref()
             .and_then(|_| fmt::clock_face(ch.ends_at, i64::from(wall.utc_offset_s)))
-            .filter(|_| fmt::frac(ch.begins_at, ch.ends_at, wall).is_some_and(|f| f < 1.0))
+            .filter(|_| out.progress.is_some_and(|f| f < 1.0))
             .map(|face| plx_os::i18n::msg::widgets_live_next_at(&face));
     }
     out
@@ -141,9 +141,10 @@ pub fn draw(p: Painter, layout: &LiveLayout, words: &Words, alpha: f32, measure:
 
     // Channel line: LIVE badge, the number (bold), the station (secondary), 16 apart.
     let line = at(BADGE_H);
-    let badge = c(plx_os::i18n::msg::widgets_live_badge());
-    let badge_w = measure.width_str(&plx_os::i18n::msg::widgets_live_badge(), size::MICRO, true)
-        + BADGE_TRACKING * (plx_os::i18n::msg::widgets_live_badge().chars().count().saturating_sub(1)) as f32
+    let badge_text = plx_os::i18n::msg::widgets_live_badge();
+    let badge = c(&badge_text);
+    let badge_w = measure.width_str(&badge_text, size::MICRO, true)
+        + BADGE_TRACKING * (badge_text.chars().count().saturating_sub(1)) as f32
         + 2.0 * BADGE_PAD;
     let chip = Rect::new(line.x, line.y, badge_w, BADGE_H);
     p.rrect(chip, theme::RADIUS_CHIP, theme::RADIUS_CHIP, theme::LIVE_BADGE_FILL);
