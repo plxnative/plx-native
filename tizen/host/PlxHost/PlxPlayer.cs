@@ -467,8 +467,8 @@ namespace PlxHost
             s.TrackLater = null;
             long answer = TrackRefused;
             int count, current;
-            int rcCount = MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count);
-            int rcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current);
+            int rcCount = ReadTrackCount(s, out count);
+            int rcCurrent = ReadCurrentTrack(s, out current);
             if (track.Index < 0)
             {
                 PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is no index");
@@ -490,12 +490,38 @@ namespace PlxHost
             }
             else
             {
-                int rc = MediaPlayerNative.player_select_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, track.Index);
-                if (rc == 0) answer = track.Index;
-                else PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track(audio, " + track.Index + ") returned " + rc);
+                try
+                {
+                    int rc = MediaPlayerNative.player_select_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, track.Index);
+                    if (rc == 0) answer = track.Index;
+                    else PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track(audio, " + track.Index + ") returned " + rc);
+                }
+                catch (Exception e)
+                {
+                    // An entry point missing on some firmware is a refused track, not a failed player (plx_host.h, PLAYER_TRACK).
+                    PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track threw " + e.GetType().Name + ": " + e.Message);
+                }
             }
             PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " -> " + answer);
             foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
+        }
+
+        // The two reads the track logic needs. A throw (an entry point missing on some firmware) reads as a failed call (NativeThrew), so the
+        // single-track path still answers and the play is not failed by a diagnostic read.
+        private const int NativeThrew = int.MinValue;
+
+        private static int ReadTrackCount(Session s, out int count)
+        {
+            count = 0;
+            try { return MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count threw " + e.GetType().Name); return NativeThrew; }
+        }
+
+        private static int ReadCurrentTrack(Session s, out int current)
+        {
+            current = -1;
+            try { return MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_current_track threw " + e.GetType().Name); return NativeThrew; }
         }
 
         // Answers a held track's command ids with TrackRefused and forgets it: the epoch is ending or never prepared.
@@ -512,18 +538,23 @@ namespace PlxHost
         private static void LogTracks(Session s)
         {
             int count, current;
-            int rc = MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count);
+            int rc = ReadTrackCount(s, out count);
             if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count(audio) returned " + rc); return; }
-            int rcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current);
+            int rcCurrent = ReadCurrentTrack(s, out current);
             var languages = new StringBuilder();
             for (int i = 0; i < count && i < 32; i++)
             {
-                IntPtr code;
+                // The string is the library's (malloc'd) only when the call returned 0: only then is it read and freed.
+                IntPtr code = IntPtr.Zero;
                 string lang = "?";
-                if (MediaPlayerNative.player_get_track_language_code(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, i, out code) == 0 && code != IntPtr.Zero)
+                int rcLang;
+                try { rcLang = MediaPlayerNative.player_get_track_language_code(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, i, out code); }
+                catch (Exception e) { rcLang = NativeThrew; lang = "threw " + e.GetType().Name; }
+                if (rcLang == 0 && code != IntPtr.Zero)
                 {
                     try { lang = ReadUtf8(code); } finally { Marshal.FreeHGlobal(code); }
                 }
+                else if (rcLang != NativeThrew) lang = "rc " + rcLang;
                 if (i > 0) languages.Append(',');
                 languages.Append(i).Append('=').Append(lang);
             }
