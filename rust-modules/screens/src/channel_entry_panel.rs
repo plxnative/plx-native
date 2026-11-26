@@ -445,11 +445,7 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
         None
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
-    /// **The dim that makes the panel glass where there is a page to stand on.** A glass panel stands on the frozen
-    /// host and the field that latches under a page-sourced dim, so over the What's on page this is the compact
-    /// menu's dim ([`theme::underlay::DIM_COMPACT`], the lightest role) and the panel is glass; over the player
-    /// (`Style::PlayerPanel`, host live, the video plane behind) the container owes no such dim, nothing latches and
-    /// the panel is the sheet, with no dim on the picture. See [`Scrim::over_host`].
+    /// The compact menu's dim over a held host page only: what makes the panel glass there ([`Scrim::over_host`]).
     fn scrim(&self) -> Scrim {
         Scrim::over_host(theme::underlay::DIM_COMPACT)
     }

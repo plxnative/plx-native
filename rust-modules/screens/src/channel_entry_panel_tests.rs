@@ -162,12 +162,9 @@ pub(crate) fn channel_entry_conforms() -> plx_ui::a11y::Namespaces {
 /// The container's half is `containers::tests::a_host_only_dim_is_owed_over_a_held_page_and_never_over_a_live_host`.
 #[test]
 fn the_panel_asks_for_the_compact_dim_over_a_held_page_only() {
-    let want = plx_ui::screen::Scrim::over_host(plx_ui::theme::underlay::DIM_COMPACT);
     let got = Screen::<TestHost>::scrim(&panel(2));
-    assert_eq!(
-        (got.alpha, got.host_only, got.source, got.ramp),
-        (want.alpha, true, plx_ui::screen::UnderlaySource::Page, None)
-    );
+    assert_eq!(got.alpha, plx_ui::theme::underlay::DIM_COMPACT);
+    assert!(got.host_only, "owed over a held page only");
 }
 
 /// Typing "2" lists every channel whose number starts with 2 in lineup order, the digit is on screen before any

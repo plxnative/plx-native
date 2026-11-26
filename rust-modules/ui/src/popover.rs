@@ -853,7 +853,7 @@ impl Popover {
     /// plane, which GL cannot read; they keep `p.rect(…, PANEL_TOP, PANEL_BOT, …)` on purpose.
     ///
     /// `ground` is the caller's explicit choice of material ([`widgets::Ground`](crate::widgets::Ground)):
-    /// glass for a MENU (where a frozen page stands under it), the pre-DS6 field ground for a sheet or an alert.
+    /// glass for a MENU, the pre-DS6 field ground for a sheet or an alert.
     pub fn panel(
         &self,
         p: Painter,

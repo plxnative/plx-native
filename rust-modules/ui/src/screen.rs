@@ -134,7 +134,7 @@ impl Scrim {
     /// morphing menu's dim follows its MORPH (`Popover::dim`), so the page dims as the glass grows
     /// and clears as the slab drains, not on a clock of its own.
     pub const fn following(self, ramp: f32) -> Scrim {
-        Scrim { alpha: self.alpha, source: self.source, ramp: Some(ramp), host_only: self.host_only }
+        Scrim { ramp: Some(ramp), ..self }
     }
 }
 

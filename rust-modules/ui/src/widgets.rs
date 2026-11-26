@@ -136,13 +136,10 @@ pub fn declare_chrome_glass_for_test(p: Painter, rects: &[Rect]) {
     }
 }
 
-/// Which ground a popover panel stands on — the caller's per-call choice of KIND (a menu or a sheet); WHERE the glass
-/// of a menu is drawn is not the caller's: it is glass where a frozen page is there to stand on and the flat sheet
-/// where none is (over the video plane), which the container and `popover_glass` decide, never a flag a caller sets.
+/// Which ground a popover panel stands on — the caller's explicit, per-call choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ground {
-    /// A MENU (Sort & Filter, the account menu, the item hold menu) or Live TV's number entry, which is a menu over
-    /// the What's on page and the sheet over the live player: glass on the frozen ground
+    /// A MENU (Sort & Filter, the account menu, the item hold menu, Live TV's number entry): glass on the frozen ground
     /// (`popover_glass`: a frost of the host snapshot, the latched field as its fallback body, and
     /// the snapshot itself for the rim), the latched-field ground only when there is nothing frozen
     /// to stand on.
