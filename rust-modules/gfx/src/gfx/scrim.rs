@@ -187,7 +187,8 @@ impl SideShade {
             }
             SideShade::Ellipse { origin, reach, .. } => {
                 let (qx, qy) = (x - origin[0], origin[1] - y);
-                let d = ((qx * (1.0 / reach[0])).powi(2) + (qy * (1.0 / reach[1])).powi(2)).sqrt();
+                let (ux, uy) = (qx * (1.0 / reach[0]), qy * (1.0 / reach[1]));
+                let d = (ux * ux + uy * uy).sqrt();
                 smooth(((1.0 - d) * self.band()).clamp(0.0, 1.0))
             }
         }
