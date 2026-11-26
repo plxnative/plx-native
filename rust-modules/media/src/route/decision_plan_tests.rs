@@ -2050,3 +2050,35 @@ fn a_cancelled_retry_request_keeps_the_failure_screens_held_pick_until_a_landing
     rig.land(retry_plan).expect("the retry's plan is playable");
     assert!(rig.ps.held_pick.is_none(), "the landing consumed it");
 }
+
+/// **A failure screen never reads another item's held pick**: A's failure pick is held, then a request for
+/// item B fails before it lands. B's failure shows (`failed_pick`) and retries (`current_retry_context`)
+/// no pick, not A's; the request is not what clears A's pick, so A's own request reads it again.
+#[test]
+fn another_items_failure_never_reads_the_held_pick() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let mut rig = PickRig::new();
+    let request = |rk: &str| PlaybackRequest {
+        sid: rig.sid, rk: rk.into(), part: "/library/parts/9001/1/file.mkv".into(), vcodec: "h264".into(),
+        acodec: "ac3".into(), title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None,
+        show_rk: String::new(),
+    };
+    let (request_a, request_b) = (request("m1"), request("m2"));
+    let plan = rig.plan(PickRig::URL);
+    rig.ps.request = Some(request_a.clone());
+    let first = rig.land(plan).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+    let pick = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Track(21) };
+    memory::hold_pick_for_retry(&mut rig.ps, &pick);
+    assert_eq!(memory::failed_pick(&rig.ps), Some(pick), "setup: A's failure shows the viewer's pick");
+
+    // item B is requested and fails before it lands
+    rig.ps.request = Some(request_b);
+    begin_track_selection(&mut rig.ps, None);
+    assert_eq!(memory::failed_pick(&rig.ps), None, "B's failure has no pick: A's is not B's");
+    assert_eq!(current_retry_context(&rig.ps, 0).selection, None, "and B's retry carries none");
+
+    // the request did not clear it: A's own request finds it
+    rig.ps.request = Some(request_a);
+    assert_eq!(memory::failed_pick(&rig.ps), Some(pick));
+}

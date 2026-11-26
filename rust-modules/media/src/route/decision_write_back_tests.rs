@@ -1111,9 +1111,9 @@ fn a_server_pick_on_another_file_does_not_inherit_the_attempts_subtitle() {
     });
     let server = |part_id| plx_data::metadata::PreplayPick { part_id, audio_sid: 22, sub: plx_data::metadata::SubPick::Server };
     memory::hold_pick_for_retry(&mut ps, &server(PART));
-    assert_eq!(ps.held_pick.map(|h| (h.part_id, h.sub_sid)), Some((PART, 12)), "control: the same file keeps its subtitle");
+    assert_eq!(held_pick(&ps).map(|h| (h.part_id, h.sub_sid)), Some((PART, 12)), "control: the same file keeps its subtitle");
     memory::hold_pick_for_retry(&mut ps, &server(PART + 1));
-    assert_eq!(ps.held_pick.map(|h| (h.part_id, h.sub_sid)), Some((PART + 1, 0)), "another file: no subtitle override");
+    assert_eq!(held_pick(&ps).map(|h| (h.part_id, h.sub_sid)), Some((PART + 1, 0)), "another file: no subtitle override");
 }
 
 /// **A pick on the failure screen is what Try again plays** (`hold_pick_for_retry`): the retry's

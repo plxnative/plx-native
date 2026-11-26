@@ -86,6 +86,16 @@ struct HeldSelection {
     sub_sid: i64,
 }
 
+/// The pick the viewer made on a failure screen ([`PlaybackSession::held_pick`]), with the item whose
+/// failure it was made on. The pick keys a FILE (`selection.part_id`, which may be another file of the
+/// item than the failed attempt's), so the item is what says which failure screen it belongs to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeldPick {
+    /// The `(server, ratingKey)` of the request in force when it was held ([`attempt_item`]).
+    item: Option<(ServerId, String)>,
+    selection: HeldSelection,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RetryContext {
     resume_ns: i64,
@@ -441,7 +451,10 @@ pub struct PlaybackSession {
     /// rule as [`Self::pick_spend_on_start`]: a REQUEST does not clear it (a retry's request cancelled before
     /// it lands, BACK or Home during the resolve, leaves the failure screen's pick standing); only the
     /// LANDING that consumes it does ([`apply_plan`] installs the next playback with none held).
-    held_pick: Option<HeldSelection>,
+    /// **Read only through [`held_pick`]**, which returns it only while the request in force is for the
+    /// item it was held on: a request for another item that fails before landing must not show, or
+    /// retry, the pick made on the previous item's failure.
+    held_pick: Option<HeldPick>,
     /// Is [`Self::cur_sub_sid`] an external sidecar (`metadata::Stream::sidecar_renderable`) rather
     /// than an embedded (in-container) track? Meaningless when `cur_sub_sid == 0`. Issue #266 I6:
     /// this is what tells `route::decision::facts`'s [`super::plan::SubtitleEffect::Sidecar`]
@@ -2187,7 +2200,7 @@ impl PlaybackSession {
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,
-            held_pick: *held_pick,
+            held_pick: held_pick.clone(),
             cur_sub_sidecar: *cur_sub_sidecar,
             cur_sub_client_drawable: *cur_sub_client_drawable,
             cur_sub_ordinal: *cur_sub_ordinal,
@@ -11667,11 +11680,24 @@ fn standing_selection(ps: &PlaybackSession) -> Option<HeldSelection> {
     })
 }
 
+/// The item the attempt in force is about: the `(server, ratingKey)` of the session's request.
+fn attempt_item(ps: &PlaybackSession) -> Option<(ServerId, String)> {
+    ps.request.as_ref().map(|r| (r.sid, r.rk.clone()))
+}
+
+/// **The ONE reader of [`PlaybackSession::held_pick`]**: the viewer's failure-screen pick, only while the
+/// attempt in force is for the item it was made on. Another item's request that never landed (and
+/// failed) shows its own failure, never the previous item's pick. The pick's file may differ from the
+/// failed attempt's (another version of the item), so the rule keys the ITEM, not the part.
+fn held_pick(ps: &PlaybackSession) -> Option<HeldSelection> {
+    ps.held_pick.as_ref().filter(|h| h.item == attempt_item(ps)).map(|h| h.selection)
+}
+
 fn current_retry_context(ps: &PlaybackSession, resume_ns: i64) -> RetryContext {
     RetryContext {
         resume_ns: resume_ns.max(0),
         candidate_purpose: CandidatePurpose::ReopenCurrent,
-        selection: ps.held_pick.or_else(|| standing_selection(ps)),
+        selection: held_pick(ps).or_else(|| standing_selection(ps)),
         sub_offset_ms: crate::player::subtitle_offset_ms(),
         direct_play_mode: ps.direct_play_mode,
         suppress_enhancement: false,
