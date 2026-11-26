@@ -1373,6 +1373,42 @@ fn off_or_a_newer_pick_supersedes_an_unanswered_subtitle_pick() {
     assert_eq!(captions(&mut driver), [(12, 4_000, 1_500, "FRENCH 02".to_owned())]);
 }
 
+/// **A pick the HOST refuses supersedes nothing** (review of #1579). The newer pick's `TextTrack` verb can be refused by the
+/// host's queue (Busy, Stale, Args); the older pick is then still the one the contract holds pending, so it must still
+/// settle (or time out) on the host's answer, and no cue is handed over while it is unanswered.
+#[test]
+fn a_pick_whose_verb_the_host_refuses_leaves_the_earlier_pick_pending() {
+    for answer in [Some(1), None] {
+        let (mut driver, fake) = rig();
+        let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+        fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+        assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Refused(Failure::Busy));
+        fake.with(|s| s.refuse_verb = None);
+        fake.with(|s| s.cues.push(cue(epoch, 1_000, 1_500, "ENGLISH 00")));
+        assert!(poll(&mut driver).is_empty());
+        assert!(captions(&mut driver).is_empty(), "no cue while the earlier pick is unanswered: {answer:?}");
+        match answer {
+            Some(index) => {
+                fake.post(epoch, PlayerKind::Track, 2, index);
+                assert_eq!(poll(&mut driver), [
+                    observation(a, Observation::TrackSelected(seen(SUB_EN))),
+                    DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Subtitle,
+                        choice: TrackChoice::Selected(11) },
+                ], "the earlier pick still settles");
+                fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+                poll(&mut driver);
+                assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+            }
+            None => {
+                fake.advance(TIMING.control_timeout_ms);
+                assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(2),
+                    operation: pick_sub(11), failure: Failure::TimedOut }], "the earlier pick still times out");
+            }
+        }
+    }
+}
+
 /// The subtitle's native track is told by its language exactly as an audio stream's is: a language no native TEXT track
 /// reports, or two that do with the ordinal not among them, is refused before the host is asked.
 #[test]
