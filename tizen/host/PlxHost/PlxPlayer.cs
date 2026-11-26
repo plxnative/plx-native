@@ -382,7 +382,8 @@ namespace PlxHost
             rc = MediaPlayerNative.player_set_uri(s.Handle, uri);
             if (rc != 0) { Fail(s, "player_set_uri", rc); return false; }
             // The display is bound BEFORE prepare: measured on the emulator, a player with no display does not advance.
-            rc = BindDisplay(s, x, y, w, h);
+            rc = FrameProbe.Mode == FrameProbe.ProbeMode.DisplayNone ? 0 : BindDisplay(s, x, y, w, h);
+            if (FrameProbe.Mode != FrameProbe.ProbeMode.Off) FrameProbe.Arm(s.Handle);
             if (rc >= Native.PLX_HOST_PLAYER_FAIL_BASE) { FailHost(s, "bind the display", rc - Native.PLX_HOST_PLAYER_FAIL_BASE); return false; }
             if (rc != 0) { Fail(s, "player_set_ecore_wl_display", rc); return false; }
             rc = MediaPlayerNative.player_set_display_mode(s.Handle, MediaPlayerNative.DISPLAY_MODE_LETTER_BOX);
@@ -764,6 +765,7 @@ namespace PlxHost
             {
                 // stop and unprepare may answer an invalid-state code for a player that was never started or prepared: that is expected here.
                 MediaPlayerNative.player_stop(s.Handle);
+                if (FrameProbe.Mode != FrameProbe.ProbeMode.Off) FrameProbe.Drain();
                 MediaPlayerNative.player_unprepare(s.Handle);
                 int rc = MediaPlayerNative.player_destroy(s.Handle);
                 if (rc != 0) PlxApp.Log("player: epoch " + s.Epoch + ": player_destroy returned " + rc);
