@@ -3150,8 +3150,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // row count), which the Detail hero's overflow already presented. The hero row (#1553) then moved it again:
 // `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14). The
 // replay fixtures v13-owned-input-content and 13-by-id-filmography were re-recorded against the shape
-// (the app census, 0xb0b8_437b_410f_aab3, is pinned in `app/recorder.rs`); this screen-half pin only
-// asserts the inventory, it is not a recorded value.
+// (the app census, 0x882c_217d_f372_9dbb, is pinned in `app/recorder.rs`); this screen-half pin only
+// asserts the inventory, it is not a recorded value. The hero menus' morph then added `opener` to
+// `VersionsPanel` and `PreplayPanel` (`opener:Option<{entry:u32,elem:u32}>`): the control each grows out of.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.

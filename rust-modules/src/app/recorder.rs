@@ -2872,7 +2872,7 @@ mod tests {
         // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's
         // hero overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). The predecessors are kept
         // below like every older value.
-        assert_eq!(state_fp(), 0xb0b8_437b_410f_aab3, "current V13 producer census");
+        assert_eq!(state_fp(), 0x882c_217d_f372_9dbb, "current V13 producer census");
         assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
         assert_ne!(state_fp(), 0xc0b2_71bb_16d2_d02f, "the hero row's census before the Live TV pages joined it");
         assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");
