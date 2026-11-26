@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T22:28:01Z",
+ "generated": "2026-11-26T22:34:31Z",
  "metrics": [
   {
-   "change30_pct": 44.6,
-   "change7_pct": 39.4,
+   "change30_pct": 45.1,
+   "change7_pct": 39.9,
    "d30": 200.5,
-   "delta30": 89.5,
-   "delta7": 82,
+   "delta30": 90.5,
+   "delta7": 83.0,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 47,
-   "now": 290,
+   "now": 291.0,
    "prev7": 208,
    "shown": true,
    "state": "worse",
@@ -361,18 +361,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 23.1,
-   "change7_pct": 3.3,
+   "change30_pct": 22.9,
+   "change7_pct": 3.2,
    "d30": 340,
-   "delta30": 78.5,
-   "delta7": 13.5,
+   "delta30": 78,
+   "delta7": 13,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 61,
-   "now": 418.5,
+   "now": 418,
    "prev7": 405,
    "shown": true,
    "state": "flat",
@@ -607,15 +607,15 @@
    "change30_pct": 30.6,
    "change7_pct": -1.7,
    "d30": 265,
-   "delta30": 81,
-   "delta7": -6,
+   "delta30": 81.0,
+   "delta7": -6.0,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 47,
-   "now": 346,
+   "now": 346.0,
    "prev7": 352,
    "shown": true,
    "state": "flat",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 40.5,
-   "change7_pct": 3.6,
+   "change30_pct": 39.3,
+   "change7_pct": 2.7,
    "d30": 163,
-   "delta30": 66,
-   "delta7": 8,
+   "delta30": 64.0,
+   "delta7": 6.0,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 47,
-   "now": 229,
+   "now": 227.0,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -819,15 +819,15 @@
    "change30_pct": 11.1,
    "change7_pct": 0.0,
    "d30": 18,
-   "delta30": 2,
-   "delta7": 0,
+   "delta30": 2.0,
+   "delta7": 0.0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 47,
-   "now": 20,
+   "now": 20.0,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -923,13 +923,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 39.4,
+   "change_pct": 39.9,
    "commits": [
-    {
-     "pr": 1568,
-     "sha": "fa0d5f2fc",
-     "title": "Detail hero shade: a soft ellipse instead of a box corner"
-    },
     {
      "pr": 1565,
      "sha": "3abc3334b",
@@ -974,6 +969,11 @@
      "pr": 1576,
      "sha": "c3e3ffa67",
      "title": "Tizen: ship the ASS renderer and its fonts in the TPK"
+    },
+    {
+     "pr": 1575,
+     "sha": "33af0d92e",
+     "title": "Tizen: a selected embedded SRT/ASS subtitle plays, drawn by the app from the host player's cues"
     }
    ],
    "from": 208,
@@ -981,16 +981,11 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-26",
    "threshold_pct": 20.0,
-   "to": 290
+   "to": 291.0
   },
   {
    "change_pct": 22.9,
    "commits": [
-    {
-     "pr": 1568,
-     "sha": "fa0d5f2fc",
-     "title": "Detail hero shade: a soft ellipse instead of a box corner"
-    },
     {
      "pr": 1565,
      "sha": "3abc3334b",
@@ -1035,6 +1030,11 @@
      "pr": 1576,
      "sha": "c3e3ffa67",
      "title": "Tizen: ship the ASS renderer and its fonts in the TPK"
+    },
+    {
+     "pr": 1575,
+     "sha": "33af0d92e",
+     "title": "Tizen: a selected embedded SRT/ASS subtitle plays, drawn by the app from the host player's cues"
     }
    ],
    "from": 209.5,
@@ -1069,7 +1069,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 346
+   "now": 346.0
   },
   {
    "group": "ci",
