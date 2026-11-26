@@ -273,6 +273,12 @@ impl Hosted {
         self.player.drain_cues(out)
     }
 
+    /// Whether a host player is open: an epoch was opened and its `PLAYER_CLOSED` has not been accepted. The
+    /// packet-player probe refuses to start while one is, so it never contends with a viewer's video for the decoder.
+    pub fn player_live(&self) -> bool {
+        self.player.any_live()
+    }
+
     /// The host's media player, or why there is none. A table that does not offer one is not an error.
     pub fn player_support(&self) -> Result<(), NoPlayer> {
         match self.callbacks.get() {
