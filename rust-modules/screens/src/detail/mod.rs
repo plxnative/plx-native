@@ -864,7 +864,7 @@ impl DetailScreen {
 
     /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
     /// episode on a show page, via [`Detail::play_rk`]) and one row per action the round buttons had no
-    /// room for ([`hero::overflow_ctls`]), in the row's order. `None` unless focus is on the … button.
+    /// room for ([`hero::overflow_ctls`]), in the row's order, and the page's own key (`Detail::rk`) for the pages the menu hosts. `None` unless focus is on the … button.
     /// A new hero action is one more arm in the `match` below.
     pub fn hero_overflow(
         &self,
@@ -891,7 +891,7 @@ impl DetailScreen {
             .collect();
         Some((d.play_rk().to_string(), rows))
             .filter(|(_, rows)| !rows.is_empty())
-            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener }))
+            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener, page: d.rk.clone() }))
     }
 
     pub fn focused_episode(

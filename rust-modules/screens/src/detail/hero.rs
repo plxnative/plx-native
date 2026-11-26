@@ -200,11 +200,6 @@ impl HeroCtl {
     pub const fn starts_playback(self) -> bool {
         matches!(self, HeroCtl::Play | HeroCtl::Restart | HeroCtl::Trailer)
     }
-    /// The panels that GROW out of the control (`Popover::morphing`): Select Version and Audio &
-    /// Subtitles. *Also available* keeps its fade.
-    pub const fn opens_morphing_panel(self) -> bool {
-        matches!(self, HeroCtl::Version | HeroCtl::AudioSubtitles)
-    }
     /// Does pressing this control WRITE to the household's account? The bookmark disc adds or
     /// removes the title on the plex.tv Watchlist, and the watched toggle in either face marks it
     /// watched or unwatched on the server. The rest play, navigate or open a menu or panel. The page

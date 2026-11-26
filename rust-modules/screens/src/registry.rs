@@ -637,8 +637,11 @@ pub enum ItemMenuKind {
     /// argument is the item Play acts on ([`plx_data::metadata::Detail::play_rk`]). `opener` is the Detail
     /// page's instance: a row is the round button it replaces, so the menu hands that [`HeroCtl`] back to
     /// the page (`AppMsg::HeroCtl`), whose `activate_hero` is the one path a hero action takes. The row's
-    /// icon and label are the button's, from the one table ([`hero_face`]).
-    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId },
+    /// icon and label are the button's, from the one table ([`hero_face`]). `page` is the Detail page's
+    /// OWN rating key (`Detail::rk`): the pages the menu hosts (Select Version, Audio & Subtitles) are
+    /// read off that page, as the standalone panels' `(sid, rk)` is, while `rk` on the argument is the
+    /// item Play acts on, which on a show page is its on-deck episode and so names no loaded page.
+    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId, page: String },
 }
 
 pub use crate::detail::{hero_face, HeroCtl};
@@ -1429,7 +1432,7 @@ pub enum ContentPanel {
     /// the opener lift draws it at the morph's alpha (`Screen::opener`).
     Versions { anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
     /// *Audio & Subtitles* before playback (`screens::preplay_panel`, #1532), anchored to the drawn
-    /// rect of what opened it (the hero's disc, or its `…` menu's row). **The entry point for any
+    /// rect of what opened it (the hero's disc; the `…` menu hosts the same pages inside itself). **The entry point for any
     /// host**: send `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from the Detail
     /// page; the subject is the page's `(sid, rk)` and the panel reads the tracks of the item the
     /// hero PLAYS (`Detail::play_rk`: a show page's hero episode, never the show).
@@ -3208,7 +3211,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // row count), which the Detail hero's overflow already presented. The hero row (#1553) then moved it again:
 // `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14). The
 // replay fixtures v13-owned-input-content and 13-by-id-filmography were re-recorded against the shape
-// (the app census, 0x882c_217d_f372_9dbb, is pinned in `app/recorder.rs`); this screen-half pin only
+// (the app census is pinned in `app/recorder.rs`); this screen-half pin only
 // asserts the inventory, it is not a recorded value. The hero menus' morph then added `opener` to
 // `VersionsPanel` and `PreplayPanel` (`opener:Option<{entry:u32,elem:u32}>`): the control each grows out of.
 // Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains

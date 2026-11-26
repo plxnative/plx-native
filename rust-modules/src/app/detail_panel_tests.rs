@@ -606,6 +606,71 @@ fn the_more_menu_pages_push_into_one_glass_and_back_returns_to_the_row_that_open
     assert_focus_on_hero(&w, HeroCtl::More, "BACK from the menu's rows");
 }
 
+/// A SHOW page whose hero plays the underway on-deck episode (`on-deck`, two versions): the page's own key
+/// is `show`, and the streams on it are the episode's (`episode_streams`), so Select Version and Audio &
+/// Subtitles are about an item that is not the page's own. The tracks and versions the `…` menu's pages
+/// list reach it through the app's own path (`build_rows` off the loaded page), never written into the menu.
+fn show_hero_world(name: &str) -> World {
+    plx_data::metadata::prewarm_dv_latches();
+    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+    let version = |id: i64| plx_data::pms::MediaVersion { id: plx_plex::plex::MediaId(id), ..Default::default() };
+    let detail = plx_data::metadata::Detail {
+        sid: plx_plex::plex::ServerId::UNSET,
+        rk: "show".into(),
+        kind: "show".into(),
+        title: "Show".into(),
+        is_show: true,
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "on-deck".into(),
+            resume_ms: 60_000,
+            dur_ms: 120_000,
+            part: "/library/parts/1/1/file.mkv".into(),
+            versions: vec![version(1), version(2)],
+            ..Default::default()
+        }),
+        audio: vec![stream(11), stream(12)],
+        subs: vec![stream(21), stream(22)],
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("on-deck".into()),
+        ..Default::default()
+    };
+    World::detail_page_at(name, detail_arg("show"), detail)
+}
+
+/// **On a SHOW page the `…` menu's pages list the on-deck episode's versions and tracks**: the item Play
+/// acts on (`Detail::play_rk`) is not the loaded page, which the pages are read off by its OWN key. Red
+/// while the menu looked the page up by the episode's key, found none, pushed an Audio & Subtitles page with
+/// nothing to pick and sent Select Version to the standalone panel (the surface count went to two).
+#[test]
+fn a_show_pages_more_menu_hosts_the_on_deck_episodes_pages() {
+    use plx_appkit::preplay_tracks::PickRow;
+    use plx_screens::detail::HeroCtl;
+    use plx_screens::item_menu::ItemRow;
+    let mut w = show_hero_world("show-menu-pages");
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
+    let menu_entry = w.d.nav.modals.surfaces[0].entry.id;
+    // Select Version: a page of the menu, with the episode's two versions
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Select Version is a page of the menu, not a second surface");
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry);
+    let on_version = |w: &World| (0..2).any(|n| w.elem() == Some(ItemRow::Version(n).focus_key()));
+    assert!(on_version(&w), "the page lists the episode's versions: focus {:?}", w.elem());
+    w.press(Key::Down);
+    assert!(on_version(&w), "a second version row is there to move to");
+    w.press(Key::Back);
+    assert_eq!(w.elem(), Some(ItemRow::Hero(HeroCtl::Version).focus_key()), "back on Select Version, in the menu's rows");
+    // Audio & Subtitles: its root page, and Audio inside it with the episode's two tracks
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Audio & Subtitles is a page of the menu");
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::OpenAudio).focus_key()), "the root of the picker");
+    w.press(Key::Ok);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::Audio(0)).focus_key()), "the Audio page opens on a track");
+    w.press(Key::Down);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::Audio(1)).focus_key()), "the episode's second audio track is listed");
+}
+
 /// **A pick in Audio & Subtitles, opened from the hero's `…` menu, returns focus to the `…`**, the panel
 /// being left after the pick (it stays up with the check moved).
 #[test]
