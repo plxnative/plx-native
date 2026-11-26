@@ -49,6 +49,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::frame::{Budget, Class};
+use crate::art_fit::BackdropSpec;
 use plx_machine::machine::{PosterKey, PresentHandle};
 use plx_machine::present::{PresentEvent, Provenance, ResourceKind};
 
@@ -81,14 +82,19 @@ pub trait Source {
     /// the cache must go on drawing its placeholder without inferring that work is under way —
     /// asking again next frame is how a deferred request is eventually honoured. Touches the
     /// source's LRU.
-    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Option<PosterKey>;
+    ///
+    /// `backdrop` is the blurred copy this request wants delivered with the picture
+    /// ([`crate::art_fit::BackdropSpec`]; `None` for none). It is part of the request's identity: the
+    /// same art asked for with and without a copy is two entries, so a request can never be answered
+    /// with a picture that lacks the copy it declared.
+    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Option<PosterKey>;
     /// The prefetch twin: start the fetch, take nothing, protect nothing.
-    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm;
+    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm;
     /// The AT-REST lookahead twin of [`warm`](Self::warm): the same request, but the claimed slot
     /// is kept (see [`AHEAD_SET_MAX`]) instead of being the next miss's first victim. A source
     /// with no such distinction answers as `warm` does.
-    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
-        self.warm(srv, path, w, h, png)
+    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
+        self.warm(srv, path, w, h, png, backdrop)
     }
     /// An item's clearLogo, at the source's one logo request box. `logo` is a stamped path
     /// or a legacy rating key.
@@ -268,7 +274,7 @@ pub fn resolve_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> u32 {
 
 /// [`resolve_on`] plus the decoded pixel size — `(0, 0.0, 0.0)` until resident. Same one probe.
 pub fn resolve_wh_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> (u32, f32, f32) {
-    let a = resolve_art_on(srv, path, w, h, png);
+    let a = resolve_art_on(srv, path, w, h, png, None);
     (a.id, a.w, a.h)
 }
 
@@ -282,13 +288,14 @@ pub struct ArtTex {
     pub backdrop: u32,
 }
 
-/// [`resolve_wh_on`] with the blurred copy: the same ONE probe and ONE use stamp, so a tile that
-/// draws the picture and its backdrop asks the source once, as any tile does.
-pub fn resolve_art_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> ArtTex {
+/// [`resolve_wh_on`] with the blurred copy the request asks for (`backdrop`): the same ONE probe and
+/// ONE use stamp, so a tile that draws the picture and its backdrop asks the source once, as any
+/// tile does.
+pub fn resolve_art_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> ArtTex {
     if path.is_empty() {
         return ArtTex::default();
     }
-    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png), None) else {
+    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png, backdrop), None) else {
         return ArtTex::default();
     };
     CACHE.with(|c| match c.borrow_mut().resolve_art(key) {
@@ -311,11 +318,11 @@ pub fn resident(key: PosterKey) -> bool {
 
 /// The prefetch twin of [`resolve_on`]: same arguments on purpose, so a screen warms EXACTLY the
 /// key it will later resolve.
-pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
+pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm(srv, path, w, h, png), Warm::Known)
+    with_source(|s| s.warm(srv, path, w, h, png, backdrop), Warm::Known)
 }
 
 /// The most cards a screen may ask [`warm_ahead_on`] to keep resident at once. A source holds a
@@ -333,11 +340,11 @@ pub const ON_SCREEN_ART_MAX: usize = 30;
 /// The at-rest lookahead twin of [`warm_on`]: the same arguments (so the same key a card will
 /// later resolve), a claim that outlives the next miss. For a screen at rest only, one card per
 /// frame, nearest first, stopping at the first [`Warm::Claimed`] or [`Warm::Full`].
-pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
+pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm_ahead(srv, path, w, h, png), Warm::Known)
+    with_source(|s| s.warm_ahead(srv, path, w, h, png, backdrop), Warm::Known)
 }
 
 /// An item's clearLogo as a texture plus its TRUE pixel size; `None` while pending or absent.
@@ -428,20 +435,12 @@ pub struct Decoded {
     pub w: u16,
     pub h: u16,
     pub rgba: Box<[u8]>,
-    /// The tiny blurred copy of this picture ([`crate::art_fit::backdrop_of`]) a tile that CONTAINS
-    /// its art draws behind it, made once when the picture arrives. It is uploaded with the picture,
-    /// held in the same [`Entry`] and freed with it, so it never outlives or lags the texture it
-    /// was made from. `None` for a picture no tile needs one for (a poster, a cut-out).
+    /// The tiny blurred copy of this picture ([`crate::art_fit::attach_backdrop`]) that its request
+    /// asked for ([`crate::art_fit::BackdropSpec`]), made once when the picture arrives. It is
+    /// uploaded with the picture, held in the same [`Entry`] and freed with it, so it never outlives
+    /// or lags the texture it was made from. `None` when the request asked for none, or the picture
+    /// needs none.
     pub backdrop: Option<Box<Decoded>>,
-}
-
-impl Decoded {
-    /// This picture with its blurred copy made ([`crate::art_fit::backdrop_of`]): what the poster
-    /// adapter delivers, so the copy exists before the picture is accepted.
-    pub fn with_backdrop(mut self) -> Self {
-        self.backdrop = crate::art_fit::backdrop_of(&self).map(Box::new);
-        self
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -933,19 +932,6 @@ mod tests {
         land(&mut c, &mut up, 20_000);
         assert_eq!(up.freed, vec![1, 2], "the evicted entry's copy goes with it");
         assert_eq!(c.resident_bytes(), 200);
-    }
-
-    #[test]
-    fn a_decoded_picture_is_given_a_copy_only_when_a_tile_could_contain_it() {
-        let image = |w: u16, h: u16| Decoded {
-            w,
-            h,
-            rgba: [90, 90, 90, 255].repeat(w as usize * h as usize).into_boxed_slice(),
-            backdrop: None,
-        };
-        assert!(image(375, 375).with_backdrop().backdrop.is_some(), "a square");
-        assert!(image(667, 375).with_backdrop().backdrop.is_some(), "16:9");
-        assert!(image(250, 375).with_backdrop().backdrop.is_none(), "a poster");
     }
 
     #[test]

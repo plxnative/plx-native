@@ -408,6 +408,26 @@ pub mod draw_census {
     }
 
     thread_local! {
+        static FITS: RefCell<Option<Vec<crate::art_fit::ArtFit>>> = const { RefCell::new(None) };
+    }
+    /// A card was asked to draw its art under `fit` ([`crate::widgets::card_fitted`], noted even for a
+    /// recording painter, which draws nothing): the one place a test reads which fit a row's tile
+    /// draw handed the shared card.
+    pub fn note_fit(fit: crate::art_fit::ArtFit) {
+        FITS.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(fit);
+            }
+        });
+    }
+    /// Every fit a card was asked to draw under while `f` runs, in draw order.
+    pub fn capture_fits(f: impl FnOnce()) -> Vec<crate::art_fit::ArtFit> {
+        FITS.with(|l| *l.borrow_mut() = Some(Vec::new()));
+        f();
+        FITS.with(|l| l.borrow_mut().take()).unwrap_or_default()
+    }
+
+    thread_local! {
         static GROUNDS: RefCell<Option<Vec<[[f32; 3]; 4]>>> = const { RefCell::new(None) };
     }
     /// A recording painter was handed an opaque wash ([`Painter::ambient`](super::Painter::ambient))
@@ -1670,6 +1690,48 @@ impl Painter {
             f,
             dy,
         );
+    }
+    /// [`tex_carded`](Self::tex_carded) for a card whose art is CONTAINED over its own backdrop
+    /// ([`art_fit::Placement::Contained`]): `tex` is the backdrop, windowed by `uv` to the whole card
+    /// and inked `backdrop_ink`, and `inner_tex` the picture laid whole in `inner`, in ONE pass. A
+    /// FOCUSED card's rim glow, sheen crown and gloss ramp belong to that pass, so the picture has to
+    /// be composed inside it: a second quad over it paints over them. `false`, having drawn nothing,
+    /// for a resting card (no rim or gloss, and two plain quads are the cheaper program) or when the
+    /// specialization did not link: the caller draws the two quads then.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tex_carded_inset(self, tex: u32, uv: [f32; 4], backdrop_ink: [f32; 4], inner_tex: u32, inner: Rect,
+        r: Rect, rad: f32, f: f32) -> bool {
+        if f <= 0.0 { return false; }
+        #[cfg(any(test, feature = "test-support"))]
+        if self.records() {
+            draw_census::note_tex(inner_tex, self.place(inner), self.c(theme::TINT_WHITE)[3]);
+        }
+        if self.declare({ let (b,o,_,_)=card_shadow_params(r.h,f,theme::CARD_SHADOW[3]); Rect::new(r.x-b,r.y+o-b,r.w+2.0*b,r.h+2.0*b) }, 27, |data| {
+            use frame::backdrop::Value;
+            tex.record(data);
+            plx_gfx::gfx::tex_ledger::revision(tex).record(data);
+            inner_tex.record(data);
+            plx_gfx::gfx::tex_ledger::revision(inner_tex).record(data);
+            uv.record(data);
+            [inner.x, inner.y, inner.w, inner.h].record(data);
+            rad.record(data);
+            backdrop_ink.record(data);
+            f.record(data);
+        }) { return true; }
+        if self.records() { return true; }
+        let t = self.c(theme::TINT_WHITE);
+        let dim = self.c(backdrop_ink);
+        let (blur, _off, sa, off_l) = card_shadow_params(r.h, f, theme::CARD_SHADOW[3]);
+        let dy = self.px(f.clamp(0.0, 1.0) * off_l);
+        let blur = self.px(blur);
+        let shcol = self.c(theme::with_a(theme::CARD_SHADOW, sa));
+        let pad = blur + dy + 1.0;
+        let (m, mi) = (self.place(r), self.place(inner));
+        plx_gfx::gfx::draw_tex_carded_inset(
+            tex, inner_tex, [mi.x, mi.y, mi.w, mi.h], uv, m.x, m.y, m.w, m.h, self.px(rad),
+            t.as_ptr(), [dim[0], dim[1], dim[2]], self.px(theme::CARD_SHEEN_W),
+            self.sheen_rim().as_ptr(), pad, blur, shcol.as_ptr(), f, dy,
+        )
     }
     /// A display-only card dissolving between equally sized images, using the card's own
     /// coverage, sheen and parent cascade once. Returns false if the optional program failed.

@@ -2739,6 +2739,22 @@ mod tests {
         assert_eq!(rings(&rimmed), 1, "one rim over the popped rect");
     }
 
+    /// **A row's tile draws hand the shared card the ROW's art fit** (`RowStyle::fit`), at rest and
+    /// focused: a Live TV poster tile asks for the contained fit, every other row's tile for cover.
+    /// Reverting either call to a bare `Cover` changes this census.
+    #[test]
+    fn a_tile_draw_hands_the_card_its_rows_art_fit() {
+        use crate::art_fit::ArtFit;
+        let rect = Rect::new(100.0, 100.0, 250.0, 375.0);
+        for (sty, fit) in [(RowStyle::PROGRAMME, ArtFit::ContainOnBlur), (RowStyle::HOME, ArtFit::Cover), (RowStyle::CHANNEL, ArtFit::Cover)] {
+            let fits = crate::draw_census::capture_fits(|| {
+                draw_tile_led(Painter::recording(), Art::Poster(None), rect, 1.0, &sty, None, None);
+                draw_focused_tile_led(Painter::recording(), Art::Poster(None), rect.scaled(1.07), 1.07, &sty, None, None);
+            });
+            assert_eq!(fits, vec![fit, fit], "the rest draw and the focused draw both read the style's fit");
+        }
+    }
+
     /// **The rim follows the style's corner, not the pop's**: the ring records its radius, and a rimmed tile
     /// popped to 1.07 rings at the style's own radius (the card it frames), where `radius * s` grew the corner
     /// with the lift. A circle keeps half its width.

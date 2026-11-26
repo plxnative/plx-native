@@ -2,7 +2,7 @@
 //! Button, CircleButton, TabPill, TransportButton, PageDots, Badge, plus the shared art-card
 //! core (`card`/`draw_card`) and the poster-resolve helper. (Multi-line text wrapping
 //! now lives in the `TextView` primitive in `text_view.rs`.)
-use crate::art_fit::{place, ArtFit, Placement};
+use crate::art_fit::{place, ArtFit, BackdropSpec, Placement};
 use crate::hstack::{Align as StackAlign, HStack, Item as HItem};
 use crate::vstack::{Anchor as VAnchor, VStack};
 use crate::label::{HAlign, Label, VAlign};
@@ -337,7 +337,7 @@ pub fn warm_tex_on(
     h: c_int,
     png: c_int,
 ) -> crate::tex::Warm {
-    crate::tex::warm_on(srv, path, w, h, png != 0)
+    crate::tex::warm_on(srv, path, w, h, png != 0, None)
 }
 
 /// Source art for a [`card`]: a catalog poster (resolved 250×375, dark gradient skeleton), any
@@ -959,10 +959,17 @@ impl ArtImage {
 /// first, [`lead_card_art`]) resolves here once and hands the result to [`card_named_led`], never
 /// calls this twice.
 pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
+    resolve_card_art_fitted(p, rect, art, ArtFit::Cover)
+}
+
+/// [`resolve_card_art`] for a tile that draws its art under `fit`: the request names the blurred copy
+/// that fit contains over ([`ArtFit::copy_request`]), and the answer carries it ([`ArtImage::backdrop`]).
+pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFit) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let crate::tex::ArtTex { id: tex, w, h, backdrop } = card_art_request(art).map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png));
+    let crate::tex::ArtTex { id: tex, w, h, backdrop } = card_art_request_fitted(art, fit)
+        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.backdrop));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
@@ -974,8 +981,9 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
     ArtImage { tex, w, h, backdrop, shown }
 }
 
-/// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, and whether
-/// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG).
+/// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, whether
+/// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG), and
+/// the blurred copy of it the tile that draws it will contain it over, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArtRequest<'a> {
     pub srv: u16,
@@ -983,6 +991,9 @@ pub struct ArtRequest<'a> {
     pub w: c_int,
     pub h: c_int,
     pub png: bool,
+    /// The blurred copy to deliver with the picture ([`ArtFit::copy_request`]): a poster's, under a fit
+    /// that contains.
+    pub backdrop: Option<BackdropSpec>,
 }
 
 /// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
@@ -990,13 +1001,22 @@ pub struct ArtRequest<'a> {
 /// different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves`
 /// pins it. `None` for an empty slot.
 pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
+    card_art_request_fitted(art, ArtFit::Cover)
+}
+
+/// [`card_art_request`] for a tile that draws its art under `fit`: a POSTER's request names the
+/// blurred copy `fit` contains over; no other art does (a logo, a still, a headshot are never
+/// contained, whatever the row says). A screen that warms art for a row warms with the row's `fit`,
+/// so the warm and the draw name one key.
+pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequest<'a>> {
     let (srv, path, (w, h), png) = match art {
         Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES, false) }
         Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES, false) }
         Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
         Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
     };
-    Some(ArtRequest { srv, path, w, h, png })
+    let backdrop = if matches!(art, Art::Poster(_)) { fit.copy_request() } else { None };
+    Some(ArtRequest { srv, path, w, h, png, backdrop })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -1045,6 +1065,28 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
     card_fitted(p, frame, art, fan_name, rad, focused, scale, f, led, ArtFit::Cover)
 }
 
+/// Paint a poster tile's picture `t` (and its blurred copy `backdrop`, 0 for none) as `placement`
+/// decided, in the tile `r`: ONE card pass for a covered picture; for a contained one the blurred copy
+/// is the card (rounded coverage, shadow, sheen, pop) over the whole tile and the picture is laid
+/// whole in `inner` with square corners (it touches the tile only along straight edges: a square or
+/// 16:9 never reaches a corner, and `place` covers anything near enough to the tile's shape to).
+///
+/// A FOCUSED contained tile (`f > 0`) composes both layers INSIDE the one card pass
+/// ([`Painter::tex_carded_inset`]): the card's rim glow, sheen crown and gloss ramp are that pass's,
+/// and a second quad over it would paint over them inside its box. At rest there is no rim or gloss
+/// to lose and two plain quads are the cheaper program.
+fn paint_poster_art(pa: Painter, placement: Placement, t: u32, backdrop: u32, r: Rect, rad: f32, f: f32) {
+    match placement {
+        Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),
+        Placement::Contained { inner, backdrop_uv } => {
+            if !pa.tex_carded_inset(backdrop, backdrop_uv, theme::ART_BACKDROP_TINT, t, inner, r, rad, f) {
+                pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::ART_BACKDROP_TINT, f);
+                pa.tex(t, inner, 0.0, theme::TINT_WHITE);
+            }
+        }
+    }
+}
+
 /// [`card_named_led`] for a row that declares how its art meets the tile ([`RowStyle::fit`], which
 /// `card_row`'s tile draws pass). Only a poster's art is fitted: [`ArtFit::ContainOnBlur`] contains a
 /// picture that is not within [`crate::art_fit::POSTER_FIT_TOLERANCE`] of the tile's shape over its own
@@ -1053,13 +1095,15 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
 #[allow(clippy::too_many_arguments)]
 pub fn card_fitted(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad: f32, focused: bool,
     scale: f32, f: f32, led: Option<ArtImage>, fit: ArtFit) {
+    #[cfg(any(test, feature = "test-support"))]
+    crate::draw_census::note_fit(fit);
     // Text prewarming visits an offscreen page. This leaf has no text: starting
     // image work here would bypass on-screen admission, and pollute its history.
     if p.is_recording() { return; }
     let r = if focused { frame.scaled(scale) } else { frame };
     // All card variants resolve inside their final placement scope. Neither the
     // screen nor its springs can forget to report a new positional expression.
-    let image = led.unwrap_or_else(|| resolve_card_art(p, r, &art));
+    let image = led.unwrap_or_else(|| resolve_card_art_fitted(p, r, &art, fit));
     // Art that landed late dissolves in over the skeleton the card wore until now: the texture is
     // drawn at `shown` and the placeholder underneath it (uncounted: the art is here).
     let shown = image.shown;
@@ -1083,17 +1127,7 @@ pub fn card_fitted(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, ra
             }
             if t != 0 {
                 if shown < 1.0 { crate::placeholder::skeleton_under(p, r, rad); }
-                match place(fit, art_crop(&art), tw, th, r, backdrop != 0) {
-                    Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),
-                    // The tile's one card pass (rounded coverage, shadow, sheen, pop) is the blurred
-                    // copy's, over the whole tile; the picture is laid whole on it with square corners:
-                    // it touches the tile only along straight edges (a square or 16:9 never reaches a
-                    // corner, and `place` covers anything near enough to the tile's shape to).
-                    Placement::Contained { inner, backdrop_uv } => {
-                        pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::ART_BACKDROP_TINT, f);
-                        pa.tex(t, inner, 0.0, theme::TINT_WHITE);
-                    }
-                }
+                paint_poster_art(pa, place(fit, art_crop(&art), tw, th, r, backdrop != 0), t, backdrop, r, rad, f);
                 // A collection whose thumb is the server's composite is drawn as our baked fan,
                 // which leaves its name to be set live — on every tile, focused or not.
                 if let Some(m) = m.filter(|m| m.kind == TileKind::Collection && m.composite_thumb) {

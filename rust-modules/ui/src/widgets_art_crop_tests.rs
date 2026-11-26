@@ -90,8 +90,8 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
     use plx_machine::machine::PosterKey;
     struct Always;
     impl Source for Always {
-        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Option<PosterKey> { Some(PosterKey(7)) }
-        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Warm { Warm::Known }
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Option<PosterKey> { Some(PosterKey(7)) }
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Warm { Warm::Known }
         fn logo(&self, _: u16, _: &str) -> Option<PosterKey> { None }
         fn logo_warm(&self, _: u16, _: &str) -> Warm { Warm::Known }
         fn unresident(&self, _: PosterKey, _: bool) {}
@@ -109,7 +109,7 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
     for (w, h, expect_copy) in [(375u16, 375u16, true), (250, 375, false)] {
         crate::tex::reset_for_test(usize::MAX);
         let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None };
-        crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(picture.with_backdrop()) });
+        crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(crate::art_fit::attach_backdrop(picture, crate::art_fit::BackdropSpec::POSTER)) });
         let mut budget = crate::frame::Budget::new();
         budget.begin_frame(0);
         let mut present = plx_machine::present::Present::new();
@@ -119,5 +119,52 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
         let image = resolve_card_art(Painter::root(), Rect::new(0.0, 0.0, 250.0, 375.0), &Art::Poster(Some(facts)));
         assert_eq!((image.tex, image.w, image.h), (11, w as f32, h as f32), "{w}x{h}");
         assert_eq!(image.backdrop != 0, expect_copy, "{w}x{h}: {image:?}");
+    }
+}
+
+/// What a poster tile's art paints, read from the recording painter's census: the card passes
+/// (`(tag, rect)`; 14 is `tex_carded`, 27 `tex_carded_inset`) and the picture quads (`(texture,
+/// rect, alpha)`).
+fn painted(placement: Placement, f: f32) -> (Vec<(u64, Rect)>, Vec<(u32, Rect, f32)>) {
+    const TILE: Rect = Rect { x: 100.0, y: 200.0, w: 250.0, h: 375.0 };
+    let mut quads = Vec::new();
+    let cards = crate::draw_census::capture(|| {
+        quads = crate::draw_census::capture_tex(|| paint_poster_art(Painter::recording(), placement, 7, 8, TILE, 14.0, f));
+    });
+    (cards, quads)
+}
+
+/// **A contained picture is two layers; a covered one is one.** At rest the blurred copy is the
+/// tile's card pass and the picture is its own quad, whole, in the box `place` centred it in; a
+/// covered picture is the card pass alone.
+#[test]
+fn a_contained_tile_paints_the_card_and_the_picture_and_a_covered_one_only_the_card() {
+    use crate::art_fit::{place, ArtFit};
+    let tile = Rect::new(100.0, 200.0, 250.0, 375.0);
+    let contained = place(ArtFit::ContainOnBlur, crate::Crop::Centre, 375.0, 375.0, tile, true);
+    let Placement::Contained { inner, .. } = contained else { panic!("a square is contained") };
+    let (cards, quads) = painted(contained, 0.0);
+    assert_eq!(cards.iter().map(|c| c.0).collect::<Vec<_>>(), vec![14, 12], "the copy's card pass, then the picture's own quad (12)");
+    assert_eq!(quads, vec![(7, inner, 1.0)], "and the picture whole in its box");
+    let covered = place(ArtFit::ContainOnBlur, crate::Crop::Centre, 250.0, 375.0, tile, true);
+    let (cards, quads) = painted(covered, 0.0);
+    assert_eq!(cards.iter().map(|c| c.0).collect::<Vec<_>>(), vec![14]);
+    assert!(quads.is_empty(), "a covered picture is the card pass alone: {quads:?}");
+}
+
+/// **A focused contained tile is composed INSIDE its one card pass.** The rim glow, the sheen crown and
+/// the gloss ramp are that pass's; a second quad for the picture would paint over them inside its box
+/// (the side glow lost over two thirds of each edge, the gloss stepping at the picture's top). So with
+/// `f > 0` the census holds the inset pass (27) and not the plain card (14), and still the picture.
+#[test]
+fn a_focused_contained_tile_composes_its_picture_inside_the_card_pass() {
+    use crate::art_fit::{place, ArtFit};
+    let tile = Rect::new(100.0, 200.0, 250.0, 375.0);
+    let contained = place(ArtFit::ContainOnBlur, crate::Crop::Centre, 667.0, 375.0, tile, true);
+    let Placement::Contained { inner, .. } = contained else { panic!("16:9 is contained") };
+    for f in [0.05, 1.0] {
+        let (cards, quads) = painted(contained, f);
+        assert_eq!(cards.iter().map(|c| c.0).collect::<Vec<_>>(), vec![27], "f={f}: the inset pass, not a card and a quad over it");
+        assert_eq!(quads, vec![(7, inner, 1.0)], "f={f}: the picture is the pass's, in its box");
     }
 }

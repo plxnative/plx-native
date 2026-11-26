@@ -215,6 +215,9 @@ const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n
 /// [`IPROG`] with the plain look if it fails to link, same as [`STILL_IMAGE`]'s own fallback.
 const VS_FOCUS: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_FOCUS\n");
 const FS_FOCUS: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
+/// [`FS_FOCUS`] with a second picture laid whole inside the card ([`draw_tex_carded_inset`]): the
+/// FOCUSED tile of a row whose art is contained over its own blurred copy, lit as one card.
+const FS_INSET: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n#define PLX_INSET\n");
 /// The wash with its photograph dissolved into it (`draw_art_wash`): dithered, because the wash it
 /// carries always dithers, over `vs_ambient.vert`'s field mesh so its colour is the wash's own
 /// per-vertex field.
@@ -1086,6 +1089,11 @@ struct ImageUniforms {
 static mut DISSOLVE_IMAGE: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_PLAIN: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_TRIED: bool = false;
+/// Optional focused-card specialization with a contained picture ([`FS_INSET`], over [`VS_FOCUS`]):
+/// the program, its uniforms and its `u_inset` and `u_dim` locations. Linked on first use; `None`
+/// when it did not link, and the caller keeps its two-quad composition.
+static mut INSET_IMAGE: Option<(c_uint, ImageUniforms, c_int, c_int)> = None;
+static mut INSET_TRIED: bool = false;
 static mut STILL_IMAGE: Option<(c_uint, ImageUniforms, c_int, c_int)> = None;
 /// Optional FOCUSED-card specialization ([`VS_FOCUS`]/[`FS_FOCUS`]) — [`IPROG`] remains the
 /// fallback (the plain look, same as before this program existed) if this fails to link.
@@ -3886,6 +3894,74 @@ pub fn draw_tex_carded_blend(tex: c_uint, next: c_uint, mix: f32, crop: [f32; 4]
         glActiveTexture(GL_TEXTURE0);
         true
     }
+}
+
+/// **A FOCUSED card whose art is contained: the card's backdrop texture `tex` (windowed by `crop`
+/// to the whole card) with the picture `inner_tex` laid whole in the placed box `inner`
+/// (`x, y, w, h`), composed INSIDE the one card pass.** The rim glow, the sheen and glare crown and
+/// the gloss ramp of a focused card are computed in that pass from the card's own outline, so they
+/// light the whole tile; the picture drawn as a second quad over a card pass painted over them
+/// inside its box (the side glow, the top gloss step).
+///
+/// `tint` is the picture's ink and the card's fade, `dim` the ink of the part of the card outside the
+/// picture (the backdrop's dimming). Returns `false`, drawing nothing, when the draw is not a focused
+/// or risen one (a resting card has no rim or gloss to lose, and the caller's two plain quads are
+/// the cheaper program) or the specialization did not link; the caller then draws those two quads.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_tex_carded_inset(tex: c_uint, inner_tex: c_uint, inner: [f32; 4], crop: [f32; 4],
+    x: f32, y: f32, w: f32, h: f32, radius: f32, tint: *const f32, dim: [f32; 3],
+    rimw: f32, rimcol: *const f32, pad: f32, blur: f32, shcol: *const f32, f: f32, dy: f32) -> bool {
+    if tex == 0 || inner_tex == 0 || inner[2] <= 0.0 || inner[3] <= 0.0 || !wants_focus_program(f, dy) {
+        return false;
+    }
+    // SAFETY: the same render-thread-only lifecycle as the other image specializations.
+    let (program, uniforms, loc_inset, loc_dim) = unsafe {
+        if !INSET_TRIED {
+            INSET_TRIED = true;
+            INSET_IMAGE = link_optional_program(VS_FOCUS.as_ptr(), FS_INSET.as_ptr()).map(|program| {
+                let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
+                let uniforms = ImageUniforms {
+                    rect: loc(c"u_trect"), tint: loc(c"u_tint"), uvrect: loc(c"u_uvrect"),
+                    card: loc(c"u_card"), rimw: loc(c"u_rimw"), rimcol: loc(c"u_rimcol"),
+                    shinv: loc(c"u_shinv"), shcol: loc(c"u_shcol"), focus: loc(c"u_focus"),
+                };
+                use_prog(program);
+                glUniform2f(loc(c"u_tscreen"), SCR_W, SCR_H);
+                glUniform1i(loc(c"u_tex"), 0);
+                glUniform1i(loc(c"u_next"), 1);
+                (program, uniforms, loc(c"u_inset"), loc(c"u_dim"))
+            });
+            if std::ptr::addr_of!(INSET_IMAGE).read().is_none() {
+                log("inset image prog unavailable — contained art keeps its two plain quads");
+            }
+        }
+        let Some(image) = std::ptr::addr_of!(INSET_IMAGE).read() else { return false };
+        image
+    };
+    // The picture's box from the CARD's centre, and its inverse size: the shader's own coordinate is
+    // card-centred (`v_p` shifted by the shadow's dy), so the CPU folds the placement once here.
+    let inset = [
+        inner[0] + inner[2] * 0.5 - (x + w * 0.5),
+        inner[1] + inner[3] * 0.5 - (y + h * 0.5),
+        1.0 / inner[2],
+        1.0 / inner[3],
+    ];
+    note_card(x, y, w, h, pad, dy);
+    // SAFETY: as above.
+    unsafe {
+        use_prog(program);
+        glUniform4f(loc_inset, inset[0], inset[1], inset[2], inset[3]);
+        glUniform3f(loc_dim, dim[0], dim[1], dim[2]);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, inner_tex);
+        glActiveTexture(GL_TEXTURE0);
+        draw_tex_impl(tex, crop, x, y, w, h, radius, tint, rimw, rimcol, pad, blur, shcol, f, dy,
+            Some((program, uniforms)));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    true
 }
 
 /// Run `draw` with the simulator's compositor blend ([`straighten::UNDER`]) set and the app's own put
