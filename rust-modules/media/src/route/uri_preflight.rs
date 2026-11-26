@@ -21,8 +21,25 @@ pub use plx_data::metadata::lang_matches;
 
 /// The exact selected subtitle's source format and placement. A native track index alone does
 /// not establish that this firmware renders its codec.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSubtitle { pub codec: String, pub embedded: bool }
+
+/// One subtitle stream EMBEDDED in the Part, as PMS lists it: what a qualifier needs to map every
+/// such stream to its native track and to say which codecs the Part holds, beside the selected
+/// one ([`OriginalRequest::subtitle_source`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceSubtitleStream {
+    /// PMS's stream id: the track's identity in a `TrackSelection` (0 when PMS gave none).
+    pub sid: u64,
+    /// The stream's 0-based position among the Part's embedded subtitle streams in container order
+    /// ([`plx_data::metadata::sub_render_ordinal`]): the numbering the app's own renderer and the
+    /// Feed demuxer use.
+    pub ordinal: i64,
+    /// PMS's codec name, lowercased (`srt`, `ass`, `pgs`, `mov_text`, ...).
+    pub codec: String,
+    /// The language as PMS states it (`languageCode`, ISO 639-2); empty when PMS states none.
+    pub language: String,
+}
 
 /// Captured product evidence shared by boot's executor configuration and one resolve's IO port.
 /// Callable operations and certified firmware behavior are separate facts, and the display path is
@@ -307,6 +324,9 @@ pub struct OriginalRequest {
     /// [`audio_ordinal`]: Self::audio_ordinal
     pub audio_language: String,
     pub subtitle_source: Option<SourceSubtitle>,
+    /// Every subtitle stream embedded in the Part, in PMS's order (external sidecars are not in the
+    /// file and are not listed). Empty when the Part has none or the plan did not read them.
+    pub subtitle_streams: Vec<SourceSubtitleStream>,
     /// Off is an actual viewer choice, distinct from no subtitle streams being present.
     /// The current URI driver has no native disable operation.
     pub subtitle_choice: TrackChoice,
@@ -1208,7 +1228,7 @@ mod tests {
             dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto,
             dolby_vision_base_layer_only: false, uri_opt_in,
             standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false, audio_language: String::new(),
-            subtitle_source: None, subtitle_choice: TrackChoice::Unspecified,
+            subtitle_source: None, subtitle_streams: Vec::new(), subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,
             quality_allows_original: true, link_allows_original: true, auto_allows_original: true,
@@ -1389,6 +1409,7 @@ mod tests {
             dolby_vision_base_layer_only: false, uri_opt_in: false,
             standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false, audio_language: String::new(),
             subtitle_source: None,
+            subtitle_streams: Vec::new(),
             subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1920, 1080)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,

@@ -512,6 +512,10 @@ pub struct PlayerAdapter {
     pending_uri_subtitle: Option<PendingUriSubtitle>,
     refused_uri_audio: Option<PendingUriAudio>,
     refused_uri_subtitle: Option<PendingUriSubtitle>,
+    /// Where a URI driver's captions go: the caption store generation of the subtitle the app draws for it.
+    uri_captions: super::uri_captions::UriCaptionSink,
+    /// The captions of one poll, kept to reuse its allocation.
+    uri_caption_inbox: Vec<plx_playback_contract::uri::UriCaption>,
     /// The bound physical attempt: its route identity, product trace and foreground follow mark.
     /// The feed itself receives only the canonical contract ID and native epoch. Bound right after
     /// the Engine is installed, dropped by [`Self::stop_begin`]: an Engine is installed
@@ -597,6 +601,8 @@ impl PlayerAdapter {
             uri_finalized: false,
             pending_uri_audio: None,
             pending_uri_subtitle: None,
+            uri_captions: Default::default(),
+            uri_caption_inbox: Vec::new(),
             refused_uri_audio: None,
             refused_uri_subtitle: None,
             feed_attempt: None,
@@ -898,18 +904,44 @@ impl PlayerAdapter {
         Some(true)
     }
 
+    /// Drain the URI driver's captions and put those of the subtitle the app draws into the caption store
+    /// ([`super::uri_captions`]). A driver whose pipeline draws its own subtitles hands none over.
+    fn deliver_uri_captions(&mut self, ps: &crate::route::PlaybackSession) {
+        let Some(driver) = self.physical.uri_mut().filter(|driver| driver.delivers_captions()) else { return };
+        let mut captions = std::mem::take(&mut self.uri_caption_inbox);
+        captions.clear();
+        driver.drain_captions(&mut captions);
+        if let (Some(route), false) = (self.uri_route_attempt, captions.is_empty()) {
+            self.uri_captions.deliver(route.contract_id(), crate::route::embedded_subtitle_drawn_by_app(ps),
+                super::playpos_ns(ps), &captions);
+        }
+        captions.clear();
+        self.uri_caption_inbox = captions;
+    }
+
     pub fn select_uri_subtitle(&mut self, ps: &mut crate::route::PlaybackSession,
         ordinal: i32, stream_id: i64, has_sidecar: bool,
         memo: Option<plx_plex::plex::session::prefs::SubtitleMemo>) -> Option<bool> {
         if ps.attempt_view().backend() != Some(super::attempt_view::Backend::Uri) { return None; }
-        // Off and external sidecars have no confirmed native operation in this transport.
+        // An external sidecar has no native operation in this transport. Off has one only on a driver whose pipeline
+        // draws nothing of its own and hands its cues to the app: there Off is the app no longer drawing them.
         let Ok(id) = u64::try_from(stream_id) else { return Some(false); };
-        if id == 0 || ordinal < 0 || has_sidecar { return Some(false); }
+        if has_sidecar { return Some(false); }
+        let choice = if id == 0 {
+            let off_carried = self.physical.uri().is_some_and(|driver| driver.delivers_captions()
+                && driver.capabilities(BackendKind::Uri).is_some_and(|caps| caps.subtitle_off));
+            if !off_carried { return Some(false); }
+            plx_playback_contract::TrackChoice::Off
+        } else if ordinal < 0 {
+            return Some(false);
+        } else {
+            plx_playback_contract::TrackChoice::Selected(id)
+        };
+        let ordinal = if id == 0 { -1 } else { ordinal };
         let Some(route_attempt) = self.uri_route_attempt else { return Some(false); };
         self.refused_uri_subtitle = None;
         let attempt = route_attempt.contract_id();
-        let operation = Operation::SelectTrack { kind: plx_playback_contract::TrackKind::Subtitle,
-            choice: plx_playback_contract::TrackChoice::Selected(id) };
+        let operation = Operation::SelectTrack { kind: plx_playback_contract::TrackKind::Subtitle, choice };
         let result = self.backend_send_at(ps, Intent::Control { backend: BackendKind::Uri, attempt,
             operation },
             super::attempt_metrics::Origin::Fresh, self.backend_tick());
@@ -1190,6 +1222,12 @@ impl PlayerAdapter {
         offer: QualifiedUriOffer) -> Result<(), Failure> {
         if self.physical.uri().is_none() { return Err(Failure::Unavailable); }
         if crate::route::is_preview(ps) { return Err(Failure::Unsupported); }
+        // A certified selected subtitle is drawn by the app from the driver's cues (the plan gave it a render
+        // ordinal): a driver that hands none over cannot carry it.
+        if matches!(offer.requirements.subtitle_track, plx_playback_contract::TrackChoice::Selected(_))
+            && !self.physical.uri().is_some_and(|driver| driver.delivers_captions()) {
+            return Err(Failure::Unsupported);
+        }
         if offer.selection != ps.uri_selection()
             || crate::route::pending_route_start() != Some(offer.route_start)
             || offer.expires_at <= std::time::Instant::now() {
@@ -1287,6 +1325,7 @@ impl PlayerAdapter {
         self.pending_uri_subtitle = None;
         self.refused_uri_audio = None;
         self.refused_uri_subtitle = None;
+        self.uri_captions.clear();
     }
 
     /// A foreground restore owes a re-resolve of the parked URI original at `resume_ns` (the Sans-IO request: the app's
@@ -1523,8 +1562,30 @@ impl PlayerAdapter {
                                 && u64::try_from(pending.stream_id).ok() == Some(id)) {
                         let pending = self.pending_uri_subtitle.take().expect("matched URI subtitle pick");
                         self.refused_uri_subtitle = None;
+                        let app_draws = self.physical.uri().is_some_and(|driver| driver.delivers_captions());
                         crate::route::confirm_uri_subtitle_pick(ps, pending.ordinal,
-                            pending.stream_id, pending.memo);
+                            pending.stream_id, pending.memo, app_draws);
+                        if app_draws {
+                            // The cues of the new track are drawn at its ordinal from a fresh source.
+                            self.uri_captions.clear();
+                            super::request_subtitle(pending.ordinal);
+                        }
+                    }
+                }
+                plx_playback_contract::Fx::AcceptedTrackSettled {
+                    backend: BackendKind::Uri, attempt, command,
+                    kind: plx_playback_contract::TrackKind::Subtitle,
+                    choice: plx_playback_contract::TrackChoice::Off,
+                } => {
+                    // Only the viewer's own Off (a pending pick); the startup plan's Off settles nothing here.
+                    if self.uri_route_attempt.is_some_and(|route| route.contract_id() == attempt)
+                        && self.pending_uri_subtitle.as_ref().is_some_and(|pending|
+                            pending.attempt == attempt && pending.command == command && pending.stream_id == 0) {
+                        let pending = self.pending_uri_subtitle.take().expect("matched URI subtitle Off");
+                        self.refused_uri_subtitle = None;
+                        crate::route::confirm_uri_subtitle_pick(ps, -1, 0, pending.memo, false);
+                        self.uri_captions.clear();
+                        super::request_subtitle(-1);
                     }
                 }
                 plx_playback_contract::Fx::CommandRefused {
@@ -1590,6 +1651,7 @@ impl PlayerAdapter {
                 _ => {}
             }
         }
+        self.deliver_uri_captions(ps);
         if let Some(attempt) = failed_startup.filter(|attempt|
             self.uri_route_attempt.is_some_and(|route| route.contract_id() == *attempt)) {
             // The common startup verdict alone distinguishes mandatory initial selection,

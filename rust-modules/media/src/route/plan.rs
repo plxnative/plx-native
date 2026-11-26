@@ -2178,6 +2178,16 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                         .map_or_else(String::new, |track| track.lang_code.clone()),
                     subtitle_source: source_sub_stream.map(|sub| super::uri_preflight::SourceSubtitle {
                         codec: sub.codec.to_lowercase(), embedded: !sub.external }),
+                    subtitle_streams: plan.playing.as_ref().map_or_else(Vec::new, |item| item.subs.iter()
+                        .enumerate()
+                        .filter(|(_, sub)| !sub.external)
+                        .map(|(i, sub)| super::uri_preflight::SourceSubtitleStream {
+                            sid: u64::try_from(sub.id).unwrap_or(0),
+                            ordinal: i64::from(plx_data::metadata::sub_render_ordinal(&item.subs, i)),
+                            codec: sub.codec.to_lowercase(),
+                            language: sub.lang_code.clone(),
+                        })
+                        .collect()),
                     subtitle_choice,
                     source_kbps: u32::try_from(source_kbps).ok().filter(|kbps| *kbps > 0),
                     raster: u32::try_from(width).ok().zip(u32::try_from(height).ok())
@@ -2210,6 +2220,17 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     plan.fps = plan.src_fps;
                     plan.audio = plan_track(tracks, source_selection.audio_sid, -1, true);
                     plan.sub_sid = source_selection.subtitle_sid;
+                    // A subtitle the certificate carries is drawn by the APP from the URI driver's
+                    // cues (`UriDriver::delivers_captions`; the adapter refuses such an offer on a
+                    // driver that delivers none): the landing tells the renderer its ordinal, as an
+                    // embedded track's on a Feed play. A pipeline that draws its own certifies none.
+                    if known.certified_subtitle_source.is_some() {
+                        plan.sub_render_ordinal = plan.playing.as_ref().and_then(|item| {
+                            let i = item.subs.iter().position(|sub|
+                                sub.id == source_selection.subtitle_sid && !sub.external)?;
+                            Some(plx_data::metadata::sub_render_ordinal(&item.subs, i)).filter(|ord| *ord >= 0)
+                        });
+                    }
                     plan.src_measure = (ceiling_source_kbps, width, height);
                     plan.transport_kbps = source_kbps;
                     plan.uri_original = Some(known);
