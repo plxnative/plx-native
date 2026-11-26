@@ -216,8 +216,8 @@ struct Pslot {
     /// cooldown is armed ([`PosterSource::unresident`]) or the slot's eviction history is
     /// otherwise cleared (recovery, recycle) — a new deadline is something to wake for again.
     evict_wake_sent: bool,
-    /// The backdrop this slot's request asked for ([`BackdropSpec`]: a blurred copy, or the flat ground
-    /// of a picture with transparency), made of its decoded picture in [`drain_decoded`]. Set at the
+    /// What this slot's request asked derived from its picture ([`BackdropSpec`]: a blurred copy, or the flat
+    /// ground of a picture with transparency, and/or the ink box), made of the decoded picture in [`drain_decoded`]. Set at the
     /// claim and part of the slot's identity (the hit loop in [`lookup_art`] matches on it), so a slot
     /// never answers a request with a picture that lacks the copy it declared, and art nobody asked
     /// a copy for never pays for one.
@@ -1628,11 +1628,13 @@ pub(crate) fn drain_decoded() {
                 h: h as u16,
                 rgba,
                 backdrop: None,
+                ink: None,
             };
-            // The blurred copy the request asked for ([`Pslot::backdrop`]): a tile's, drawn behind its contained
-            // art (a few thousand taps, ~1-4 KB), or the Live TV art ground's full-screen one
-            // (`art_ground::SPEC`, ~7 KB). Made here, once, from the pixels just copied
-            // (`art_fit::attach_backdrop`), and carried with the picture into the cache.
+            // What the request asked derived ([`Pslot::backdrop`]): the blurred copy a tile draws behind its
+            // contained art (a few thousand taps, ~1-4 KB), the Live TV art ground's full-screen one
+            // (`art_ground::SPEC`, ~7 KB), and/or a channel logo's ink box (one pass over the alpha). Made
+            // here, once, from the pixels just copied (`art_fit::attach_backdrop`), and carried with the
+            // picture into the cache.
             Ok(match backdrop {
                 Some(spec) => plx_ui::art_fit::attach_backdrop(picture, spec),
                 None => picture,
@@ -2685,7 +2687,8 @@ mod tests {
     /// **`drain_decoded` delivers the copy a request asked for**, and only that one: a square picture
     /// asked for with `BackdropSpec::POSTER` arrives with a resident blurred copy beside it, the same
     /// picture asked for without one arrives bare, and a poster-shaped picture asked for with it is
-    /// covered by every tile so it gets none.
+    /// covered by every tile so it gets none. The same for the ink box: a channel logo asked for with
+    /// `BackdropSpec::INK` arrives with the box of its mark (and no copy), one asked for otherwise has none.
     #[test]
     fn drain_decoded_delivers_the_copy_the_request_asked_for() {
         struct StubUp(u32);
@@ -2704,11 +2707,16 @@ mod tests {
         let (_fresh, srv, _) = one_server();
         plx_ui::card_motion::begin_frame(crate::app::clock::now());
         tex::install(&SOURCE);
-        // (picture size, the request's copy, whether a copy arrives)
-        for (case, ((w, h), asked, arrives)) in [
-            ((375, 375), Some(BackdropSpec::POSTER), true),
-            ((375, 375), None, false),
-            ((250, 375), Some(BackdropSpec::POSTER), false),
+        // (picture size, the request's copy, whether a copy arrives, the mark's box on a clear canvas if the
+        // picture has one (else it is uniformly alpha 90), the ink box that arrives)
+        let mark = plx_ui::art_fit::InkBox { x: 100, y: 175, w: 200, h: 50 };
+        for (case, ((w, h), asked, arrives, canvas, ink)) in [
+            ((375, 375), Some(BackdropSpec::POSTER), true, None, None),
+            ((375, 375), None, false, None, None),
+            ((250, 375), Some(BackdropSpec::POSTER), false, None, None),
+            ((400, 400), Some(BackdropSpec::INK), false, Some(mark), Some(mark)),
+            ((400, 400), Some(BackdropSpec::POSTER), true, Some(mark), None),
+            ((400, 400), None, false, Some(mark), None),
         ].into_iter().enumerate() {
             tex::reset_for_test(usize::MAX);
             {
@@ -2724,6 +2732,15 @@ mod tests {
                 let px = unsafe { malloc(n) as *mut c_uchar };
                 assert!(!px.is_null());
                 unsafe { std::ptr::write_bytes(px, 90, n) };
+                if let Some(m) = canvas {
+                    // a clear canvas with the mark's rectangle opaque
+                    unsafe { std::ptr::write_bytes(px, 0, n) };
+                    for y in m.y as usize..(m.y + m.h) as usize {
+                        for x in m.x as usize..(m.x + m.w) as usize {
+                            unsafe { *px.add((y * w as usize + x) * 4 + 3) = 255 };
+                        }
+                    }
+                }
                 let s = &mut g.slots[slot];
                 s.px = px as usize;
                 s.pw = w;
@@ -2739,6 +2756,7 @@ mod tests {
             let art = tex::resolve_art_on(srv.raw(), SRC, 250, 375, false, asked);
             assert_ne!(art.id, 0, "case {case}: the picture is resident");
             assert_eq!(art.backdrop != 0, arrives, "case {case}: {w}x{h} asked {asked:?} -> {art:?}");
+            assert_eq!(art.ink, ink, "case {case}: {w}x{h} asked {asked:?} -> {art:?}");
         }
         store().slots = [Pslot::ZERO; PT_CAP];
     }
@@ -2951,6 +2969,7 @@ mod tests {
                 h: 2,
                 rgba: vec![0; BYTES].into_boxed_slice(),
                 backdrop: None,
+                ink: None,
             }),
         };
         tex::accept(decoded(PosterKey(0)));
@@ -3094,7 +3113,7 @@ mod tests {
 
         let decoded = |key| PosterReady {
             key,
-            result: Ok(Decoded { w: 2, h: 2, rgba: vec![0; BYTES].into_boxed_slice(), backdrop: None }),
+            result: Ok(Decoded { w: 2, h: 2, rgba: vec![0; BYTES].into_boxed_slice(), backdrop: None, ink: None }),
         };
         let mut budget = plx_ui::frame::Budget::new();
         let mut present = plx_machine::present::Present::new();

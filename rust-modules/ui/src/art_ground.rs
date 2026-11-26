@@ -34,6 +34,7 @@ pub const SPEC: BackdropSpec = BackdropSpec {
     skip_shape: None,
     ground: Some(theme::SURFACE_APP_RGB8),
     dim: percent(BRIGHTNESS),
+    ink: false,
 };
 
 /// The size the art is requested at (the programme still's own).
@@ -112,7 +113,7 @@ mod tests {
     }
 
     fn picture(w: u16, h: u16, px: [u8; 4]) -> Decoded {
-        Decoded { w, h, rgba: px.repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None }
+        Decoded { w, h, rgba: px.repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None, ink: None }
     }
 
     /// The window is the cover window shrunk by the zoom about its centre, so a 16:9 picture on the 16:9

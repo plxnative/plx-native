@@ -22,6 +22,7 @@
 //! is only made while that accounting can be seen (`placeholder::accounting_visible`) — but no
 //! cross-fade has been built on it. The swap is a cut, but nothing around it MOVES, which is the
 //! part that used to read as a glitch.
+use crate::art_fit::InkBox;
 use crate::label::HAlign;
 use crate::text_view::TextView;
 use plx_machine::machine::Measure;
@@ -43,6 +44,7 @@ pub enum LogoRung {
     Card,
     /// A Live TV channel's logo on its 250x140 plate (`widgets::channel_tile`): drawn contained in a
     /// 218 x 84 slot centred on the plate, and, when the channel has no logo, its name in type there.
+    /// The only rung sized by the logo's INK ([`fit_ink`]); the others are sized by the texture.
     Channel,
     /// A continuous point between two named rungs, at `t` (0 = the first, 1 = the second) — never
     /// authored as a constant, always the live output of [`LogoRung::lerp`] driven by a spring or
@@ -168,6 +170,21 @@ pub fn fit(rung: LogoRung, src_w: f32, src_h: f32, col_w: f32) -> (f32, f32) {
     let w = aspect * h;
     let scale = (w_max.min(col_w) / w).min(1.0);
     (w * scale, h * scale)
+}
+
+/// **The DRAWN size of a logo texture and the texture window that draws it, sized by its INK.** A logo
+/// is often delivered on a canvas far larger than its mark (a resizer's `fit=contain` pads it to the
+/// requested box with clear texels), and [`fit`] on the canvas sizes the padding as if it were ink, so
+/// the mark comes out small: a 5:1 wordmark at three quarters of a 16:9 canvas's width drew ~100 px wide
+/// on the Live TV channel plate. With the picture's [`InkBox`] (its request asked:
+/// [`crate::art_fit::BackdropSpec::INK`]) the size is [`fit`] of the BOX, and the window is the box's
+/// share of the texture, so drawing the window at the size draws the mark alone. Without one (no box
+/// came, or the request never asked) it is [`fit`] of the whole texture and the whole texture, as before.
+pub fn fit_ink(rung: LogoRung, tex_w: f32, tex_h: f32, ink: Option<InkBox>, col_w: f32) -> ((f32, f32), [f32; 4]) {
+    match ink {
+        Some(b) => (fit(rung, b.w as f32, b.h as f32, col_w), b.uv(tex_w, tex_h)),
+        None => (fit(rung, tex_w, tex_h, col_w), plx_gfx::gfx::UV_FULL),
+    }
 }
 
 /// Bottom-anchor a `w`×`h` logo in `band`: its BOTTOM EDGE lands on the band's bottom edge. The text
@@ -818,5 +835,37 @@ mod channel_tests {
             assert!(fw * fh <= theme::logo::CHANNEL_AREA + 0.5, "{w}x{h}: the area is the rung's");
         }
         assert_eq!(fit(LogoRung::Channel, 0.0, 100.0, 218.0), (0.0, 0.0), "no source, no mark");
+    }
+
+    /// **The reported bug** ("Channels logos are small"): a 200 x 50 mark on a 400 x 400 clear canvas was
+    /// fitted as a SQUARE, so the padding set the size and the mark came out 42 x 10. Fitted by its ink it
+    /// is a 4:1 mark: area-limited, 200 x 50 (and the window that draws it is the mark's share of the texture).
+    #[test]
+    fn a_logo_on_a_large_clear_canvas_is_sized_by_its_ink_not_its_canvas() {
+        let ink = InkBox { x: 100, y: 175, w: 200, h: 50 };
+        let (square_w, square_h) = fit(LogoRung::Channel, 400.0, 400.0, theme::logo::CHANNEL_W_MAX);
+        let drawn_before = (square_w * 200.0 / 400.0, square_h * 50.0 / 400.0);
+        assert!(drawn_before.0 < 43.0 && drawn_before.1 < 11.0, "before: the mark drew {drawn_before:?}");
+        let ((w, h), uv) = fit_ink(LogoRung::Channel, 400.0, 400.0, Some(ink), theme::logo::CHANNEL_W_MAX);
+        assert!((w - 200.0).abs() < 0.01 && (h - 50.0).abs() < 0.01, "after: {w}x{h}");
+        assert_eq!(uv, [0.25, 0.4375, 0.5, 0.125], "only the mark's window of the texture");
+        // a 5:1 wordmark at three quarters of a 16:9 canvas (the owner's ~100 px): width-limited at 218
+        let wordmark = InkBox { x: 240, y: 396, w: 1440, h: 288 };
+        let (bw, _) = fit(LogoRung::Channel, 1920.0, 1080.0, theme::logo::CHANNEL_W_MAX);
+        assert!((bw * 0.75 - 100.0).abs() < 1.0, "before: ~100 px wide, {}", bw * 0.75);
+        let ((w, h), _) = fit_ink(LogoRung::Channel, 1920.0, 1080.0, Some(wordmark), theme::logo::CHANNEL_W_MAX);
+        assert!((w - 218.0).abs() < 0.01 && (h - 43.6).abs() < 0.01, "after: {w}x{h}");
+    }
+
+    /// A picture with no box (a fully opaque one asked with the box is the whole picture; one that
+    /// came without) is sized and drawn exactly as `fit` on the texture did.
+    #[test]
+    fn a_picture_with_no_ink_box_or_a_whole_one_is_fitted_as_before() {
+        for (tw, th) in [(600.0, 100.0), (100.0, 100.0), (60.0, 200.0)] {
+            let before = fit(LogoRung::Channel, tw, th, theme::logo::CHANNEL_W_MAX);
+            assert_eq!(fit_ink(LogoRung::Channel, tw, th, None, theme::logo::CHANNEL_W_MAX), (before, plx_gfx::gfx::UV_FULL));
+            let whole = InkBox { x: 0, y: 0, w: tw as u16, h: th as u16 };
+            assert_eq!(fit_ink(LogoRung::Channel, tw, th, Some(whole), theme::logo::CHANNEL_W_MAX), (before, plx_gfx::gfx::UV_FULL));
+        }
     }
 }

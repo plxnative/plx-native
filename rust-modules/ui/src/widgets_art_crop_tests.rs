@@ -108,7 +108,7 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
     crate::tex::install(&SOURCE);
     for (w, h, expect_copy) in [(375u16, 375u16, true), (250, 375, false)] {
         crate::tex::reset_for_test(usize::MAX);
-        let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None };
+        let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None, ink: None };
         crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(crate::art_fit::attach_backdrop(picture, crate::art_fit::BackdropSpec::POSTER)) });
         let mut budget = crate::frame::Budget::new();
         budget.begin_frame(0);

@@ -45,8 +45,16 @@
 //! four times that x 4 bytes (1 KiB for a square, 1.75 KiB for 16:9, 4 KiB at the most) beside the
 //! picture's own ~375 KB. The size is the request's, so another surface (a full-screen blurred
 //! ground) asks for the copy size that suits it.
+//!
+//! **A request can also ask for the picture's INK BOX** ([`BackdropSpec::ink`], [`InkBox`]): the bounding
+//! box of the texels that are not clear. A logo is often delivered on a canvas much larger than its mark (a
+//! resizer's `fit=contain` pads it to the box asked for, a studio's own file keeps a margin), and a
+//! size rule that reads the canvas sizes the margin, not the mark ([`crate::hero_logo::fit_ink`]). It is
+//! found by one pass over the alpha channel, in [`attach_backdrop`] beside the copy, once per image, and
+//! rides in [`crate::tex::Decoded::ink`] like the copy does. Only a Live TV channel plate's logo asks.
 use crate::tex::Decoded;
 use crate::{theme, Crop, Rect};
+use plx_gfx::gfx::UV_FULL;
 
 /// How far a picture's aspect may sit from its tile's and still be COVERED rather than contained:
 /// the picture's aspect over the tile's lies in `1 +/- 0.08`. A 2:3 tile takes 0.61 - 0.72 as its own,
@@ -95,7 +103,7 @@ impl ArtFit {
     }
 }
 
-/// The blurred copy a request for a picture asks the source to make of it. The request declares
+/// What a request for a picture asks the source to derive from it: a blurred copy, and/or its ink box. The request declares
 /// it ([`crate::tex::Source::probe`]), so the producer never guesses from a size which consumers
 /// will draw it; it is part of the art's identity in the source (the same art asked for with and
 /// without a copy is two entries), and `Copy`/`Eq` so it can be.
@@ -117,6 +125,10 @@ pub struct BackdropSpec {
     /// [`theme::ART_BACKDROP_DIM`]; another surface asks for the brightness that suits it. A flat ground is
     /// drawn as it is, whatever this says.
     pub dim: u8,
+    /// Also find the picture's [`InkBox`] ([`ink_of`]) and carry it with the picture
+    /// ([`crate::tex::Decoded::ink`]). Independent of the copy: a spec with `short_side` 0 asks for
+    /// the box alone.
+    pub ink: bool,
 }
 
 /// `fraction` (0 to 1) as a whole percent, for [`BackdropSpec::dim`].
@@ -133,7 +145,12 @@ impl BackdropSpec {
         skip_shape: Some((2, 3)),
         ground: Some(theme::CHANNEL_PLATE_RGB8),
         dim: percent(theme::ART_BACKDROP_DIM),
+        ink: false,
     };
+
+    /// A Live TV channel plate's logo: no copy (`short_side` 0), only the ink box, because the plate
+    /// draws the mark and not the canvas it came on ([`crate::hero_logo::fit_ink`]).
+    pub const INK: Self = Self { short_side: 0, skip_shape: None, ground: None, dim: 100, ink: true };
 
     /// Does a `w` x `h` picture get a copy under this spec?
     pub fn wanted_for(self, w: u16, h: u16) -> bool {
@@ -213,17 +230,66 @@ pub fn is_see_through(d: &Decoded) -> bool {
     clear * 100 >= nx * ny * SEE_THROUGH_PERCENT
 }
 
+/// An alpha above this is ink: a texel a viewer can see. A resizer's anti-aliased fringe and a faint
+/// glow on a clear canvas stay below it, so they do not stretch the box.
+const INK_ALPHA: u8 = 16;
+
+/// **The bounding box of a picture's ink**, in texels: the smallest rectangle holding every texel whose
+/// alpha is above [`INK_ALPHA`] ([`ink_of`]). A fully opaque picture's is the whole picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InkBox {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+impl InkBox {
+    /// The texture window (`u`, `v`, `w`, `h`, each 0 to 1; [`crate::Painter::tex_uv`]'s) of this box in a
+    /// `tw` x `th` texture. The whole texture for an empty one.
+    pub fn uv(self, tw: f32, th: f32) -> [f32; 4] {
+        if tw <= 0.0 || th <= 0.0 {
+            return UV_FULL;
+        }
+        [self.x as f32 / tw, self.y as f32 / th, self.w as f32 / tw, self.h as f32 / th]
+    }
+}
+
+/// The [`InkBox`] of `d`, or `None` for a picture with no ink at all, no size, or a short buffer. One
+/// pass over the alpha channel, so it costs the picture's texel count in byte reads, once per
+/// picture: 40-75 us for a 436 x 654 PNG on an Apple M4 at `-O` (a standalone copy of the loop, 2026-11-26);
+/// **unmeasured on the television**, where an ARMv7 core is likely 10x slower, so under a millisecond. The
+/// poster adapter runs it where it makes the copy ([`attach_backdrop`]).
+pub fn ink_of(d: &Decoded) -> Option<InkBox> {
+    let (w, h) = (d.w as usize, d.h as usize);
+    if w == 0 || h == 0 || d.rgba.len() < w * h * 4 {
+        return None;
+    }
+    let (mut x0, mut x1, mut y0, mut y1) = (usize::MAX, 0, usize::MAX, 0);
+    for (y, row) in d.rgba[..w * h * 4].chunks_exact(w * 4).enumerate() {
+        let mut ink = row.chunks_exact(4).enumerate().filter(|(_, p)| p[3] > INK_ALPHA).map(|(x, _)| x);
+        let Some(first) = ink.next() else { continue };
+        let last = ink.last().unwrap_or(first);
+        (x0, x1) = (x0.min(first), x1.max(last));
+        (y0, y1) = (y0.min(y), y1.max(y));
+    }
+    (x0 != usize::MAX).then(|| InkBox { x: x0 as u16, y: y0 as u16, w: (x1 - x0 + 1) as u16, h: (y1 - y0 + 1) as u16 })
+}
+
 /// The one-texel copy that is a flat `ground`: what a picture with transparency is contained on.
 fn ground_copy(ground: [u8; 3]) -> Decoded {
-    Decoded { w: 1, h: 1, rgba: Box::new([ground[0], ground[1], ground[2], 255]), backdrop: None }
+    Decoded { w: 1, h: 1, rgba: Box::new([ground[0], ground[1], ground[2], 255]), backdrop: None, ink: None }
 }
 
 /// `picture` with the copy `spec` asks for, when the picture gets one ([`BackdropSpec::wanted_for`]):
 /// the blurred copy of an opaque picture ([`backdrop_of`]), and for one with transparency
 /// ([`is_see_through`]) the spec's flat [`ground`](BackdropSpec::ground), or nothing if it has none.
-/// The producer's one call.
+/// And the [`InkBox`], when the spec asks for it ([`BackdropSpec::ink`]). The producer's one call.
 pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
-    if spec.wanted_for(picture.w, picture.h) {
+    if spec.ink {
+        picture.ink = ink_of(&picture);
+    }
+    if spec.short_side > 0 && spec.wanted_for(picture.w, picture.h) {
         picture.backdrop = if is_see_through(&picture) {
             spec.ground.map(ground_copy)
         } else {
@@ -290,7 +356,7 @@ pub fn backdrop_of(d: &Decoded, short: usize, dim: u8) -> Option<Decoded> {
             rgba.push(255);
         }
     }
-    Some(Decoded { w: bw as u16, h: bh as u16, rgba: rgba.into_boxed_slice(), backdrop: None })
+    Some(Decoded { w: bw as u16, h: bh as u16, rgba: rgba.into_boxed_slice(), backdrop: None, ink: None })
 }
 
 #[cfg(test)]
@@ -307,7 +373,7 @@ mod tests {
     fn px(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Decoded {
         let mut v = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h { for x in 0..w { v.extend_from_slice(&f(x, y)); } }
-        Decoded { w: w as u16, h: h as u16, rgba: v.into_boxed_slice(), backdrop: None }
+        Decoded { w: w as u16, h: h as u16, rgba: v.into_boxed_slice(), backdrop: None, ink: None }
     }
 
     #[test]
@@ -360,7 +426,7 @@ mod tests {
         assert!(!spec.wanted_for(72, 100) && spec.wanted_for(73, 100), "wide edge");
         assert!(!spec.wanted_for(920, 1500) && spec.wanted_for(919, 1500), "narrow edge");
         assert!(!spec.wanted_for(250, 375) && spec.wanted_for(375, 375) && spec.wanted_for(667, 375));
-        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM };
+        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM, ink: false };
         assert!(any.wanted_for(250, 375), "a spec with no shape to skip wants every picture");
         assert_eq!(ArtFit::Cover.copy_request(), None);
         assert_eq!(ArtFit::ContainOnBlur.copy_request(), Some(BackdropSpec::POSTER));
@@ -430,7 +496,7 @@ mod tests {
         let square = attach_backdrop(px(375, 375, |_, _| [1, 2, 3, 255]), BackdropSpec::POSTER);
         let copy = square.backdrop.as_deref().expect("a square gets a copy");
         assert_eq!((copy.w, copy.h), (16, 16));
-        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM });
+        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM, ink: false });
         assert!(any.backdrop.is_some());
     }
 
@@ -480,6 +546,51 @@ mod tests {
         let mut short = px(64, 64, |_, _| [0; 4]);
         short.rgba = vec![0; 16].into_boxed_slice();
         assert!(!is_see_through(&short) && !is_see_through(&px(0, 0, |_, _| [0; 4])), "a short or empty buffer");
+    }
+
+    /// A mark on a much larger clear canvas: the box is the mark's, not the canvas's. A fully opaque
+    /// picture's is the whole picture, and a picture with no ink has none.
+    #[test]
+    fn the_ink_box_is_the_mark_on_its_canvas_and_the_whole_of_an_opaque_picture() {
+        let mark = px(400, 400, |x, y| if (100..300).contains(&x) && (175..225).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
+        assert_eq!(ink_of(&mark), Some(InkBox { x: 100, y: 175, w: 200, h: 50 }));
+        assert_eq!(ink_of(&px(300, 200, |_, _| [9, 9, 9, 255])), Some(InkBox { x: 0, y: 0, w: 300, h: 200 }), "opaque: the whole picture");
+        assert_eq!(ink_of(&px(64, 64, |_, _| [9, 9, 9, 0])), None, "nothing to see");
+        // a single texel is a box of one; the corners are reachable
+        assert_eq!(ink_of(&px(8, 8, |x, y| if (x, y) == (7, 0) { [1, 1, 1, 255] } else { [0; 4] })), Some(InkBox { x: 7, y: 0, w: 1, h: 1 }));
+        let mut short = px(64, 64, |_, _| [9, 9, 9, 255]);
+        short.rgba = vec![255; 16].into_boxed_slice();
+        assert!(ink_of(&short).is_none() && ink_of(&px(0, 0, |_, _| [0; 4])).is_none(), "a short or empty buffer");
+    }
+
+    /// The fringe of a resizer and a faint glow are not the mark: alpha at the threshold is clear, one above is ink.
+    #[test]
+    fn a_faint_fringe_does_not_stretch_the_ink_box() {
+        let with_edge = |a: u8| px(100, 100, move |x, y| match (x, y) {
+            (40..=59, 40..=59) => [255, 255, 255, 255],
+            (30, 30) => [255, 255, 255, a],
+            _ => [0; 4],
+        });
+        assert_eq!(ink_of(&with_edge(INK_ALPHA)), Some(InkBox { x: 40, y: 40, w: 20, h: 20 }), "a faint texel is clear");
+        assert_eq!(ink_of(&with_edge(INK_ALPHA + 1)), Some(InkBox { x: 30, y: 30, w: 30, h: 30 }), "a visible one is ink");
+    }
+
+    /// The box is the request's: only a spec that asks for it ([`BackdropSpec::ink`]) gets one, and it is
+    /// independent of the copy (the ink-only spec makes none; the poster spec makes a copy and no box).
+    #[test]
+    fn attach_backdrop_finds_the_ink_box_only_when_the_request_asks_for_it() {
+        let mark = || px(400, 400, |x, y| if (100..300).contains(&x) && (175..225).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
+        let got = attach_backdrop(mark(), BackdropSpec::INK);
+        assert_eq!(got.ink, Some(InkBox { x: 100, y: 175, w: 200, h: 50 }));
+        assert!(got.backdrop.is_none(), "the ink-only spec makes no copy, not even the plate ground");
+        let opaque = attach_backdrop(px(375, 375, |_, _| [200, 100, 50, 255]), BackdropSpec::INK);
+        assert_eq!((opaque.ink, opaque.backdrop.is_none()), (Some(InkBox { x: 0, y: 0, w: 375, h: 375 }), true), "opaque: the whole picture, no copy");
+        let poster = attach_backdrop(mark(), BackdropSpec::POSTER);
+        assert!(poster.ink.is_none() && poster.backdrop.is_some(), "a request that did not ask pays nothing for a box");
+        let both = attach_backdrop(mark(), BackdropSpec { ink: true, ..BackdropSpec::POSTER });
+        assert!(both.ink.is_some() && both.backdrop.is_some(), "the two are independent");
+        assert_eq!(InkBox { x: 100, y: 175, w: 200, h: 50 }.uv(400.0, 400.0), [0.25, 0.4375, 0.5, 0.125]);
+        assert_eq!(InkBox { x: 1, y: 1, w: 1, h: 1 }.uv(0.0, 0.0), UV_FULL, "an undecoded texture answers the whole window");
     }
 
     #[test]

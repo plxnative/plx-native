@@ -46,7 +46,7 @@ fn rig() {
     LANDED.with(|l| l.set(false));
     crate::tex::accept(PosterReady {
         key: PosterKey(41),
-        result: Ok(Decoded { w: 16, h: 24, rgba: vec![0; 16 * 24 * 4].into_boxed_slice(), backdrop: None }),
+        result: Ok(Decoded { w: 16, h: 24, rgba: vec![0; 16 * 24 * 4].into_boxed_slice(), backdrop: None, ink: None }),
     });
     let mut budget = crate::frame::Budget::new();
     budget.begin_frame(0);
