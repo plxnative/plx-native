@@ -9,13 +9,12 @@
 //!   own verdicts, never re-derived here. That is what keeps DTS and TrueHD out (the planner's audio table has no
 //!   row for them on this platform) and every container Standard hands to the server to remux. The codec table
 //!   behind those verdicts is `Caps::assumed()` today, not a Tizen measurement (`docs/tizen.md`).
-//! - **Only a source with ONE audio stream is certified** (`!has_multiple_audio_tracks`, the webOS precedent
-//!   `ManyAudioTracksExported` in `app/adapters/backends.rs`). The host ABI has no track verb and nobody has measured
-//!   which stream the retail player starts on when a source has several, so a multi-audio source is declined
-//!   ([`UriDecline::NotCertified`]) instead of started on a stream that may not be the one the viewer is shown as
-//!   selected. For the single stream the driver's track settle is by construction (nothing to choose between), not
-//!   native evidence ([`super::machine::CAPS`]). A play that selects an audio stream that is not the Part's first is
-//!   declined too.
+//! - **The selected audio stream is certified wherever it sits** (discussion #1460: the first retail set refused every
+//!   multi-audio title while this rule allowed only one stream). The offer's track map names it at its position among
+//!   the Part's audio streams (`audio_ordinal`), and the driver asks the host player to select that index and settles on
+//!   the player's answer ([`super::machine::CAPS`]). A play that selects a stream whose position is unknown is declined
+//!   ([`UriDecline::NotCertified`]): there is no index to ask for. UNMEASURED on a retail set: that the player's native
+//!   index is that position (`docs/tizen.md`, "The audio track is selected").
 //! - **A converted PMS output is never certified** ([`PmsVerdict::Unknown`]): certifying a remux or encode needs
 //!   evidence the player lacks (HLS, a source time mapping), so a source Standard would not direct-play is the
 //!   planner's typed `NoQualifiedBackend` refusal with the PMS decline named, not a conversion.
@@ -30,13 +29,9 @@ impl OriginalQualifier for TizenQualifier {
         if let Some(gap) = request.standard.first_gap() {
             return Verdict::Unknown(gap);
         }
-        // One audio stream or none: with several, which one the native player starts on is unmeasured.
-        if request.has_multiple_audio_tracks {
-            return Verdict::Unknown(UriDecline::NotCertified);
-        }
-        // `audio_ordinal` is the selected stream's position among the Part's audio streams; the machine settles the
-        // request only for position 0 (`player::machine::CAPS`).
-        if request.selection.audio_sid > 0 && request.audio_ordinal != Some(0) {
+        // `audio_ordinal` is the selected stream's position among the Part's audio streams: the native index the driver
+        // asks the host player for (`player::machine::CAPS`). Without it there is nothing to ask.
+        if request.selection.audio_sid > 0 && request.audio_ordinal.map_or(true, |ordinal| ordinal < 0) {
             return Verdict::Unknown(UriDecline::NotCertified);
         }
         let url = request.source_url.clone();
@@ -47,8 +42,11 @@ impl OriginalQualifier for TizenQualifier {
         PmsVerdict::Unknown
     }
 
-    /// Only the source's default (single) audio stream is certified and no converted output is, so a viewer's pick of
-    /// another track mid-play has nothing to land on: the session refuses it instead of replacing the playing title.
+    /// Still false although the selected audio stream is now certified wherever it sits: this one flag also gates the
+    /// Quality ladder (`PlaybackSession::quality_pick_carriable`), whose rungs ask the server to convert, and no converted
+    /// output is certified here, so a true answer would let a Quality pick retire the playing title and end in
+    /// `NoQualifiedBackend`. A mid-play audio pick is therefore refused by the session, as before; the track is chosen
+    /// before the play starts.
     fn carries_source_track_change(&self) -> bool {
         false
     }

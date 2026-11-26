@@ -43,14 +43,17 @@ use std::collections::VecDeque;
 /// subtitle selection, and no variable speed (that has no flag: the planner refuses any rate but normal for every
 /// URI driver). The flags say what is CALLABLE, never a codec veto.
 ///
-/// `audio_track` is `true` for one reason and one narrow meaning: the contract makes a play whose PMS-selected audio
-/// stream has an id a `Selected` track requirement, and the start plan then settles it with one `SelectTrack`. The
-/// host player has no track verb, so nothing is asked of it: the qualifier ([`super::qualifier`]) certifies only a
-/// source with ONE audio stream, so the stream the player starts on is the only one there is and the request names
-/// it. The machine settles that request by construction (there was nothing to choose between), and says so: it is
-/// not native evidence that the player selected anything. A request for any other stream is refused with
-/// `Unsupported` and tears nothing down. Which stream the retail player starts on for a source with several is
-/// unmeasured, which is why such a source is not certified.
+/// `audio_track` is `true`: the contract makes a play whose PMS-selected audio stream has an id a `Selected` track
+/// requirement, and the start plan settles it with one `SelectTrack` once the player is prepared. The machine asks the
+/// host for it ([`Verb::AudioTrack`], `player_select_track` on the host's video thread) at the stream's native index from
+/// the source's track map, and settles it only when the host's `PLAYER_TRACK` echoes the command with that index: the
+/// player's own answer, not a settle by construction. A refusal (`b = -1`), an unanswered request and a refused verb are
+/// the command's typed refusal; a stream the map does not name is refused with `Unsupported` and asks nothing.
+///
+/// UNMEASURED on a retail set: that the native index the player numbers its audio tracks by is the stream's position
+/// among the Part's audio streams in PMS's order (`audio_ordinal`), which is what the track map carries. The host logs
+/// the native count, the current index and each track's language at PREPARED so a retail log can be compared with Plex's
+/// list (`docs/tizen.md`, "The audio track is selected").
 ///
 /// `subtitle_off` is `true` by construction too: the host player is given no subtitle (no `player_set_subtitle_path`,
 /// no text-track selection, no subtitle callback), and `docs/tizen.md` ("Subtitles off") records the emulator run in
@@ -316,7 +319,7 @@ impl Machine {
                 }
                 None
             }
-            Verb::Play | Verb::Pause | Verb::Seek { .. } => {
+            Verb::Play | Verb::Pause | Verb::Seek { .. } | Verb::AudioTrack { .. } => {
                 active.controls.pop();
                 Some(DispatchResult::Refused(refusal.failure()))
             }
@@ -357,12 +360,11 @@ impl Machine {
         DispatchResult::Queued
     }
 
-    /// The one audio request the host player can honour: the stream it starts on, the source's first. The settle is
-    /// by construction (a certified source has one audio stream, so there was nothing to choose between) and no host
-    /// call is made; the `TrackSelected` observation it carries is therefore NOT evidence that the native player
-    /// selected anything.
-    pub fn select_audio(&mut self, attempt: AttemptId, command: CommandId, choice: TrackChoice) -> DispatchResult {
-        let Some(active) = self.active.as_ref().filter(|a| a.attempt == attempt) else {
+    /// An audio request: the stream the source's track map names, asked of the host at its native index and settled
+    /// when the host's `PLAYER_TRACK` answers (see [`CAPS`]). A stream the map does not name is `Unsupported`.
+    pub fn select_audio(&mut self, now_ms: u64, attempt: AttemptId, command: CommandId, choice: TrackChoice,
+        fx: &mut Vec<Fx>) -> DispatchResult {
+        let Some(active) = self.active.as_mut().filter(|a| a.attempt == attempt) else {
             return DispatchResult::Refused(Failure::Stale);
         };
         let TrackChoice::Selected(id) = choice else { return DispatchResult::Refused(Failure::Unsupported) };
@@ -370,11 +372,11 @@ impl Machine {
         if active.phase != Phase::Open || !active.prepared {
             return DispatchResult::Refused(Failure::Busy);
         }
-        if native_index(&active.tracks, track) != Some(0) {
-            return DispatchResult::Refused(Failure::Unsupported);
-        }
-        self.pending.push_back(DriverEvent::Observation { attempt, observation: Observation::TrackSelected(observed(track)) });
-        self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Audio, choice });
+        let Some(index) = native_index(&active.tracks, track) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let operation = Operation::SelectTrack { kind: TrackKind::Audio, choice };
+        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms) });
+        fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::AudioTrack { index, command: command_word } });
         DispatchResult::Queued
     }
 
@@ -480,6 +482,27 @@ impl Machine {
                         _ => DriverEvent::ControlRefused { attempt, command: control.command,
                             operation: control.operation, failure: Failure::Refused },
                     });
+                }
+            }
+            PlayerKind::Track => {
+                let at = active.controls.iter().position(|c| matches!(c.operation, Operation::SelectTrack { .. })
+                    && i64::try_from(c.command.get()) == Ok(event.a));
+                if let Some(at) = at {
+                    let control = active.controls.remove(at);
+                    let Operation::SelectTrack { kind, choice } = control.operation else { unreachable!("matched above") };
+                    let selected = match choice {
+                        TrackChoice::Selected(id) => Some(TrackSelection { kind, id }),
+                        _ => None,
+                    }.filter(|track| live && event.b >= 0 && native_index(&active.tracks, *track) == Some(event.b));
+                    match selected {
+                        Some(track) => {
+                            note(out, attempt, Observation::TrackSelected(observed(track)));
+                            out.push_back(DriverEvent::TrackSettled { attempt, command: control.command, kind, choice });
+                        }
+                        // Refused (b = -1), another index than the one asked, or a close already requested.
+                        None => out.push_back(DriverEvent::ControlRefused { attempt, command: control.command,
+                            operation: control.operation, failure: Failure::Refused }),
+                    }
                 }
             }
             PlayerKind::Buffering if live && active.started_once => {
@@ -604,8 +627,8 @@ impl Machine {
                 Next::Close => close = true,
                 Next::Released => {
                     let attempt = active.attempt;
-                    // Every seek still held is answered before the release: the host sends its SEEK_DONE first, but a
-                    // machine must not depend on it.
+                    // Every seek and track request still held is answered before the release: the host sends its
+                    // SEEK_DONE and PLAYER_TRACK first, but a machine must not depend on it.
                     for control in std::mem::take(&mut active.controls) {
                         self.pending.push_back(DriverEvent::ControlRefused { attempt, command: control.command,
                             operation: control.operation, failure: Failure::Refused });
@@ -635,9 +658,9 @@ impl Machine {
         self.active.is_some()
     }
 
-    /// Only the source's first audio stream: the one the host player starts on (see [`CAPS`]).
+    /// An audio stream the active source's track map names: the ones [`Machine::select_audio`] can ask the host for.
     pub fn maps_track(&self, selection: TrackSelection) -> bool {
         selection.kind == TrackKind::Audio
-            && self.active.as_ref().is_some_and(|a| native_index(&a.tracks, selection) == Some(0))
+            && self.active.as_ref().is_some_and(|a| native_index(&a.tracks, selection).is_some())
     }
 }

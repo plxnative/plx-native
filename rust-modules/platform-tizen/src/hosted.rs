@@ -1215,6 +1215,7 @@ mod tests {
         assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 7_200_000, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_VIDEO_SIZE, 4, 1920, 1080), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_TRACK, 4, 2, 1), host_abi::OK, "a track answer is a player event");
         assert_eq!(post(host_abi::EVENT_PLAYER_STARTED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_CLOSED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_COMPLETED, 4, 0, 0), host_abi::E_STALE, "late: its player is closed");
