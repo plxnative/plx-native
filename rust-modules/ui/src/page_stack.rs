@@ -112,12 +112,12 @@ where
     std::mem::replace(&mut form.table, blank)
 }
 
-/// **A page ready to be shown**: its rows, its title band and the table's size class (the compact one
-/// is the root of a short action menu, the full-height one a list with sub-lines).
+/// **A page ready to be shown**: its rows and its title band. Not its size class: that is the glass's
+/// ([`crate::table::TableView::compact`]), one per surface, so a page pushed into an action menu takes the
+/// menu's and a standalone panel's pages keep the picker's.
 pub struct Built<Id, A, D> {
     pub form: Form<Id, A, D>,
     pub title: Option<String>,
-    pub compact: bool,
 }
 
 /// **OK on a row that opens `page`: the ONE push** of every popover that hosts pages over its rows (the
@@ -140,7 +140,6 @@ pub fn push_page<P: Copy, Id, A, D>(
 {
     stack.push(page, opener, form.table.scroll_pos());
     let leaving = leave_page(form);
-    form.table.compact = built.compact;
     form.open(built.form, initial);
     form.table.set_title(built.title);
     motion.begin_slide(leaving, 1.0);
@@ -163,7 +162,6 @@ where
     let Some(saved) = stack.pop() else { return false };
     let leaving = leave_page(form);
     let built = build(stack.top());
-    form.table.compact = built.compact;
     form.restore(built.form, Some(&saved.return_id), saved.scroll);
     form.table.set_title(built.title);
     motion.begin_slide(leaving, -1.0);

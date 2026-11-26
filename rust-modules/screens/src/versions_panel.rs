@@ -539,6 +539,15 @@ pub(crate) mod tests {
         assert_eq!(row_subject(&p, 0), None, "no page loaded");
     }
 
+    /// **The standalone Select Version panel is a picker: HEADLINE bold rows** (one size class per glass;
+    /// the same list pushed into an action menu takes the menu's compact class).
+    #[test]
+    fn the_panel_is_headline_bold() {
+        let _guard = plx_base::testlock::serial();
+        let p = morphing_panel(None);
+        assert_eq!(p.form.table.label_style(), (plx_ui::theme::size::HEADLINE, true));
+    }
+
     /// The version Play takes now wears the check mark and the list opens on it; with none named
     /// the list opens on its first row and no row is marked.
     #[test]

@@ -914,10 +914,10 @@ impl PageSource<'_> {
         }
     }
 
-    /// `page` ready to show ([`page_stack::Built`]): its rows, its title band and its size class (the
-    /// menu's own short list of actions is the compact one).
+    /// `page` ready to show ([`page_stack::Built`]): its rows and its title band. The size class is the
+    /// menu's, compact, whatever page shows (`TableView::compact`: one per glass).
     fn built(&self, page: Option<MenuPage>) -> page_stack::Built<ItemRow, Action, Infallible> {
-        page_stack::Built { form: self.form(page), title: page.and_then(MenuPage::title), compact: page.is_none() }
+        page_stack::Built { form: self.form(page), title: page.and_then(MenuPage::title) }
     }
 }
 
@@ -3252,6 +3252,38 @@ pub(crate) mod tests {
         assert!(!Screen::<HostFixture>::pointer_held(&menu), "the page has settled");
         press_back(&mut menu);
         assert!(Screen::<HostFixture>::pointer_held(&menu), "the page slides back out");
+    }
+
+    /// **A page pushed into a menu takes the menu's size class** (`TableView::compact`, one per glass):
+    /// Select Version and Audio & Subtitles, in a hero `…` menu and in a tile's menu, lay out BODY regular
+    /// like the rows beneath them, on the way in and again after BACK. Red while a page was built full
+    /// size (HEADLINE bold).
+    #[test]
+    fn pages_pushed_into_a_menu_lay_out_body_regular() {
+        let _guard = plx_base::testlock::serial();
+        let body_regular = (plx_ui::theme::size::BODY, false);
+        let mut hero = hero_menu_with_pages();
+        assert_eq!(hero.form.table.label_style(), body_regular, "the rows");
+        for ctl in [HeroCtl::Version, HeroCtl::AudioSubtitles] {
+            press_row(&mut hero, ItemRow::Hero(ctl));
+            assert_eq!(depth(&hero), 1);
+            assert_eq!(hero.form.table.label_style(), body_regular, "{ctl:?} page of the hero menu");
+            if ctl == HeroCtl::AudioSubtitles {
+                press_row(&mut hero, ItemRow::Pick(PickRow::OpenAudio));
+                assert_eq!(hero.form.table.label_style(), body_regular, "the Audio page, one deeper");
+                press_back(&mut hero);
+            }
+            press_back(&mut hero);
+            assert_eq!(hero.form.table.label_style(), body_regular, "back on the rows");
+        }
+        let m = versioned(3);
+        let mut tile = ItemMenuScreen::new(EntryId(7), card_arg(&m, false));
+        tile.build_rows(test_store().view(), DeckPress::Play);
+        press_row(&mut tile, ItemRow::PlayVersion);
+        assert_eq!(depth(&tile), 1);
+        assert_eq!(tile.form.table.label_style(), body_regular, "Select Version in a tile's menu");
+        press_back(&mut tile);
+        assert_eq!(tile.form.table.label_style(), body_regular, "the tile's rows");
     }
 
     /// **A page with nothing behind it is not pushed**: a hero menu whose page offers no tracks hands

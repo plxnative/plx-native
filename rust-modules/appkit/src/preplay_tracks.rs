@@ -514,7 +514,7 @@ impl PickerState {
     }
 
     fn built_of(core: &PickerCore, page: PickPage) -> page_stack::Built<PickRow, (), PickPage> {
-        page_stack::Built { form: core.page_form(page), title: PickerCore::title_of(page), compact: false }
+        page_stack::Built { form: core.page_form(page), title: PickerCore::title_of(page) }
     }
 
     /// The panel's natural rect: under the opener when there is room, above it when there is not;
@@ -816,6 +816,31 @@ mod tests {
         let Outcome::Picked(sel) = p.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
         assert!(sel.audio_memo.is_some(), "English differs from the held French");
         assert_eq!(sel.pick.audio_sid, 101);
+    }
+
+    /// **The standalone panel keeps the picker's size class** (HEADLINE bold rows, one per glass): its
+    /// root and every page pushed over it, in contrast to the same pages inside an action menu, which take
+    /// the menu's compact class.
+    #[test]
+    fn the_standalone_panel_stays_headline_bold_on_every_page() {
+        let (audio, _) = item();
+        let tracks = plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0),
+            rk: "m1".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/f.mkv".into(),
+            audio,
+            subs: vec![stream(300, "English", "eng")],
+            pick: None,
+        };
+        let headline_bold = (plx_ui::theme::size::HEADLINE, true);
+        let mut p = PickerState::new(tracks, [0u32; 4]);
+        assert_eq!(p.form.table.label_style(), headline_bold, "the root");
+        p.ok(PickRow::OpenSubtitles);
+        assert_eq!(p.form.table.label_style(), headline_bold, "a pushed page");
+        assert_eq!(p.back(), Back::Popped);
+        assert_eq!(p.form.table.label_style(), headline_bold, "back on the root");
     }
 
     /// The panel hangs off its opener by one rule, root and pushed page alike: never over the opener,
