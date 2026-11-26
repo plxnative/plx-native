@@ -1984,6 +1984,40 @@ fn a_cancelled_request_keeps_the_restored_plans_pick_to_spend() {
     assert!(rig.picks().is_empty(), "the restored plan's start spent the pick the cancelled request found held");
 }
 
+/// **A landing for another item or another part replaces the pair**: plan A (`m1`, part 9001) lands and
+/// fails to start, so the viewer's pick for it is still held; plan B (another item, then another file of
+/// the same item) lands and starts. B spends nothing of A's: the spend is keyed by the item and part it
+/// started, and A's pick stays held for A's page. Through the real `apply_plan` and `settle_route_start`.
+#[test]
+fn a_landing_for_another_item_or_part_replaces_the_pair_and_spends_nothing_of_the_first() {
+    let mut rig = PickRig::new();
+    let off = rig.off;
+    // resolved at their presses: the first install marks the page's copy as played
+    let (plan_a, mut other, mut other_part) = (rig.plan(PickRig::URL), rig.plan(PickRig::URL), rig.plan(PickRig::URL));
+    other.part_id = 9002;
+    other.playing.as_mut().expect("the plan carries its item").rk = "m2".into();
+    other_part.part_id = 9002;
+    let a = rig.land(plan_a).expect("plan A is playable");
+    assert!(rig.settle(a, RouteStartResult::StartFailed));
+    assert_eq!(rig.picks(), [off], "setup: A's failed start spent nothing");
+    let spend_of = |rig: &PickRig| rig.ps.pick_spend_on_start.clone().map(|s| (s.rk, s.part_id));
+    assert_eq!(spend_of(&rig), Some(("m1".to_string(), 9001)), "setup: the pair is A's");
+
+    // B, another item: `m2`'s own file, landed under its own rating key
+    let attempt = super::apply_plan(&mut rig.ps, &mut rig.store, other, "m2", CandidatePurpose::NewCandidate)
+        .and_then(claim_route_start_attempt).expect("plan B is playable");
+    assert_eq!(spend_of(&rig), Some(("m2".to_string(), 9002)), "the landing replaced the pair");
+    assert!(rig.settle(attempt, RouteStartResult::Started));
+    assert!(rig.ps.pick_spend_on_start.is_none(), "B's confirmation released its own pair");
+    assert_eq!(rig.picks(), [off], "B spent nothing of A's");
+
+    // B', another file of the same item: the pair is (m1, 9002), not A's (m1, 9001)
+    let attempt = rig.land(other_part).expect("plan B' is playable");
+    assert_eq!(spend_of(&rig), Some(("m1".to_string(), 9002)), "the landing replaced the pair");
+    assert!(rig.settle(attempt, RouteStartResult::Started));
+    assert_eq!(rig.picks(), [off], "another file's start spent nothing of the pick held for 9001");
+}
+
 /// **The failure screen's pick survives a retry whose request is cancelled** (`held_pick` follows the rule
 /// `pick_spend_on_start` does: a REQUEST does not clear it, the LANDING that consumes it does). The plan
 /// lands and its start fails; the viewer picks in the panel and presses Try again; Home runs `cancel_play`
