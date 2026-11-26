@@ -86,9 +86,9 @@ impl Step {
     }
 }
 
-struct Hold {
-    at_ms: i64,
-    play_in_ms: Option<i64>,
+pub struct Hold {
+    pub at_ms: i64,
+    pub play_in_ms: Option<i64>,
 }
 
 fn end_limit(duration_ms: Option<i64>) -> Option<i64> {
@@ -104,7 +104,7 @@ fn rate_change(player: &Player, want: f64) -> Option<f64> {
     (player.can_set_rate && (player.applied_rate - want).abs() > RATE_EPSILON).then(|| (want * 1e6).round() / 1e6)
 }
 
-fn hold(room: &Timeline, offset_ms: i64, relay_now_ms: i64, player_duration_ms: Option<i64>) -> Option<Hold> {
+pub fn hold(room: &Timeline, offset_ms: i64, relay_now_ms: i64, player_duration_ms: Option<i64>) -> Option<Hold> {
     let anchor = room.position_ms + offset_ms;
     let play_in_ms = match room.phase {
         Phase::Idle | Phase::Paused | Phase::Waiting => None,
