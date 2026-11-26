@@ -111,6 +111,8 @@ const AMBER_500: [f32; 4] = rgb8(0xe5, 0xa0, 0x0d);
 const AMBER_950: [f32; 4] = rgb8(0x1a, 0x12, 0x04);
 const RED_400: [f32; 4] = rgb8(0xeb, 0x52, 0x4a);
 const RED_500: [f32; 4] = rgb8(0xf5, 0x34, 0x1a);
+/// The Live badge's red, `#ff453a`: a STATE mark (the channel is live), never a failure read-out.
+const RED_LIVE: [f32; 4] = rgb8(0xff, 0x45, 0x3a);
 const GREEN_400: [f32; 4] = rgb8(0x3e, 0xc9, 0x6b);
 const GREEN_500: [f32; 4] = rgb8(0x2f, 0xae, 0x5b);
 
@@ -863,6 +865,12 @@ pub const fn scrim(a: f32) -> [f32; 4] {
     [SCRIM_INK[0], SCRIM_INK[1], SCRIM_INK[2], a]
 }
 
+/// The live banner's scrim ink at alpha `a`: `rgba(8,8,10)` of the handoff (SPEC-4), the primitive stop
+/// `NEUTRAL_950`, a hair off black so the banner's ground belongs to the app's neutral family.
+pub const fn live_scrim(a: f32) -> [f32; 4] {
+    [NEUTRAL_950[0], NEUTRAL_950[1], NEUTRAL_950[2], a]
+}
+
 /// Pure-black scrim at alpha `a` — HUD/modal dimming.
 pub const fn scrim_black(a: f32) -> [f32; 4] {
     [
@@ -1406,6 +1414,14 @@ pub const PILL_KEYLINE_BG: [f32; 4] = scrim_black(0.55);
 /// Filled metadata chip (the About column's CC/SDH/AD accessibility badges). A COOL tint rather than
 /// plain white at a weight, so a chip reads as a plate rather than as a gap in the panel.
 pub const BADGE_FILL: [f32; 4] = with_a(COOL_150, 0.20);
+/// The player banner's LIVE badge fill, `#ff453a`: a state mark ("this channel is live"), allowed
+/// beside the no-red rule, which is about failure read-outs (owner default, Live TV PR4 / Q4).
+pub const LIVE_BADGE_FILL: [f32; 4] = RED_LIVE;
+/// Ink on [`LIVE_BADGE_FILL`].
+pub const LIVE_BADGE_INK: [f32; 4] = WHITE;
+/// The chip radius of the design system (`--radius-chip`): the filled metadata chip's corner, and the
+/// LIVE badge's.
+pub const RADIUS_CHIP: f32 = 7.0;
 /// No-op texture tint (structural: draw an RGBA texture unmodified).
 pub const TINT_WHITE: [f32; 4] = WHITE;
 /// The brightness the blurred copy a tile draws BEHIND its contained art keeps
