@@ -43,6 +43,10 @@ pub fn peer_ids(room: &Json) -> Vec<String> {
     entries(room).iter().filter_map(|entry| text(entry, "peerId")).collect()
 }
 
+pub fn entry(room: &Json, peer_id: &str) -> Option<Json> {
+    entries(room).iter().find(|entry| text(entry, "peerId").as_deref() == Some(peer_id)).cloned()
+}
+
 pub fn has_peer(room: &Json, peer_id: &str) -> bool {
     entries(room).iter().any(|entry| text(entry, "peerId").as_deref() == Some(peer_id))
 }

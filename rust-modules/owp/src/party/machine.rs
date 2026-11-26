@@ -1386,9 +1386,9 @@ impl Party {
                     let mut events: Vec<PartyEvent> = joined.into_iter().map(|participant| PartyEvent::ParticipantJoined { participant }).collect();
                     events.extend(left.into_iter().map(|participant| PartyEvent::ParticipantLeft { participant }));
                     if let Some((kind, by_peer_id)) = action {
-                        let by = by_peer_id.clone().filter(|peer| view::has_peer(&seat.room, peer));
+                        let by = by_peer_id.as_deref().and_then(|peer| view::entry(&seat.room, peer));
                         let by_me = by_peer_id.as_deref() == Some(seat.session.peer_id.as_str());
-                        events.push(PartyEvent::Action { kind, by_peer_id, by, by_me, rev: view::rev(&seat.room) });
+                        events.push(PartyEvent::Action { kind, by_peer_id, by, by_me, room: seat.room.clone() });
                     }
                     seq.push(Work::Emit { events });
                     seq.push(Work::QueueStatus { force: false });

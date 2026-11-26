@@ -710,13 +710,13 @@ fn match_name(state: MatchState) -> &'static str {
 
 fn event_json(event: PartyEvent) -> Json {
     match event {
-        PartyEvent::Action { kind, by_peer_id, by, by_me, rev } => object(vec![
+        PartyEvent::Action { kind, by_peer_id, by, by_me, room } => object(vec![
             ("type", string("action")),
             ("kind", string(&kind)),
             ("byPeerId", opt_string(by_peer_id.as_deref())),
-            ("by", opt_string(by.as_deref())),
+            ("by", by.as_ref().map_or(Json::Null, |entry| field(entry, "peerId").clone())),
             ("byMe", Json::Bool(by_me)),
-            ("room", Json::Int(rev)),
+            ("room", field(&room, "rev").clone()),
         ]),
         PartyEvent::ParticipantJoined { participant } => object(vec![("type", string("participantJoined")), ("peerId", field(&participant, "peerId").clone())]),
         PartyEvent::ParticipantLeft { participant } => object(vec![("type", string("participantLeft")), ("peerId", field(&participant, "peerId").clone())]),
@@ -968,6 +968,29 @@ fn participant_events_carry_the_entry_and_a_leave_the_last_known_one() {
     assert!(matches!(joined.as_slice(), [PartyEvent::ParticipantJoined { participant }] if text(participant, "name").as_deref() == Some("Ben")), "{joined:?}");
     let left = events(&mut driver, room(3, ""));
     assert!(matches!(left.as_slice(), [PartyEvent::ParticipantLeft { participant }] if text(participant, "name").as_deref() == Some("Ben")), "{left:?}");
+}
+
+#[test]
+fn an_action_carries_the_actor_entry_and_the_accepted_snapshot() {
+    let mut driver = driver_after(0, 2);
+    let conn = driver.conn_for(None).expect("member connection");
+    let room = |rev: i64, by: &str| {
+        format!(
+            r#"{{"type":"room","rev":{rev},"code":"K7MQ2X","epoch":0,"phase":"idle","positionMs":0,"atMs":1000000,"rate":1,"control":"host","locked":false,"waitingOn":[],"participants":[{{"peerId":"ann","name":"Ann","client":"Example/1.0","host":true,"connected":true,"player":"idle","match":null,"offsetMs":0}},{{"peerId":"ben","name":"Ben","client":"Example/1.0","host":false,"connected":true,"player":"idle","match":null,"offsetMs":0}}],"action":{{"kind":"lock","by":"{by}"}}}}"#
+        )
+    };
+    let actions = |driver: &mut Driver, message: String| {
+        let mut effects = Vec::new();
+        driver.party.step(PartyInput::Net { at: driver.at(), conn, event: NetEvent::Text(message) }, &mut effects);
+        effects.into_iter().filter_map(|effect| if let PartyEffect::Event(event @ PartyEvent::Action { .. }) = effect { Some(event) } else { None }).collect::<Vec<_>>()
+    };
+    let by_ben = actions(&mut driver, room(2, "ben"));
+    assert!(
+        matches!(by_ben.as_slice(), [PartyEvent::Action { by: Some(entry), room, by_me: false, .. }] if text(entry, "name").as_deref() == Some("Ben") && field(room, "rev").as_int() == Some(2)),
+        "{by_ben:?}"
+    );
+    let by_gone = actions(&mut driver, room(3, "zed"));
+    assert!(matches!(by_gone.as_slice(), [PartyEvent::Action { by: None, by_peer_id: Some(peer), .. }] if peer == "zed"), "{by_gone:?}");
 }
 
 #[test]
