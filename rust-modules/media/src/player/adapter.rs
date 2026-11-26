@@ -553,10 +553,10 @@ pub struct PlayerAdapter {
     refused_uri_subtitle: Option<PendingUriSubtitle>,
     /// Where a URI driver's captions go: the caption store generation of the subtitle the app draws for it.
     /// Only a build with a driver that hands its cues over has it (`uri-captions`, the Tizen build).
-    #[cfg(any(test, feature = "uri-captions"))]
+    #[cfg(feature = "uri-captions")]
     uri_captions: super::uri_captions::UriCaptionSink,
     /// The captions of one poll, kept to reuse its allocation.
-    #[cfg(any(test, feature = "uri-captions"))]
+    #[cfg(feature = "uri-captions")]
     uri_caption_inbox: Vec<plx_playback_contract::uri::UriCaption>,
     /// The bound physical attempt: its route identity, product trace and foreground follow mark.
     /// The feed itself receives only the canonical contract ID and native epoch. Bound right after
@@ -643,9 +643,9 @@ impl PlayerAdapter {
             uri_finalized: false,
             pending_uri_audio: None,
             pending_uri_subtitle: None,
-            #[cfg(any(test, feature = "uri-captions"))]
+            #[cfg(feature = "uri-captions")]
             uri_captions: Default::default(),
-            #[cfg(any(test, feature = "uri-captions"))]
+            #[cfg(feature = "uri-captions")]
             uri_caption_inbox: Vec::new(),
             refused_uri_audio: None,
             refused_uri_subtitle: None,
@@ -951,17 +951,17 @@ impl PlayerAdapter {
     /// Drain the URI driver's captions and put those of the subtitle the app draws into the caption store
     /// (`player::uri_captions`). A driver whose pipeline draws its own subtitles hands none over, and a build
     /// without `uri-captions` (webOS) composes no driver that does, so there this is nothing.
-    #[cfg(not(any(test, feature = "uri-captions")))]
+    #[cfg(not(feature = "uri-captions"))]
     fn deliver_uri_captions(&mut self, _: &crate::route::PlaybackSession) {}
 
     /// Forget the caption source of the subtitle the app draws for the URI driver (a pick, Off, a new attempt).
-    #[cfg(not(any(test, feature = "uri-captions")))]
+    #[cfg(not(feature = "uri-captions"))]
     fn clear_uri_captions(&mut self) {}
 
-    #[cfg(any(test, feature = "uri-captions"))]
+    #[cfg(feature = "uri-captions")]
     fn clear_uri_captions(&mut self) { self.uri_captions.clear(); }
 
-    #[cfg(any(test, feature = "uri-captions"))]
+    #[cfg(feature = "uri-captions")]
     fn deliver_uri_captions(&mut self, ps: &crate::route::PlaybackSession) {
         let Some(driver) = self.physical.uri_mut().filter(|driver| driver.delivers_captions()) else { return };
         let mut captions = std::mem::take(&mut self.uri_caption_inbox);

@@ -2029,7 +2029,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `subtitle_off` (the native player draws no subtitle of its own: the emulator runs in `docs/tizen.md`, "Subtitles off" and
   "Selected text subtitles", showed it drawing none, whether or not a text track was selected and the cue callback registered), so `SubtitleOff` is refused only on evidence without it. A selected
   embedded TEXT subtitle (every embedded subtitle stream SubRip or ASS) is drawn by the app from the host player's cues
-  (`plx_host_post_cue`, `docs/tizen.md`, "Selected text subtitles"), a picture or unmeasured one still fails `subtitle_track`, a sidecar is `requires_client_subtitle`, and Boost Dialog, Auto on a
+  (`plx_host_post_cue`, `docs/tizen.md`, "Selected text subtitles"), a picture or unmeasured one is declined `SubtitleNotCarried` by `TizenQualifier`, a sidecar is `requires_client_subtitle`, and Boost Dialog, Auto on a
   non-local link and a relay are refused before the qualifier is asked; with no Feed and `qualify_pms` Unknown each ends as
   `NoQualifiedBackend` (the resolver tests pin them); a track pick
   the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title (and a Quality rung, which only a Feed or a converting provider can carry, is neither offered nor applied: `PlaybackSession::quality_pick_carriable`); a stall or failure of the original is not re-resolved on a composition with no Feed and no converting provider (`can_retry_uri_after_release`), so the viewer reads the stall and not a refusal; the parked attempt's `stopped` timeline goes out at the restore's retire and at an exit, at its own position; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`

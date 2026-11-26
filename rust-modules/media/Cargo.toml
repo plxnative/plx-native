@@ -76,7 +76,7 @@ plx_media_codecs = { path = "../media-codecs", features = ["test-support"] }
 plx_playback_contract = { path = "../playback-contract", features = ["test-support"] }
 # THE rule of the layer crates: dev-depend on ITSELF with `devtriggers`, so `cargo test -p plx_media`
 # alone builds the crate and every layer below it as the Makefile's suite does.
-plx_media = { path = ".", default-features = false, features = ["devtriggers"] }
+plx_media = { path = ".", default-features = false, features = ["devtriggers", "uri-captions"] }
 plx_base = { path = "../base", features = ["test-support"] }
 plx_machine = { path = "../machine", features = ["test-support"] }
 plx_os = { path = "../os", features = ["test-support"] }
