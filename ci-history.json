@@ -1,4 +1,4 @@
-{"updated":"2026-11-26T19:55:15Z",
+{"updated":"2026-11-26T20:05:40Z",
 "ci":[
 {"id":33181037225,"at":"2026-08-28T14:36:41Z","sha":"3d06fbe09","title":"lab: add remote command bridge for cloud TVs","jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"pr":null,"conclusion":"success","attempt":1},
 {"id":33192163307,"at":"2026-08-28T16:54:18Z","sha":"d56cf1a71","title":"docs: what a rented webOS 10.3.1 set said, and the bug it found","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6035,7 +6035,8 @@
 {"id":45879456392,"at":"2026-11-26T18:53:24Z","sha":"d43ec2de0","title":"Merge origin/main into feat/media-deletion","pr":1407,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":218,"Windows launcher syntax":23,"Linux simulator build + launch":387},"failed":["macOS simulator build + launch"]},
 {"id":45881489952,"at":"2026-11-26T19:09:23Z","sha":"571e6be4d","title":"Live TV: number entry","pr":1572,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":170,"Linux simulator build + launch":309,"macOS simulator build + launch":341,"Windows launcher syntax":19}},
 {"id":45882251987,"at":"2026-11-26T19:15:17Z","sha":"3a7d2acbc","title":"pms-api: the channel logo row says its request is twice the slot","pr":1573,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":24,"macOS tests against bundled FFmpeg and ASS":251,"Linux simulator build + launch":328,"macOS simulator build + launch":262}},
-{"id":45886372192,"at":"2026-11-26T19:48:30Z","sha":"dbe447a03","title":"Docs: Tizen carries a selected embedded text subtitle; the hosted contract has four exports","pr":1575,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":286,"macOS simulator build + launch":188,"Windows launcher syntax":19,"macOS tests against bundled FFmpeg and ASS":118}}
+{"id":45886372192,"at":"2026-11-26T19:48:30Z","sha":"dbe447a03","title":"Docs: Tizen carries a selected embedded text subtitle; the hosted contract has four exports","pr":1575,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":286,"macOS simulator build + launch":188,"Windows launcher syntax":19,"macOS tests against bundled FFmpeg and ASS":118}},
+{"id":45887801864,"at":"2026-11-26T20:00:20Z","sha":"5816200fc","title":"Comments: a clear picture is Ink::Clear, and a request derives one thing","pr":1573,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":23,"macOS tests against bundled FFmpeg and ASS":291,"Linux simulator build + launch":308,"macOS simulator build + launch":217}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
