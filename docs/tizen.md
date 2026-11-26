@@ -83,7 +83,7 @@ candidates `libass-plx-host.so.0`, `libass-plx.so.0`), which on Tizen is `res/` 
 
 - **Built by the webOS recipe, not a parallel one.** `tizen-libass` runs `ci/build-libass.py` with `PLX_ASS_STAGE=tizen/out/<arch>`, which
   only changes where the stripped library is published (never `pkg/`, which no Tizen goal writes). On armv7 it is the recipe's ARM
-  cross build, bit for bit the webOS one: the Tizen armv7 link already uses the same pinned webOS NDK, sysroot (glibc 2.12 symbols) and
+  cross build, from the same inputs and under the same stamp key as the webOS one: the Tizen armv7 link already uses the same pinned webOS NDK, sysroot (glibc 2.12 symbols) and
   `ci/arm-cc.py`, and the file is `libass-plx.so.0`. On x86_64 it is the recipe's Linux host build, `libass-plx-host.so.0`, compiled by the build host's
   `cc` exactly as `libplx.so` is (and under the same `PLX_MAX_GLIBC` ceiling). The static stack is cached by the recipe's own content key
   under `vendor/libass-prefix(-host)`, shared with the webOS package and the simulators.
@@ -93,8 +93,8 @@ candidates `libass-plx-host.so.0`, `libass-plx.so.0`), which on Tizen is `res/` 
   refuses a package that lacks a face the packaged manifest names.
 - **Checked.** `tizen-verify` holds the renderer to its own rules (below); `verify_tpk` requires exactly one renderer, under one of the two
   names, byte-equal to the verified file, and no other ELF object outside `lib/`.
-- **Size.** The x86_64 emulator package grew from 15,043,205 to 25,621,891 bytes (a `tvdev` build with the dev-boot files; the renderer is 3.2 MB stripped) (`appfont-cjk.ttf` is 13.4 MB of it before
-  compression).
+- **Size.** The x86_64 emulator package grew from 15,043,205 to 25,621,891 bytes (a `tvdev` build with the dev-boot files, measured
+  2026-11-26). The renderer is 3.2 MB stripped and `appfont-cjk.ttf` 13.4 MB, both before compression.
 
 **Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
 in the documentation shipped with the product), and carries the renderer (libass ISC, FreeType, FriBidi LGPL-2.1-or-later, HarfBuzz Old MIT,
