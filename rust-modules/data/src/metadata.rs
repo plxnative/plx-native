@@ -3110,12 +3110,14 @@ fn preplay_source<'a>(
         return None;
     }
     let d = current(state).filter(|d| d.sid == sid && !d.audio.is_empty())?;
-    let (kind, show_rk, default_part) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
-        (d.kind.as_str(), d.show_rk.as_str(), d.part.as_str())
+    let (kind, show_rk) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
+        (d.kind.as_str(), d.show_rk.as_str())
     } else {
-        let ep = d.play_episode_streaming(rk)?;
-        ("episode", d.rk.as_str(), ep.part.as_str())
+        d.play_episode_streaming(rk)?;
+        ("episode", d.rk.as_str())
     };
+    // the file the page's streams describe: the page's own, or the backfilled episode's
+    let default_part = d.streams_part();
     let chosen = version.and_then(|id| d.version_parts.iter().find(|p| p.id == id));
     let (part, audio, subs) = match chosen {
         Some(v) => (v.part.as_str(), v.audio.as_slice(), v.subs.as_slice()),

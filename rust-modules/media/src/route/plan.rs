@@ -4568,14 +4568,17 @@ pub fn played_video<'a>(
 ) -> Option<PlayedVideo<'a>> {
     // A show's primary stream metadata is backfilled on Detail. Its part and codecs live on
     // the episode, so the show container itself retains its identity as a non-playable item.
-    let (primary_part, vcodec, acodec, versions) = if d.part.is_empty() {
-        let ep = d.play_episode().filter(|ep| !ep.part.is_empty())?;
-        if d.stream_episode_key() != Some(ep.rk.as_str()) {
-            return None;
-        }
-        (&ep.part, &ep.vcodec, &ep.acodec, &ep.versions)
+    // The part is the file the page's streams describe (`Detail::streams_part`): empty when the show's
+    // play episode has no file or is not the one whose streams were backfilled.
+    let primary_part = d.streams_part();
+    if primary_part.is_empty() {
+        return None;
+    }
+    let (vcodec, acodec, versions) = if d.has_own_file() {
+        (&d.vcodec, &d.acodec, &d.versions)
     } else {
-        (&d.part, &d.vcodec, &d.acodec, &d.versions)
+        let ep = d.play_episode()?;
+        (&ep.vcodec, &ep.acodec, &ep.versions)
     };
     // A version the viewer chose is the file Play takes in EVERY direct-play mode, ahead of the
     // automatic substitute. The first of the list is the primary part's own facts, so choosing it is
