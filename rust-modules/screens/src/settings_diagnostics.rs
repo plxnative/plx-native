@@ -81,8 +81,12 @@ pub(super) fn diagnostics_form(status: Status, probe: ProbeStatus) -> Form<DiagI
     let form = if probe == ProbeStatus::Unavailable {
         form
     } else {
-        form.section(FormSection::new("").disabled(probe == ProbeStatus::Running).item(DiagId::Probe, RowKind::Button,
-            DiagAction::Probe, Row::new(msg::settings_packet_probe_title()).value(probe_label(probe))))
+        form.section(
+            FormSection::new("")
+                .item(DiagId::Probe, RowKind::Button, DiagAction::Probe,
+                    Row::new(msg::settings_packet_probe_title()).value(probe_label(probe)))
+                .disabled(probe == ProbeStatus::Running),
+        )
     };
     form.section(delete)
 }

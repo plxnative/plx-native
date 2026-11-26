@@ -9,9 +9,12 @@
 //! unchanged. The library itself (esplusplayer 1.11.3 on that image, SONAME `libesplusplayer.so`) exports
 //! `get_size_of_esplusplayer_{es_packet,video_stream_info,audio_stream_info}`, which return 64, 40 and 32 there; the
 //! probe compares them with this file's layouts before it submits anything ([`layout_matches`]), so an armv7 set or a
-//! firmware whose structs grew is a logged refusal, never a misread buffer. Only calls the binding itself makes are
-//! declared: `esplusplayer_flush` and the first-frame callback exist but their signatures are not stated by any
-//! primary source here, so they are not used.
+//! firmware whose packet or stream-info structs grew is a logged refusal, never a misread buffer. The library offers no
+//! such size for [`MatroskaColor`] (136 bytes here), which the HDR10 packet points at: its layout is the binding's
+//! `ESMatroskaColor` and is not checked against the set. Every call but one is one the binding makes: the first-frame
+//! setter, which the binding does not use, sits in a table of its own (`esplus_first_frame`, whose doc says where
+//! its signature comes from); `esplusplayer_flush` exists but no primary source here states its signature, so it is
+//! not used.
 //!
 //! **The privilege.** The managed binding checks `http://developer.samsung.com/privilege/esplay` (its
 //! `PrivilegeChecker`), which Samsung's TV API reference lists at the Partner level. The native library contains no

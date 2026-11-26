@@ -117,6 +117,15 @@ pub fn start(hosted: &'static Hosted, payload_dir: &Path, on_done: impl FnOnce(u
     }
     let dir = payload_dir.join("esprobe");
     let started = plx_base::task::spawn("esprobe", move || {
+        // Cleared however the worker ends: a panic in the run must not leave the row reading Running and every later
+        // start refused for the rest of the session.
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                RUNNING.store(false, Ordering::Release);
+            }
+        }
+        let _clear = Clear;
         log(&format!("esprobe: start ({} build; clips from {})", std::env::consts::ARCH, dir.display()));
         let clips = load_clips(&dir);
         let preface: Vec<(bool, String, String)> = clips
@@ -126,7 +135,6 @@ pub fn start(hosted: &'static Hosted, payload_dir: &Path, on_done: impl FnOnce(u
         let (pass, fail) = run::run(hosted, scenarios(&clips), preface);
         log(&format!("esprobe: done pass={pass} fail={fail}"));
         on_done(pass, fail);
-        RUNNING.store(false, Ordering::Release);
     })
     .is_some();
     if !started {

@@ -325,11 +325,14 @@ fn the_packet_probe_row_appears_only_where_the_runner_offers_it_and_starts_the_p
 
     assert_eq!(step(&mut page, &[ScreenEvent::Activate(4)]), [Probe::Start]);
 
+    assert!(!page.form.table.sections[1].rows[0].disabled);
     step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Running))]);
+    assert!(page.form.table.sections[1].rows[0].disabled, "the row is dimmed while the probe runs");
     assert_eq!(step(&mut page, &[ScreenEvent::Activate(4)]), [], "no second start while running");
     assert_eq!(step(&mut page, &[ScreenEvent::Tick(Tick::default())]), [Probe::Status], "the tick polls while it runs");
 
     step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Done { pass: 57, fail: 6 }))]);
     assert_eq!(page.form.table.sections[1].rows[0].value.as_deref(), Some("57 passed, 6 failed"));
+    assert!(!page.form.table.sections[1].rows[0].disabled, "and live again when it is done");
     assert_eq!(step(&mut page, &[ScreenEvent::Tick(Tick::default())]), [], "and stops polling when it is done");
 }

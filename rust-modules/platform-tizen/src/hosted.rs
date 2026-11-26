@@ -274,7 +274,8 @@ impl Hosted {
     }
 
     /// Whether a host player is open: an epoch was opened and its `PLAYER_CLOSED` has not been accepted. The
-    /// packet-player probe refuses to start while one is, so it never contends with a viewer's video for the decoder.
+    /// packet-player probe refuses to START while one is; nothing stops a viewer opening a title during a run, when the
+    /// two contend for the decoder (the probe then logs the refusal it meets, and the viewer's start may fail).
     pub fn player_live(&self) -> bool {
         self.player.any_live()
     }

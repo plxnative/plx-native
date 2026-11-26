@@ -388,16 +388,24 @@ fn a_permission_denied_open_is_the_privileges_fail() {
     assert!(lines.iter().any(|l| l.starts_with("esprobe: FAIL privilege")));
 }
 
-/// **An error callback ends the scenario as a FAIL that names the code**, and the player is torn down.
+/// **An error callback ends the scenario as a FAIL that names the code**, and the player is torn down. What the same
+/// cause raises after it (the emulator's AV1 refusal: the error, then `prepare_async_done(false)`) is a note, not a
+/// second FAIL, so the tally counts the scenario once.
 #[test]
 fn an_error_callback_fails_the_scenario_with_its_code() {
     let mut probe = Probe::new(vec![clock()]);
     assert_eq!(probe.next(0), Some(Cmd::Open));
     probe.done(Cmd::Open, Outcome::Open(Ok(())), 1, 1);
+    let fail_before = probe.fail;
     probe.callback(Callback::Error(-26476497), 2);
     assert_eq!(probe.next(3), Some(Cmd::Teardown));
+    probe.callback(Callback::PrepareDone(false), 4);
+    probe.callback(Callback::ResourceConflicted, 5);
     let lines = probe.take_lines();
     assert!(lines.iter().any(|l| l.contains("FAIL h264-clock error error callback -26476497 (not_supported_video_codec)")), "{lines:#?}");
+    assert_eq!(probe.fail, fail_before + 1, "one cause, one FAIL: {lines:#?}");
+    assert_eq!(lines.iter().filter(|l| l.starts_with("esprobe: FAIL")).count(), 1, "{lines:#?}");
+    assert!(lines.iter().any(|l| l == "esprobe: h264-clock after the failure: prepare prepare_async_done(false)"), "{lines:#?}");
 }
 
 /// **Where the library offers the first-decoded-picture callback, a video scenario notes whether it came**, with its

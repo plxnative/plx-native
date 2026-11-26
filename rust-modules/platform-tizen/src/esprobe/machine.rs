@@ -312,9 +312,15 @@ impl Probe {
         self.record(true, &format!("{name} {step}"), &detail);
     }
 
-    /// A failed step: the line, then the teardown (or the end of the scenario when nothing was opened).
+    /// A failed step: the line, then the teardown (or the end of the scenario when nothing was opened). Only a run's
+    /// first failure counts: what follows it (an AV1 refusal raises the error callback, then `prepare_async_done(false)`)
+    /// is the same cause seen again, so it is a note, and the tally counts failed scenarios' causes, not their echoes.
     fn fail_step(&mut self, step: &str, detail: String) {
         let name = self.scenario_name();
+        if self.run.as_ref().is_some_and(|r| r.failed) {
+            self.lines.push(format!("esprobe: {name} after the failure: {step} {detail}"));
+            return;
+        }
         self.record(false, &format!("{name} {step}"), &detail);
         if let Some(run) = self.run.as_mut() {
             run.failed = true;
