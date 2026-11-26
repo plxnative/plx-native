@@ -4,6 +4,7 @@
 //   cb=1            register player_set_subtitle_updated_cb before prepare
 //   path=<p>        call player_set_subtitle_path(p) before prepare (a local path or an http URL)
 //   select=<n>      at PREPARED, player_select_track(TEXT, n); -1 (the default) selects nothing
+//   switch=<n>      at the 6th callback, player_select_track(TEXT, n) mid-play
 //   local=<url>     download <url> into the app's data directory and use that file as the path
 //   offset=<ms>     at the first cue, player_set_subtitle_position_offset(ms)
 //
@@ -47,6 +48,8 @@ namespace PlxHost
         private static int offset;
         private static bool offsetSent;
         private static int select = -1;
+        private static int switchTo = -1;
+        private static bool switchSent;
 
         // The config comes over HTTP from the emulator host's loopback (sdb refuses a push into the app's data directory); no answer = off.
         internal const string ConfigUrl = "http://10.0.2.2:8765/subprobe.txt";
@@ -104,6 +107,8 @@ namespace PlxHost
             string v;
             select = cfg.TryGetValue("select", out v) && int.TryParse(v, out int n) ? n : -1;
             offset = cfg.TryGetValue("offset", out v) && int.TryParse(v, out int o) ? o : 0;
+            switchTo = cfg.TryGetValue("switch", out v) && int.TryParse(v, out int w) ? w : -1;
+            switchSent = false;
             Clock.Restart();
             if (cfg.TryGetValue("path", out v) && v.Length > 0)
             {
@@ -157,6 +162,23 @@ namespace PlxHost
                 cues++;
                 PlxApp.Log("subprobe: cue #" + cues + " +" + Clock.ElapsedMilliseconds + " ms pos=" + pos + " dur=" + duration.ToUInt64()
                     + " thread=" + Environment.CurrentManagedThreadId + " text=[" + (s ?? "").Replace("\n", "\\n") + "]");
+                // switch=<n>: at the 6th callback, select TEXT track n mid-play from a pool thread (not the player's own callback thread).
+                if (switchTo >= 0 && !switchSent && cues >= 6 && h != IntPtr.Zero)
+                {
+                    switchSent = true;
+                    int to = switchTo;
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        long t0 = Clock.ElapsedMilliseconds;
+                        int rcs = MediaPlayerNative.player_select_track(h, STREAM_TYPE_TEXT, to);
+                        int after;
+                        int rca = MediaPlayerNative.player_get_current_track(h, STREAM_TYPE_TEXT, out after);
+                        int p2;
+                        MediaPlayerNative.player_get_play_position(h, out p2);
+                        PlxApp.Log("subprobe: mid-play player_select_track(TEXT, " + to + ") returned " + rcs + " in " + (Clock.ElapsedMilliseconds - t0)
+                            + " ms; current now rc=" + rca + " idx=" + after + " pos=" + p2);
+                    });
+                }
                 if (offset != 0 && !offsetSent && h != IntPtr.Zero)
                 {
                     offsetSent = true;
