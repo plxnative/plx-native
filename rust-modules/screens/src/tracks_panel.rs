@@ -1379,7 +1379,7 @@ pub(crate) mod tests {
     fn the_track_marked_playing_follows_the_viewers_pick() {
         use plx_data::metadata::{PreplayPick, SubPick};
         let audio = |id: i64, selected: bool| Stream { id, codec: "ac3".into(), channels: 6, selected, ..Default::default() };
-        let d = Detail { audio: vec![audio(1, true), audio(2, false)], ..Default::default() };
+        let d = Detail { part: "/library/parts/1/1/f.mkv".into(), audio: vec![audio(1, true), audio(2, false)], ..Default::default() };
         let playing = |picks: &[PreplayPick]| -> Vec<bool> {
             content_of(&d, picks).audio.1.iter().map(|r| r.detail.ends_with("playing")).collect()
         };

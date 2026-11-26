@@ -3006,7 +3006,7 @@ mod failed_pick_tests {
             sid: plx_plex::plex::ServerId::from_raw(0), rk: "1".into(), kind: "movie".into(), show_rk: String::new(),
             part: String::new(), audio: audio.clone(), subs: subs.clone(), pick: None,
         };
-        let mut resources = crate::app::bridge_test_support::TestCommandResources::new();
+        let mut resources = crate::app::bridge::test_support::TestCommandResources::new();
         assert_eq!(plx_media::route::failed_pick(resources.session()), None, "nothing held before the commit");
         let outcome = super::execute_resource_command(
             &mut d, &mut rig, &mut resources.borrow(), MachineId::Instance(instance),
