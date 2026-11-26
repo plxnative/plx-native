@@ -76,6 +76,81 @@ macro_rules! glsl {
 }
 pub(crate) use glsl;
 
+/// `src` with every line that is only a `//` comment left out, behind `prefix`, as the bytes of a
+/// NUL-terminated GLSL source. The driver ignores those lines, so the program is the same; the binary
+/// does not carry them. `fs_img.frag` is embedded once per program variant (plain, dissolve, still,
+/// focus, inset) and ~13 KB of it is the prose that explains it, so the comments are cut at compile
+/// time rather than carried five times (the armv7 binary budget, `ci/build-budgets.json`, is
+/// measured on the stripped binary). Trailing `//` comments stay: they are part of a statement's line.
+const fn lean_glsl<const N: usize>(prefix: &str, src: &str) -> [u8; N] {
+    let (prefix, src) = (prefix.as_bytes(), src.as_bytes());
+    let mut out = [0u8; N];
+    let mut n = 0;
+    let mut i = 0;
+    while i < prefix.len() {
+        out[n] = prefix[i];
+        n += 1;
+        i += 1;
+    }
+    let mut line = 0;
+    while line < src.len() {
+        let mut end = line;
+        while end < src.len() && src[end] != b'\n' {
+            end += 1;
+        }
+        let keep_to = if end < src.len() { end + 1 } else { end };
+        let mut first = line;
+        while first < end && (src[first] == b' ' || src[first] == b'\t') {
+            first += 1;
+        }
+        let comment_only = first + 1 < end && src[first] == b'/' && src[first + 1] == b'/';
+        if !comment_only {
+            let mut k = line;
+            while k < keep_to {
+                out[n] = src[k];
+                n += 1;
+                k += 1;
+            }
+        }
+        line = keep_to;
+    }
+    out
+}
+
+/// How many bytes [`lean_glsl`] writes (its output length, without the terminating NUL).
+const fn lean_glsl_len(prefix: &str, src: &str) -> usize {
+    let (prefix, src) = (prefix.as_bytes(), src.as_bytes());
+    let mut n = prefix.len();
+    let mut line = 0;
+    while line < src.len() {
+        let mut end = line;
+        while end < src.len() && src[end] != b'\n' {
+            end += 1;
+        }
+        let keep_to = if end < src.len() { end + 1 } else { end };
+        let mut first = line;
+        while first < end && (src[first] == b' ' || src[first] == b'\t') {
+            first += 1;
+        }
+        let comment_only = first + 1 < end && src[first] == b'/' && src[first + 1] == b'/';
+        if !comment_only {
+            n += keep_to - line;
+        }
+        line = keep_to;
+    }
+    n
+}
+
+/// [`glsl`] through [`lean_glsl`]: the same source without its full-line comments.
+macro_rules! glsl_lean {
+    ($file:literal, $prefix:literal) => {{
+        const LEN: usize = lean_glsl_len($prefix, include_str!($file)) + 1;
+        const BYTES: [u8; LEN] = lean_glsl::<LEN>($prefix, include_str!($file));
+        // SAFETY: GLSL sources contain no interior NUL, and `BYTES` ends in the one `lean_glsl` leaves (zero).
+        unsafe { ::std::ffi::CStr::from_bytes_with_nul_unchecked(&BYTES) }
+    }};
+}
+
 /// [`glsl`] with the SHARED OUTPUT DITHER prepended — `shaders/dither.glsl`, whose header is the
 /// argument for all of it.
 ///
@@ -197,13 +272,13 @@ const VS_SCRIM_LAYER: &CStr =
     glsl!("shaders/vs_ambient.vert", "#define PLX_SCRIM\n#define PLX_SCRIM_LAYER\n");
 const VS_IMG_DITHERED: &CStr = glsl_vs_dithered!("shaders/vs_img.vert");
 const VS_SRC_DITHERED: &CStr = glsl_vs_dithered!("shaders/vs_src.vert");
-const FS_IMG: &CStr = glsl!("shaders/fs_img.frag");
+const FS_IMG: &CStr = glsl_lean!("shaders/fs_img.frag", "");
 const FS_DISSOLVE_PLAIN: &CStr = glsl!("shaders/fs_tex.frag", "#define PLX_DISSOLVE\n");
-const FS_DISSOLVE: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_DISSOLVE\n");
+const FS_DISSOLVE: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_DISSOLVE\n");
 const FS_FIELD: &CStr = glsl_dithered!("shaders/fs_field.frag");
 const FS_FIELD_PANEL: &CStr = glsl_dithered!("shaders/fs_field_panel.frag");
 const VS_STILL: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_STILL_GROUND\n");
-const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n");
+const FS_STILL: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n");
 /// The FOCUSED-tile specialization: the lit-glass edge + risen shadow, in their own program rather
 /// than a branch every plain IPROG draw paid for (when this was measured, that was every resting
 /// card, glyph, blur reduction, `field_kick` and `FrameCache` quad; the square-cornered ones among
@@ -214,11 +289,11 @@ const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n
 /// focused or risen (`focus > 0.0 || dy > 0.0` — at most one card on screen), falling back to
 /// [`IPROG`] with the plain look if it fails to link, same as [`STILL_IMAGE`]'s own fallback.
 const VS_FOCUS: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_FOCUS\n");
-const FS_FOCUS: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
+const FS_FOCUS: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
 /// [`FS_FOCUS`] with a second picture laid whole inside the card ([`draw_tex_carded_inset`]): the
 /// FOCUSED tile of a row whose art is contained over its own backdrop (a blurred copy or a flat
 /// ground), lit as one card.
-const FS_INSET: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n#define PLX_INSET\n");
+const FS_INSET: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_FOCUS\n#define PLX_INSET\n");
 /// The wash with its photograph dissolved into it (`draw_art_wash`): dithered, because the wash it
 /// carries always dithers, over `vs_ambient.vert`'s field mesh so its colour is the wash's own
 /// per-vertex field.
@@ -10703,6 +10778,31 @@ mod tests {
         for gone in ["wide", "wide2", " vp ", "dShadowBox", "glareTop", "qs", "straightS"] {
             assert!(!fs.contains(gone), "plain fs_img.frag must not carry focus identifier `{gone}`");
         }
+    }
+
+    /// **`fs_img.frag` is embedded without its full-line comments, and with nothing else lost.** The
+    /// five programs built from it carry the file minus the lines that are only a `//` comment (the
+    /// armv7 binary budget counts every copy), which the driver would have ignored; a trailing
+    /// comment, a blank line, indentation and every directive are as in the file, and each source
+    /// is one NUL-terminated string behind its own `#define`s.
+    #[test]
+    fn the_image_shader_variants_drop_only_their_comment_only_lines() {
+        let file = include_str!("shaders/fs_img.frag");
+        let lean = |prefix: &str| {
+            let body: String = file.split_inclusive('\n').filter(|l| !l.trim_start().starts_with("//")).collect();
+            format!("{prefix}{body}")
+        };
+        for (variant, prefix) in [
+            (FS_IMG, ""),
+            (FS_DISSOLVE, "#define PLX_DISSOLVE\n"),
+            (FS_STILL, "#define PLX_STILL_GROUND\n"),
+            (FS_FOCUS, "#define PLX_FOCUS\n"),
+            (FS_INSET, "#define PLX_FOCUS\n#define PLX_INSET\n"),
+        ] {
+            assert_eq!(variant.to_str().unwrap(), lean(prefix), "{prefix:?}");
+        }
+        assert!(FS_IMG.to_bytes().len() + 10_000 < file.len(), "the ~13 KB of prose is not carried");
+        assert!(FS_IMG.to_str().unwrap().contains("uniform sampler2D u_tex;"), "the code is");
     }
 
     /// **The inset program is the focus program plus ONE picture mix, and nothing leaks out of it.**
