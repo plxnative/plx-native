@@ -107,3 +107,51 @@ fn the_hero_text_reads_over_bright_artwork() {
         assert!(c >= floor, "the preview synopsis over art {art}: {c:.2}:1, under its {floor}:1 floor");
     }
 }
+
+/// Where, walking right along row `y`, the shade first falls below `level`, in 1 px steps.
+fn contour_x(shade: &WashScrim, y: f32, level: f32) -> f32 {
+    (0..=1920).map(|x| x as f32).find(|&x| shade.alpha(x, y) < level).unwrap_or(1920.0)
+}
+
+/// Where, walking down column `x` from the top, the shade first reaches `level`.
+fn contour_y(shade: &WashScrim, x: f32, level: f32) -> f32 {
+    (0..=1080).map(|y| y as f32).find(|&y| shade.alpha(x, y) >= level).unwrap_or(1080.0)
+}
+
+/// **The hero's side shade is a curve, not a box** (discussion #1460: the first retail tester saw
+/// Detail's shade as a dark rectangle with a top edge and a right edge, "almost like there's an
+/// issue with the TV's backlight"). A side shade that is a product of a horizontal and a vertical
+/// ramp has iso-lines that run straight along both axes: its right edge is one vertical line all
+/// the way down the copy, and its top edge one horizontal line across the left column, which the
+/// eye reads as the two edges of a plate. Held here as a property of the edges:
+///
+/// - **the right edge leans out as it goes down.** On each row the edge is where the shade falls
+///   halfway from its value at the left (the side shade) to its value at the right (the row's
+///   background ramp, which on Detail already darkens the copy's lower rows). Walking down the
+///   copy's rows, that place must move RIGHT. A separable field leaves it where it is, or (on
+///   Detail, as the background ramp rises) moves it left, which is the box's vertical side;
+/// - **the top edge drops as it goes right.** Where the shade reaches half its peak must move
+///   DOWN between the left edge and the copy's right part, not stay one horizontal line.
+#[test]
+fn the_side_shade_falls_off_in_a_curve_not_a_box_corner() {
+    use crate::landing_hero::{detail_shade, home_shade, shelf_fade, SHELF_TOP};
+    let cases = [
+        ("detail", detail_shade(1.0, 1.0, 1.0, 0.0), theme::shade::DETAIL_SIDE_A, (420.0, 540.0)),
+        ("home", home_shade(shelf_fade(SHELF_TOP, 1.0), 1.0), theme::shade::HOME_SIDE_A, (430.0, 640.0)),
+    ];
+    for (name, shade, peak, (upper, lower)) in cases {
+        let edge = |y: f32| {
+            let (side, ground) = (shade.alpha(0.0, y), shade.alpha(1919.0, y));
+            assert!(side - ground > peak * 0.25, "{name}: row y={y} is not on the side shade ({side} over {ground})");
+            contour_x(&shade, y, (side + ground) * 0.5)
+        };
+        let (right_high, right_low) = (edge(upper), edge(lower));
+        let half = peak * 0.5;
+        let (top_left, top_inner) = (contour_y(&shade, 100.0, half), contour_y(&shade, 500.0, half));
+        eprintln!("{name}: right edge x={right_high} (y={upper}) x={right_low} (y={lower}); top edge y={top_left} (x=100) y={top_inner} (x=500)");
+        assert!(right_low - right_high >= 60.0,
+            "{name}: the shade's right edge is a straight vertical line (x={right_high} on y={upper}, x={right_low} on y={lower})");
+        assert!(top_inner - top_left >= 30.0,
+            "{name}: the shade's top edge is a straight horizontal line (y={top_left} on x=100, y={top_inner} on x=500)");
+    }
+}
