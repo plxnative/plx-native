@@ -2235,7 +2235,9 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     // A subtitle the certificate carries is drawn by the APP from the URI driver's
                     // cues (`UriDriver::delivers_captions`; the adapter refuses such an offer on a
                     // driver that delivers none): the landing tells the renderer its ordinal, as an
-                    // embedded track's on a Feed play. A pipeline that draws its own certifies none.
+                    // embedded track's on a Feed play. A pipeline that draws its own certifies none, and
+                    // only a build with such a driver (`uri-captions`, Tizen) has one to certify it.
+                    #[cfg(feature = "uri-captions")]
                     if known.certified_subtitle_source.is_some() {
                         plan.sub_render_ordinal = plan.playing.as_ref().and_then(|item| {
                             let i = item.subs.iter().position(|sub|
