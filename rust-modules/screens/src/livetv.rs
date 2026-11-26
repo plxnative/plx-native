@@ -1,6 +1,7 @@
 //! The What's on page (Live TV's landing page, the handoff's `SPEC-1` / `SPEC-2`): the profile's Recent
-//! channels on top, the programmes airing now below, two adjacent shared card shelves over the store's one
-//! lineup. A Recent tile and a programme poster both ask the content owner to play their channel.
+//! channels on top, the programmes airing now below, and the channels with neither under them: three adjacent
+//! shared card shelves over the store's one lineup. A Recent tile, a programme poster and a Channels tile all ask
+//! the content owner to play their channel.
 //!
 //! **On now has one fixed order**: the most recent start first, a tie in lineup order. **Recent never
 //! reorders** (the store keeps it, newest first) and is hidden while it is empty. **Every channel stays
@@ -442,8 +443,8 @@ impl LiveTvScreen {
         }
     }
 
-    /// Both shelves name the channel that supplies their card (Recent's tile on the even elements, On now's
-    /// poster on the odd ones).
+    /// Every shelf names the channel that supplies its card (Recent's tiles and the Channels shelf's on the even
+    /// elements, On now's poster on the odd ones).
     fn press<H: LiveTvLike>(&self, elem: u32, cx: &Cx<'_, H>) -> Option<ContentReq> {
         let index = elem.checked_sub(FIRST_CARD_ELEM)? as usize / 2;
         let view = H::livetv(cx);

@@ -2169,7 +2169,7 @@
   },
   "browse.livetv.channels": {
     "value": "Channels",
-    "description": "Live TV section heading for the complete channel lineup"
+    "description": "Live TV section heading for the channels that have no programme on now and are not in the profile's recent channels"
   },
   "browse.livetv.on_now": {
     "value": "On now",
