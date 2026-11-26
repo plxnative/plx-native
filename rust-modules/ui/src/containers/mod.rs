@@ -242,21 +242,24 @@ impl<H: Host> Navigation<H> {
 
     /// A parked `NavOp` at NAV COMMIT: page-stack ops are requested on the shared stack (and
     /// apply at the transition's commit point); `Present`/`Dismiss`/`Cancel` are immediate.
-    /// Returns the immediate lifecycle steps (a surface's), if any.
+    /// Returns the immediate lifecycle steps (a surface's), if any. `captured` is the entry that held
+    /// input when the op was raised ([`Self::captured_on`]).
     ///
     /// [`moves_page`](Self::moves_page) makes the split, so the guard the dispatcher asks and the
     /// routing performed here cannot drift.
-    pub fn request(&mut self, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) -> Vec<Life<H>> {
+    pub fn request(&mut self, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>, captured: Option<EntryId>) -> Vec<Life<H>> {
         if self.moves_page(&op) {
             // `ret` lands on the page only when it was captured there: a live surface keeps its
             // own, and one captured on a surface that has closed since is dropped.
             let ret = match self.modals.input_owner() {
                 Some(InputOwner::Entry(owner)) => {
-                    if let Some(e) = self.modals.entry_mut(owner) { e.ret = ret; }
+                    if Self::captured_on(captured, owner) {
+                        if let Some(e) = self.modals.entry_mut(owner) { e.ret = ret; }
+                    }
                     None
                 }
-                _ if ret.focus.is_some_and(|f| self.top_page().map(|e| e.id) != Some(f.entry)) => None,
-                _ => Some(ret),
+                _ if Self::captured_on(captured, self.top_page().map(|e| e.id)) => Some(ret),
+                _ => None,
             }.unwrap_or_else(|| self.top_page().map(|e| e.ret.clone()).unwrap_or_default());
             self.tabs.stack.request(op, ret);
             return Vec::new();
@@ -270,7 +273,7 @@ impl<H: Host> Navigation<H> {
                 // `ret` names the menu's row: stored on the page, the page would be restored onto a
                 // dead entry when the panel closes (a pick or BACK) and hold no focus at all.
                 if let Some(InputOwner::Entry(owner)) = self.input_owner() {
-                    if ret.focus.map_or(true, |f| f.entry == owner) {
+                    if Self::captured_on(captured, owner) {
                         if let Some(e) = self.entry_mut(owner) { e.ret = ret; }
                     }
                 }
@@ -324,14 +327,23 @@ impl<H: Host> Navigation<H> {
         }
     }
 
-    /// BACK from the input owner (§3.4 `NavOpKind::Back`), resolved over ITS stack.
-    pub fn back(&mut self, ret: ReturnState<H::Elem, H::Memory>) -> (BackAnswer, Vec<Life<H>>) {
+    /// **"A `ret` lands where it was captured", stated once.** `captured` is the entry that held input
+    /// when the op was raised (the dispatcher's `owner_entry()` at that moment, carried with the parked
+    /// op), not something read off the `ret`: a `ret` with no focus still knows where it was captured.
+    /// `None` on either side lands nowhere.
+    fn captured_on(captured: Option<EntryId>, target: impl Into<Option<EntryId>>) -> bool {
+        captured.is_some() && captured == target.into()
+    }
+
+    /// BACK from the input owner (§3.4 `NavOpKind::Back`), resolved over ITS stack. `captured` is the
+    /// entry that held input when BACK was pressed (see [`Self::captured_on`]).
+    pub fn back(&mut self, ret: ReturnState<H::Elem, H::Memory>, captured: Option<EntryId>) -> (BackAnswer, Vec<Life<H>>) {
         if let Some(id) = self.pending_surface() {
-            return (BackAnswer::Dismissed, self.request(NavOp::Dismiss(id), ret));
+            return (BackAnswer::Dismissed, self.request(NavOp::Dismiss(id), ret, captured));
         }
         match self.input_owner() {
             Some(InputOwner::Entry(id)) if self.is_surface(id) => {
-                let out = self.request(NavOp::Dismiss(id), ret);
+                let out = self.request(NavOp::Dismiss(id), ret, captured);
                 (BackAnswer::Dismissed, out)
             }
             _ => {

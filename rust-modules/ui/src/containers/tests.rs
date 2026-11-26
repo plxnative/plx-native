@@ -2233,7 +2233,7 @@ fn a_dismissed_surface_hears_closing_before_its_host_is_entered_and_leaves_only_
     let (mut d, mut rig, _) = booted();
     let home = d.nav.top_page().unwrap().id;
     let surface = open_modal(&mut d, &mut rig, Style::Opaque { snapshot: true }, 16);
-    let life = d.nav.request(NavOp::Dismiss(surface), ReturnState::default());
+    let life = d.nav.request(NavOp::Dismiss(surface), ReturnState::default(), None);
     let order: Vec<(EntryId, &str)> = life.iter().map(|step| match step {
         Life::Ev(id, ev) => (*id, match ev {
             ScreenEvent::Enter(Enter::Restored) => "enter_restored",
@@ -2242,7 +2242,7 @@ fn a_dismissed_surface_hears_closing_before_its_host_is_entered_and_leaves_only_
         _ => (EntryId(u32::MAX), "structural"),
     }).collect();
     assert_eq!(order, [(surface, "closing"), (home, "uncover"), (home, "enter_restored")]);
-    assert_eq!(d.nav.request(NavOp::Dismiss(surface), ReturnState::default()).len(), 0,
+    assert_eq!(d.nav.request(NavOp::Dismiss(surface), ReturnState::default(), None).len(), 0,
         "a surface already closing is not told twice");
     assert_eq!(d.nav.modals.surface(surface).map(|s| s.phase), Some(Phase::Closing),
         "the body stays mounted for its fade");
@@ -3274,4 +3274,32 @@ fn a_panel_a_pages_control_opens_returns_to_that_control() {
         d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
     }
     assert_eq!(d.focus(), Some(opener), "the control that opened the panel holds focus again");
+}
+
+/// **A `ret` lands where it was captured, whatever it carries** (`Navigation::captured_on`, the one rule both
+/// the page-op arm and the `Present` arm follow). The capturing owner travels with the parked op; the
+/// `ret`'s own focus is not a stand-in for it, so a `ret` with NO focus, captured on the page, cannot
+/// overwrite the return state of the surface that holds input when the op commits, while a `ret` captured
+/// on that surface still lands on it.
+#[test]
+fn a_ret_without_focus_lands_only_where_it_was_captured() {
+    use crate::screen::ReturnState;
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let surface = open_modal(&mut d, &mut rig, Style::Opaque { snapshot: true }, 16);
+    let spot = FocusKey { entry: surface, elem: 3 };
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+    assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(surface)), "setup: the surface holds input at commit");
+
+    // captured on the page, no focus: the page-op arm may not land it on the surface
+    let _ = d.nav.request(NavOp::Push(FixtureArg::Page(20)), ReturnState::default(), Some(home));
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "page-op arm: not captured on the surface");
+    // captured on the surface, no focus: it lands there (the state the surface was left in)
+    let _ = d.nav.request(NavOp::Push(FixtureArg::Page(21)), ReturnState::default(), Some(surface));
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, None, "page-op arm: captured on the surface, it lands there");
+
+    // the `Present` arm follows the same rule
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+    let _ = d.nav.request(NavOp::Present(FixtureArg::Modal), ReturnState::default(), Some(home));
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "Present arm: not captured on the surface");
 }

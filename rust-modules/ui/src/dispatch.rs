@@ -868,7 +868,7 @@ struct Presentation<H: Host> {
 /// The dispatcher: one FIFO, parked structural ops, timers, presentation, budget and tree.
 pub struct Dispatcher<H: Host> {
     queue: VecDeque<Stamped<H>>,
-    parked: Vec<(Stamped<H>, ReturnState<H::Elem, H::Memory>)>,
+    parked: Vec<(Stamped<H>, ReturnState<H::Elem, H::Memory>, Option<EntryId>)>,
     pub app_returns: VecDeque<(MachineId, ReturnState<H::Elem, H::Memory>)>,
     // One blocked FIFO head, never a second command queue.
     pending_app: Option<PendingAppCommand<H>>,
@@ -1140,15 +1140,20 @@ where
     }
 
     pub fn request_with_return(&mut self, from: MachineId, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) {
+        // A `ret` handed in from outside was captured by an earlier `return_state()`; its focus names that
+        // owner, and only when it has none is the owner now the best answer left.
+        let captured = ret.focus.map(|f| f.entry).or_else(|| self.owner_entry());
         self.parked.push((Stamped {
             from,
             fx: Fx::Nav(op),
-        }, ret));
+        }, ret, captured));
     }
 
     fn park(&mut self, item: Stamped<H>) {
         let ret = self.return_state();
-        self.parked.push((item, ret));
+        // The capturing owner travels with the op: where the `ret` lands is decided at commit, by it.
+        let captured = self.owner_entry();
+        self.parked.push((item, ret, captured));
     }
 
     /// `Lifecycle(0x103/0x104)`: `Suspend` down the tree at the next commit.
@@ -1194,7 +1199,7 @@ where
     /// mounted — and would make that frame look like no page at all. Once a page is up this IS
     /// `top_arg`: a push parked behind it changes the chrome at its own commit, not a frame early.
     pub fn top_or_mounting_arg(&self) -> Option<&H::Arg> {
-        self.top_arg().or_else(|| self.parked.iter().rev().find_map(|(s, _)| match &s.fx {
+        self.top_arg().or_else(|| self.parked.iter().rev().find_map(|(s, _, _)| match &s.fx {
             Fx::Nav(NavOp::Root(a) | NavOp::Push(a) | NavOp::Replace(a) | NavOp::SelectTab(a)) => Some(a),
             Fx::Nav(NavOp::SelectTabWithChild { child, .. }) => Some(child),
             _ => None,
@@ -1248,7 +1253,7 @@ where
     /// `exit_player`'s `NavOp::Dismiss` of an open player panel suppress the page sync for the
     /// very frame that carried the post-player route.
     pub fn has_pending_navigation(&self) -> bool {
-        self.parked.iter().any(|(s, _)| match &s.fx {
+        self.parked.iter().any(|(s, _, _)| match &s.fx {
             Fx::Nav(op) => self.nav.moves_page(op),
             _ => false,
         })
@@ -2893,7 +2898,7 @@ where
     /// the owner.
     pub fn input_owner_after_dismissals(&self) -> Option<InputOwner> {
         self.nav.input_owner_unless(|id| self.parked.iter()
-            .any(|(item, _)| matches!(&item.fx, Fx::Nav(NavOp::Dismiss(target)) if *target == id)))
+            .any(|(item, _, _)| matches!(&item.fx, Fx::Nav(NavOp::Dismiss(target)) if *target == id)))
     }
 
     /// Revalidate immediately before IO if a runner invokes lifecycle operations after take.
@@ -3641,17 +3646,18 @@ where
         let mut life: Vec<Life<H>> = std::mem::take(&mut self.parked_life);
         if std::mem::take(&mut self.pending_back) {
             let ret = self.ret();
-            let (answer, steps) = self.nav.back(ret);
+            let captured = self.owner_entry();
+            let (answer, steps) = self.nav.back(ret, captured);
             life.extend(steps);
             if answer == super::containers::BackAnswer::AtRoot {
                 report.back_at_root = true;
                 rig.back_at_root();
             }
         }
-        for (item, ret) in parked {
+        for (item, ret, captured) in parked {
             match item.fx {
                 Fx::Nav(op) => {
-                    life.extend(self.nav.request(op, ret));
+                    life.extend(self.nav.request(op, ret, captured));
                 }
                 Fx::Mount(eid) => life.push(Life::Mount(eid)),
                 Fx::Unmount(eid) => life.push(Life::Unmount(eid)),
