@@ -684,15 +684,16 @@ impl Client {
         ));
         match status {
             Some(200..=299) => true,
-            // The server answered but kept the stop (404: no transcoder under this id, it only
-            // ever ran /decision). Its Streaming Resource holds a stream slot the stop's own close
-            // never reached: close it directly, or the server holds it until its own timeout.
-            Some(_) => {
+            // No transcoder under this id: it only ever ran /decision. Its Streaming Resource holds
+            // a stream slot the stop's own close never reached: close it directly, or the server
+            // holds it until its own timeout. Any other refusal may leave an encoder running, and
+            // its resource is the encoder cleanup ledger's to close once `/ping` shows it gone.
+            Some(404) => {
                 let closed = self.transcode_resource_reconciled(session);
                 plx_base::eventlog::log(&format!("transcode resource close ok={}", closed.is_some() as i32));
                 false
             }
-            None => false,
+            _ => false,
         }
     }
 

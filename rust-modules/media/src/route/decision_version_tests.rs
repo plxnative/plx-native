@@ -1326,14 +1326,17 @@ fn the_stop_closes_the_resource_the_decision_reserved_under_the_logical_session(
 }
 
 /// A hero trailer writes no watch state, but its `/decision` reserves a stream slot like any play:
-/// retiring the preview must close the resource, or each trailer holds a slot until the server's
-/// timeout and the next real play finds the server full.
+/// retiring the preview must stop the logical session (a 404 there closes the resource,
+/// `Client::transcode_stop`), or each trailer holds a slot until the server's timeout and the next
+/// real play finds the server full. The stop runs off the main thread, never behind the stop
+/// worker's drain, so the test waits for it to reach the server.
 #[test]
 #[cfg(feature = "devtriggers")]
-fn retiring_a_trailer_preview_closes_the_resource_its_decision_reserved() {
+fn retiring_a_trailer_preview_retires_the_session_its_decision_reserved() {
     let mut ps = crate::route::PlaybackSession::IDLE;
     let _g = fresh_registry(&mut ps);
-    let (port, done, server) = versions_pms_with(URI_DTS, MDE_PMS_OUTPUT);
+    let (observed, seen) = std::sync::mpsc::channel();
+    let (port, done, server) = versions_pms_observed(URI_DTS, MDE_PMS_OUTPUT, Some(observed));
     let sid = plx_plex::plex::register_for_test("preview-close", "127.0.0.1", port, "token", "preview-close-client");
     let mut meta = plx_data::stores::metadata::MetadataStore::default();
     assert!(request_play(&mut ps, &mut meta, plx_os::devcaps::caps(), sid,
@@ -1344,12 +1347,19 @@ fn retiring_a_trailer_preview_closes_the_resource_its_decision_reserved() {
     let logical = sess(&ps);
     install_active_encoder_for_test(&format!("{logical}-abr-1"));
     scrobble_stop(&mut ps, Some(("rk-v".into(), 30_000, 60_000)), None);
-    drain_scrobble();
+    let stop = format!("session={logical}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut stopped = false;
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok(line) = seen.recv_timeout(left) else { break };
+        if line.contains("/transcode/universal/stop?") && line.contains(&stop) {
+            stopped = true;
+            break;
+        }
+    }
     done.send(()).unwrap();
     let requests = server.join().unwrap();
-    assert!(requests.iter().any(|line| line.starts_with("POST /status/sessions/close?")
-            && line.contains(&format!("X-Plex-Session-Identifier={logical}"))),
-        "the trailer's resource is closed at its retirement: {requests:?}");
+    assert!(stopped, "the trailer's logical session is retired: {requests:?}");
     assert!(!requests.iter().any(|line| line.contains("/:/timeline") || line.contains("/:/scrobble")),
         "a trailer writes no watch state: {requests:?}");
     plx_plex::plex::reset_servers_for_test();

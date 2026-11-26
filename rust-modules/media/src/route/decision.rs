@@ -8890,8 +8890,16 @@ pub fn scrobble_stop(
     final_report: Option<(String, i64, i64)>,
     report_th: Option<std::thread::JoinHandle<()>>,
 ) {
-    // A trailer writes no watch state, but its `/decision` reserved a stream slot all the same.
-    let final_report = final_report.filter(|_| !preview_request(ps));
+    if preview_request(ps) {
+        // A trailer writes no watch state, but its `/decision` reserved a stream slot all the same.
+        // Retired off the main thread, like an abandoned plan's identities, and never behind
+        // `drain_scrobble`: a trailer's retirement must not wait for a film's stop worker.
+        let logical = sess(ps);
+        if !logical.is_empty() {
+            retire_plan_resources(AbandonedPlanResources { sid: cur_sid(ps), identities: vec![logical], live: None });
+        }
+        return;
+    }
     let (logical_session, pq, pqi) = (sess(ps), pq_id(ps), pq_item_id(ps));
     let mark_watched = std::mem::take(&mut ps.finished);
     let (aud, sub) = (cur_audio_sid(ps), cur_sub_sid(ps)); // the selection this playback reported under
@@ -8911,6 +8919,10 @@ pub fn scrobble_stop(
     // the rest is still read after teardown returns — see `reset_session`'s doc for the reader that
     // would break.
     let live = ps.cur_live.take();
+    // The id the decision reserved its Streaming Resource under, when the stop would not already
+    // close it: a live route's tune is ended by the timeline's `stopped`, and an encoder under the
+    // same id is closed by its own stop.
+    let logical_session = if live.is_some() || logical_session == tsession { String::new() } else { logical_session };
     { let s = &mut *ps; {
         s.tsession.clear();
         s.cur_contract.remux = false;
