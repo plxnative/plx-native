@@ -292,7 +292,9 @@ pub struct OriginalRequest {
     ///
     /// HYPOTHESIS, unmeasured on the 4.5 service: that this position is also the native track
     /// index the service names in `audioInfo.track` and takes in `selectTrack`. A qualifier may map
-    /// it to a [`NativeTrackIndex`] only for a source it knows lists its audio in the Part's order;
+    /// it to a [`NativeTrackIndex`] only for a source it knows lists its audio in the Part's order,
+    /// or together with a [`NativeTrackCheck`](plx_playback_contract::uri::NativeTrackCheck) its driver verifies before trusting the index (Tizen
+    /// states the stream's language, `audio_language`);
     /// `selection.audio_sid` stays the stream's identity, this is only where it sits.
     pub audio_ordinal: Option<i64>,
     /// The exported-window service can enumerate multiple tracks in a different order from PMS.
