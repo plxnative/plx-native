@@ -954,6 +954,20 @@ impl PlayerAdapter {
     #[cfg(not(feature = "uri-captions"))]
     fn deliver_uri_captions(&mut self, _: &crate::route::PlaybackSession) {}
 
+    /// **Whether the installed URI driver hands the selected subtitle's cues to the app**
+    /// ([`UriDriver::delivers_captions`](plx_playback_contract::uri::UriDriver::delivers_captions)): there the app
+    /// draws a selected embedded subtitle, and Off is the app no longer drawing it. Only a build with
+    /// `uri-captions` (Tizen) composes such a driver, so without the feature (webOS) this is `false` and every
+    /// path behind it compiles out.
+    #[cfg(feature = "uri-captions")]
+    pub fn uri_delivers_captions(&self) -> bool {
+        self.physical.uri().is_some_and(|driver| driver.delivers_captions())
+    }
+
+    #[cfg(not(feature = "uri-captions"))]
+    #[inline(always)]
+    pub fn uri_delivers_captions(&self) -> bool { false }
+
     /// Forget the caption source of the subtitle the app draws for the URI driver (a pick, Off, a new attempt).
     #[cfg(not(feature = "uri-captions"))]
     fn clear_uri_captions(&mut self) {}
@@ -984,8 +998,8 @@ impl PlayerAdapter {
         let Ok(id) = u64::try_from(stream_id) else { return Some(false); };
         if has_sidecar { return Some(false); }
         let choice = if id == 0 {
-            let off_carried = self.physical.uri().is_some_and(|driver| driver.delivers_captions()
-                && driver.capabilities(BackendKind::Uri).is_some_and(|caps| caps.subtitle_off));
+            let off_carried = self.uri_delivers_captions() && self.physical.uri().is_some_and(|driver|
+                driver.capabilities(BackendKind::Uri).is_some_and(|caps| caps.subtitle_off));
             if !off_carried { return Some(false); }
             plx_playback_contract::TrackChoice::Off
         } else if ordinal < 0 {
@@ -1281,7 +1295,7 @@ impl PlayerAdapter {
         // A certified selected subtitle is drawn by the app from the driver's cues (the plan gave it a render
         // ordinal): a driver that hands none over cannot carry it.
         if matches!(offer.requirements.subtitle_track, plx_playback_contract::TrackChoice::Selected(_))
-            && !self.physical.uri().is_some_and(|driver| driver.delivers_captions()) {
+            && !self.uri_delivers_captions() {
             return Err(Failure::Unsupported);
         }
         if offer.selection != ps.uri_selection()
@@ -1618,7 +1632,7 @@ impl PlayerAdapter {
                                 && u64::try_from(pending.stream_id).ok() == Some(id)) {
                         let pending = self.pending_uri_subtitle.take().expect("matched URI subtitle pick");
                         self.refused_uri_subtitle = None;
-                        let app_draws = self.physical.uri().is_some_and(|driver| driver.delivers_captions());
+                        let app_draws = self.uri_delivers_captions();
                         crate::route::confirm_uri_subtitle_pick(ps, pending.ordinal,
                             pending.stream_id, pending.memo, app_draws);
                         if app_draws {
@@ -1628,6 +1642,9 @@ impl PlayerAdapter {
                         }
                     }
                 }
+                // Only a driver that hands its cues over carries Off (`select_uri_subtitle`), so only a build with one has
+                // an Off to settle.
+                #[cfg(feature = "uri-captions")]
                 plx_playback_contract::Fx::AcceptedTrackSettled {
                     backend: BackendKind::Uri, attempt, command,
                     kind: plx_playback_contract::TrackKind::Subtitle,

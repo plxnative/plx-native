@@ -728,9 +728,9 @@ pub(crate) fn commit_track(
         // (`route::commit_subtitle_and_sidecar`): the sidecar policy lives beside the track memory's.
         TrackCommit::Subtitle { render_ordinal, stream_id, sidecar_key, sidecar_codec, memo } => {
             if ps.attempt_view().backend() == Some(plx_media::player::attempt_view::Backend::Uri) {
-                // Off names no native track: it is the driver's to carry (`select_uri_subtitle`: one that hands its
-                // cues to the app carries it by the app no longer drawing them), and only a refusal re-resolves it.
-                let off = stream_id == 0 && sidecar_key.is_none();
+                // Off names no native track: a driver that hands its cues to the app carries it (`select_uri_subtitle`:
+                // the app no longer draws them), and only a refusal re-resolves it. Any other driver re-resolves Off.
+                let off = stream_id == 0 && sidecar_key.is_none() && pa.uri_delivers_captions();
                 if (!off && (render_ordinal < 0 || sidecar_key.is_some()
                     || pa.uri_maps_track(ps, plx_playback_contract::TrackKind::Subtitle,
                         stream_id) == Some(false)))
