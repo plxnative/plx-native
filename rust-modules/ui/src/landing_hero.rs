@@ -127,7 +127,7 @@ pub fn shelf_fade(tiles_top: f32, hero_a: f32) -> WashRamp {
 /// layers when the hero slides. The field stays put while title and controls move across it.
 pub fn home_shade(shelf: WashRamp, hero_a: f32) -> crate::widgets::WashScrim {
     let k = hero_a.clamp(0.0, 1.0);
-    edge_wash(shelf, theme::shade::HOME_SIDE_X, theme::shade::HOME_SIDE_Y, None,
+    edge_wash(shelf, theme::shade::HOME_SIDE_HOLD, theme::shade::HOME_SIDE_REACH, None,
         theme::shade::HOME_SIDE_A * k, k)
 }
 
@@ -145,16 +145,18 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let rise = theme::shade::DETAIL_PREVIEW_RISE * t;
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));
-    edge_wash(ramp, theme::shade::DETAIL_SIDE_X,
-        theme::shade::DETAIL_SIDE_Y.map(|y| y - rise), top_fade,
+    let [hold, reach] = [theme::shade::DETAIL_SIDE_HOLD, theme::shade::DETAIL_SIDE_REACH].map(|[a, b]| [a, b + rise]);
+    edge_wash(ramp, hold, reach, top_fade,
         theme::shade::DETAIL_SIDE_A * field * (1.0 - t), base.max(field.min(1.0)))
 }
 
-fn edge_wash(ramp: WashRamp, horizontal: [f32; 2], vertical: [f32; 2], top: Option<([f32; 2], f32)>,
+/// Both heroes' field: the side shade is an ellipse about the screen's bottom-left corner, held
+/// inside `hold` and gone at `reach` (semi-axes, `gfx::scrim::EdgeShade`), joined with `ramp`.
+fn edge_wash(ramp: WashRamp, hold: [f32; 2], reach: [f32; 2], top: Option<([f32; 2], f32)>,
     peak: f32, strength: f32) -> crate::widgets::WashScrim {
     use plx_gfx::gfx::scrim::{EdgeShade, GroundShade};
     let field = if strength > 0.0 {
-        GroundShade::from_edge(EdgeShade::new(horizontal, vertical, top, ramp.stops,
+        GroundShade::from_edge(EdgeShade::new([0.0, SCR_H], hold, reach, top, ramp.stops,
             peak, theme::shade::EDGE_JOIN * strength))
     } else {
         GroundShade::NONE

@@ -151,10 +151,21 @@ impl ShadeBlock {
 
 /// Edge-anchored shade and shelf ramp sharing one ink. The overlap is a soft maximum,
 /// so it cannot produce the dark seam of two independently blended overlays.
+///
+/// **The side shade is elliptical, anchored at a corner** (`origin`, the screen's bottom-left on
+/// both heroes). It holds `peak` inside the ellipse of semi-axes `hold` and falls smoothly to
+/// exactly 0 at the ellipse of semi-axes `reach`, both centred on `origin`. Between the two the
+/// fall is `smoothstep` of `t = (d_hold - 1) / (d_hold - d_reach)`, where `d_*` is the point's
+/// elliptical radius against each ellipse (`|(q.x / a, q.y / b)|`, `q` the offset from `origin`
+/// with y pointing up): `t` is 0 on the hold ellipse, 1 on the reach ellipse and rises
+/// monotonically along any row, column or ray between them. It replaced a separable product of a
+/// horizontal and a vertical ramp, whose iso-lines are straight along both axes and read as the
+/// edges of a dark plate (discussion #1460). Every edge of this one is a curve.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EdgeShade {
-    horizontal: [f32; 2],
-    vertical: [f32; 2],
+    origin: [f32; 2],
+    hold: [f32; 2],
+    reach: [f32; 2],
     top: Option<([f32; 2], f32)>,
     shelf: [(f32, f32); 3],
     peak: f32,
@@ -162,19 +173,33 @@ pub struct EdgeShade {
 }
 
 impl EdgeShade {
-    /// An optional full-width top fade, given as its vertical bounds and peak alpha. Its
-    /// alpha and the side alpha can crossfade before the lower ramp joins them.
-    pub fn new(horizontal: [f32; 2], vertical: [f32; 2], top: Option<([f32; 2], f32)>,
+    /// The side shade anchored at `origin` (held inside the `hold` semi-axes, gone at the `reach`
+    /// ones; `reach` must exceed `hold` on both axes), an optional full-width top fade given as its
+    /// vertical bounds and peak alpha, and the shelf ramp. The top fade's alpha and the side alpha
+    /// can crossfade before the lower ramp joins them.
+    pub fn new(origin: [f32; 2], hold: [f32; 2], reach: [f32; 2], top: Option<([f32; 2], f32)>,
         shelf: [(f32, f32); 3], peak: f32, join: f32) -> Self {
-        Self { horizontal, vertical, top, shelf, peak, join }
+        debug_assert!(reach[0] > hold[0] && reach[1] > hold[1] && hold[0] > 0.0 && hold[1] > 0.0,
+            "the reach ellipse lies outside the hold ellipse");
+        Self { origin, hold, reach, top, shelf, peak, join }
+    }
+
+    /// The side shade's fall, 0 inside the hold ellipse to 1 on and past the reach ellipse, from
+    /// the same reciprocals the shader is handed ([`GroundShade::uniforms`]).
+    fn side_t(self, x: f32, y: f32) -> f32 {
+        let (qx, qy) = (x - self.origin[0], self.origin[1] - y);
+        let d_hold = ((qx * (1.0 / self.hold[0])).powi(2) + (qy * (1.0 / self.hold[1])).powi(2)).sqrt();
+        if d_hold <= 1.0 {
+            return 0.0;
+        }
+        let d_reach = ((qx * (1.0 / self.reach[0])).powi(2) + (qy * (1.0 / self.reach[1])).powi(2)).sqrt();
+        ((d_hold - 1.0) / (d_hold - d_reach).max(1e-6)).clamp(0.0, 1.0)
     }
 
     fn at(self, x: f32, y: f32) -> f32 {
         let progress = |v: f32, lo: f32, hi: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
         let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-        let side = self.peak
-            * (1.0 - smooth(progress(x, self.horizontal[0], self.horizontal[1])))
-            * smooth(progress(y, self.vertical[0], self.vertical[1]));
+        let side = self.peak * (1.0 - smooth(self.side_t(x, y)));
         let upper = side + self.top.map_or(0.0, |([start, end], peak)| {
             peak * (1.0 - smooth(progress(y, start, end)))
         });
@@ -200,8 +225,9 @@ impl EdgeShade {
 
     fn placed(self, ox: f32, oy: f32, s: f32) -> Self {
         Self {
-            horizontal: self.horizontal.map(|x| x * s + ox),
-            vertical: self.vertical.map(|y| y * s + oy),
+            origin: [self.origin[0] * s + ox, self.origin[1] * s + oy],
+            hold: self.hold.map(|a| a * s),
+            reach: self.reach.map(|a| a * s),
             top: self.top.map(|(bounds, peak)| (bounds.map(|y| y * s + oy), peak)),
             shelf: self.shelf.map(|(y, a)| (y * s + oy, a)),
             ..self
@@ -278,7 +304,7 @@ impl GroundShade {
         if let Some(edge) = self.edge {
             let [x, y, _, h] = rect;
             return y + h > edge.shelf[0].0
-                || (edge.peak > 0.0 && x < edge.horizontal[1] && y + h > edge.vertical[0])
+                || (edge.peak > 0.0 && x < edge.origin[0] + edge.reach[0] && y + h > edge.origin[1] - edge.reach[1])
                 || edge.top.is_some_and(|([_, end], peak)| peak > 0.0 && y < end);
         }
         self.blocks.iter().any(|b| b.reaches(rect))
@@ -325,15 +351,14 @@ impl GroundShade {
     pub fn uniforms(&self) -> [[f32; 4]; VEC4S] {
         let mut u = [[0.0; 4]; VEC4S];
         if let Some(edge) = self.edge {
-            let [left, right] = edge.horizontal;
-            let [start, full] = edge.vertical;
             let [(top, a), (mid, b), (foot, c)] = edge.shelf;
-            u[0] = [left, right, start, full];
+            u[0] = [1.0 / edge.hold[0], 1.0 / edge.hold[1], 1.0 / edge.reach[0], 1.0 / edge.reach[1]];
             u[1] = [top, mid, foot, a];
             u[2] = [b, c, edge.peak, edge.join];
             if let Some(([start, end], peak)) = edge.top {
                 u[3] = [start, end, peak, 0.0];
             }
+            u[4] = [edge.origin[0], edge.origin[1], 0.0, 0.0];
             return u;
         }
         for (i, b) in self.blocks.iter().enumerate() {
@@ -440,7 +465,7 @@ mod tests {
 
     #[test]
     fn edge_shade_translates_and_scales_with_its_painter() {
-        let edge = EdgeShade::new([280.0, 960.0], [110.0, 405.0], Some(([20.0, 260.0], 0.32)),
+        let edge = EdgeShade::new([0.0, 1080.0], [700.0, 675.0], [960.0, 970.0], Some(([20.0, 260.0], 0.32)),
             [(768.0, 0.0), (886.0, 0.25), (1012.0, 0.93)], 0.59, 0.10);
         let shade = GroundShade::from_edge(edge);
         assert_eq!(shade.shader_count(), -1.0);
