@@ -255,7 +255,7 @@ impl<H: Host> Navigation<H> {
             let ret = match self.modals.input_owner() {
                 Some(InputOwner::Entry(owner)) => {
                     if Self::captured_on(captured, owner) {
-                        if let Some(e) = self.modals.entry_mut(owner) { e.ret = ret.stored(); }
+                        if let Some(e) = self.modals.entry_mut(owner) { e.store_ret(ret); }
                     }
                     None
                 }
@@ -275,7 +275,7 @@ impl<H: Host> Navigation<H> {
                 // dead entry when the panel closes (a pick or BACK) and hold no focus at all.
                 if let Some(InputOwner::Entry(owner)) = self.input_owner() {
                     if Self::captured_on(captured, owner) {
-                        if let Some(e) = self.entry_mut(owner) { e.ret = ret.stored(); }
+                        if let Some(e) = self.entry_mut(owner) { e.store_ret(ret); }
                     }
                 }
                 let (_, mut out) = self.modals.present(&mut self.ids, arg, self.next_style);

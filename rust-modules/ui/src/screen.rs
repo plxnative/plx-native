@@ -397,7 +397,8 @@ pub struct ReturnState<K, M = ()> {
     ///
     /// **The one carrier.** `Navigation::request`/`back` read it from here (the parked op carries only
     /// the `ret`), and it is a property of a `ret` IN FLIGHT: a `ret` stored on an `Entry` has been
-    /// through [`Self::stored`], which clears it, so `Entry.ret` never carries a stale stamp.
+    /// through [`Self::stored`] (by `Entry::store_ret`, the one whole-value writer), which clears it, so
+    /// `Entry.ret` never carries a stale stamp.
     pub captured: Option<EntryId>,
 }
 
