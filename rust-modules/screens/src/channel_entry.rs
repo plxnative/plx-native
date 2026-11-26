@@ -59,6 +59,16 @@ pub enum Ev {
     Tick { now: u32 },
 }
 
+impl Ev {
+    /// The time the event carries (none for BACK).
+    pub fn now(&self) -> Option<u32> {
+        match *self {
+            Ev::Digit { now, .. } | Ev::Moved { now, .. } | Ev::Touch { now } | Ev::Ok { now } | Ev::Tick { now } => Some(now),
+            Ev::Back => None,
+        }
+    }
+}
+
 /// What the panel must do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fx {
@@ -110,8 +120,103 @@ impl NumberEntry {
         }
     }
 
-    pub fn step(&mut self, _ev: Ev, _lineup: &[Cand]) -> Fx {
-        Fx::None
+    /// Step the machine on `ev` over the lineup the panel captured when it opened.
+    pub fn step(&mut self, ev: Ev, lineup: &[Cand]) -> Fx {
+        // The opening digit is read at the time of the first event that carries one, so the machine never
+        // reads a clock. BACK before any event is just a cancel.
+        if let (NumberEntry::Fresh { first }, Some(now)) = (&*self, ev.now()) {
+            let first = *first;
+            *self = NumberEntry::Typing { digits: String::new(), highlight: 0, last: now };
+            let opened = self.digit(first, now, lineup);
+            if *self == NumberEntry::Done {
+                return opened;
+            }
+            // the opening digit answered; the event that woke it is handled as it would have been after it
+            let then = self.step_typing(ev, lineup);
+            return if then == Fx::None { opened } else { then };
+        }
+        self.step_typing(ev, lineup)
+    }
+
+    fn step_typing(&mut self, ev: Ev, lineup: &[Cand]) -> Fx {
+        let NumberEntry::Typing { digits, highlight, last } = self else {
+            return match (&*self, ev) {
+                (NumberEntry::Fresh { .. }, Ev::Back) => {
+                    *self = NumberEntry::Done;
+                    Fx::Leave
+                }
+                _ => Fx::None,
+            };
+        };
+        match ev {
+            Ev::Back => {
+                *self = NumberEntry::Done;
+                Fx::Leave
+            }
+            Ev::Digit { d, now } => {
+                if digits.chars().count() >= longest(lineup) {
+                    *last = now; // ignored, but still a key
+                    return Fx::None;
+                }
+                self.digit(d, now, lineup)
+            }
+            Ev::Moved { to, now } => {
+                *last = now;
+                if lineup.get(to).is_some_and(|c| c.number.starts_with(digits.as_str())) {
+                    *highlight = to;
+                }
+                Fx::None
+            }
+            Ev::Touch { now } => {
+                *last = now;
+                Fx::None
+            }
+            Ev::Ok { now } => {
+                *last = now;
+                if matches(lineup, digits).next().is_none() {
+                    return Fx::None;
+                }
+                let h = *highlight;
+                self.finish(h, lineup)
+            }
+            Ev::Tick { now } => {
+                if now.wrapping_sub(*last) < IDLE_MS {
+                    return Fx::None;
+                }
+                if matches(lineup, digits).next().is_none() {
+                    *self = NumberEntry::Done;
+                    return Fx::Leave;
+                }
+                let h = *highlight;
+                self.finish(h, lineup)
+            }
+        }
+    }
+
+    /// Append digit `d` at `now`: one match tunes at once, several seat the highlight, none changes nothing else.
+    fn digit(&mut self, d: u8, now: u32, lineup: &[Cand]) -> Fx {
+        let NumberEntry::Typing { digits, highlight, last } = self else { return Fx::None };
+        digits.push(char::from(b'0' + d.min(9)));
+        *last = now;
+        let (a, b) = {
+            let mut it = matches(lineup, digits);
+            (it.next(), it.next())
+        };
+        match (a, b) {
+            (None, _) => Fx::None,
+            (Some(only), None) => self.finish(only, lineup),
+            (Some(_), Some(_)) => {
+                let h = start_highlight(lineup, digits).unwrap_or(0);
+                *highlight = h;
+                Fx::Seat(h)
+            }
+        }
+    }
+
+    /// Leave having chosen lineup index `i`: a tune, unless that channel is the one already on screen.
+    fn finish(&mut self, i: usize, lineup: &[Cand]) -> Fx {
+        *self = NumberEntry::Done;
+        if lineup.get(i).is_some_and(|c| c.playing) { Fx::Leave } else { Fx::Tune(i) }
     }
 }
 
