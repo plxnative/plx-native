@@ -243,6 +243,13 @@ fn observed<T>(value: T) -> Observed<T> {
     Observed { value, from: EvidenceSource::BackendReport }
 }
 
+/// Forget every unanswered subtitle request: a newer one was accepted ([`Machine::select_subtitle`]), and the
+/// contract completes only the newer. The host's answer to a forgotten one matches no control and is ignored.
+fn supersede_subtitle(active: &mut Active) {
+    active.controls.retain(|control| !matches!(control.operation,
+        Operation::SelectTrack { kind: TrackKind::Subtitle, .. }));
+}
+
 /// The pure step of the Tizen URI driver.
 pub struct Machine {
     timing: Timing,
@@ -482,6 +489,12 @@ impl Machine {
     /// stream is ([`choose_native_track`]; a Part's sole subtitle stream needs no language), and settled on the host's
     /// `PLAYER_TRACK` ([`CAPS`]). A stream the map does not name, or whose native track cannot be told, is `Unsupported`
     /// and logged.
+    ///
+    /// An accepted request SUPERSEDES a subtitle request the host has not answered yet (the contract lets a second
+    /// `SelectTrack` go out while the first is pending, and completes only the newer): the older one is forgotten, so its
+    /// late `PLAYER_TRACK` neither makes its track the captioned one nor reports it selected. The host answers verbs in
+    /// order, so after a newer pick the native track is the newer one's; after Off it may be the older one's, which draws
+    /// nothing, since the app no longer takes its cues. A refused request supersedes nothing.
     pub fn select_subtitle(&mut self, now_ms: u64, attempt: AttemptId, command: CommandId, choice: TrackChoice,
         fx: &mut Vec<Fx>) -> DispatchResult {
         let Some(active) = self.active.as_mut().filter(|a| a.attempt == attempt) else {
@@ -492,6 +505,7 @@ impl Machine {
         }
         let id = match choice {
             TrackChoice::Off => {
+                supersede_subtitle(active);
                 active.captioned = None;
                 self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Subtitle, choice });
                 return DispatchResult::Queued;
@@ -522,6 +536,7 @@ impl Machine {
         }
         let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
         let operation = Operation::SelectTrack { kind: TrackKind::Subtitle, choice };
+        supersede_subtitle(active);
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
             native: Some(index) });
         fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::TextTrack { index, command: command_word } });
