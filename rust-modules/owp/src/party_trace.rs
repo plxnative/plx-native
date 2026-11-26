@@ -933,6 +933,23 @@ fn a_connection_given_up_before_it_opens_is_closed() {
 }
 
 #[test]
+fn a_name_the_send_checks_refuse_fails_create_with_invalid_message() {
+    let name = "x".repeat(33);
+    assert!(Party::checked(&name, "Example/1.0", false, RelaySource::Public).is_err());
+    let mut party = Party::new(&name, "Example/1.0", false, RelaySource::At(relay_at("http://relay.test").expect("relay")));
+    let mut effects = Vec::new();
+    party.step(PartyInput::Call { at: at(0), call: 1, request: Request::Create }, &mut effects);
+    let conn = match effects.as_slice() {
+        [PartyEffect::Open { conn, .. }] => *conn,
+        other => panic!("{other:?}"),
+    };
+    effects.clear();
+    party.step(PartyInput::Net { at: at(0), conn, event: NetEvent::Opened }, &mut effects);
+    assert!(!effects.iter().any(|effect| matches!(effect, PartyEffect::Send { text, .. } if text.is_empty() || text.contains("\"create\""))), "{effects:?}");
+    assert!(effects.iter().any(|effect| matches!(effect, PartyEffect::Done { call: 1, outcome: Outcome::Failed(error) } if error.code == "invalid_message")), "{effects:?}");
+}
+
+#[test]
 fn every_party_trace_passes() {
     let cases = traces();
     let failed: Vec<String> = cases

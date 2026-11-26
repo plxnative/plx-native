@@ -5,6 +5,10 @@
 list fetch, the player and the resolver, and does what the effects say. This document is the contract
 between the two. The crate's layer is in [module-layers.md](module-layers.md).
 
+A host builds it with `Party::checked`, which refuses a `name` or `client` that fails SDK.md §7.1 with
+`invalid_message`. `Party::new` skips those checks; a name the send checks refuse then fails `create` and
+`join` with `invalid_message`.
+
 ## Inputs
 
 Every `PartyInput` carries `at: Moment`: the local monotonic time in ms, and the attached adapter's reads

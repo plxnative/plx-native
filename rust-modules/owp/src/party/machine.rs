@@ -1103,8 +1103,13 @@ impl Party {
                         Phase::Idle | Phase::InRoom(_) | Phase::Ended(_) | Phase::Closed(_) => None,
                     };
                     self.phase = phase;
-                    if let Some(message) = message {
-                        effects.push(PartyEffect::Send { conn, text: wire(&message) });
+                    match message.map(|message| message.encode()) {
+                        Some(Ok(text)) => effects.push(PartyEffect::Send { conn, text }),
+                        Some(Err(invalid)) => {
+                            let error = PartyError::new("invalid_message", invalid.0);
+                            stack.push(if matches!(self.phase, Phase::Reconnecting(..)) { Work::End { reason: EndReason::Lost, error: Some(error) } } else { Work::FailAttempt { error } });
+                        }
+                        None => {}
                     }
                 }
                 Work::HelloRefused { conn, error } => {
