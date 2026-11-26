@@ -2019,9 +2019,10 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements; every request and event carries the epoch
   and a completion after a stop is dropped. Capabilities: progressive URI, pause, seek, and `audio_track` (a deviation
   from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
-  states, so the offer of a title fails without it; the driver settles that request for the source's one audio stream by
-  construction, not on native evidence, and `TizenQualifier` certifies ONLY a source with a single audio stream until the
-  retail default stream is measured), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
+  states, so the offer of a title fails without it; the driver asks the host player for the selected stream at
+  its native index (`PLX_HOST_PLAYER_VERB_AUDIO_TRACK`) and settles it on the host's `PLAYER_TRACK` answer, and
+  `TizenQualifier` certifies the selected stream wherever it sits; whether the native index follows PMS's order on a retail
+  set is unmeasured, `docs/tizen.md`, "The audio track is selected"), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
   and never a converted PMS output. `subtitle_choice = Off` (any subtitle stream, none selected) is carried: the driver states
   `subtitle_off` (the host gives the player no subtitle, and the emulator run in `docs/tizen.md`, "Subtitles off", showed
   none drawn from a default-flagged embedded track), so `SubtitleOff` is refused only on evidence without it. A selected

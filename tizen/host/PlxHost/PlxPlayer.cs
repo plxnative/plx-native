@@ -72,12 +72,24 @@ namespace PlxHost
             // Every command id is answered before its epoch ends: by landing, by refusal or expiry, or by Release / a failed open (b = -1).
             internal Seek SeekNow;
             internal Seek SeekLater;
+            // An audio track asked for before PREPARED (the native call needs a prepared player): applied in OnPrepared before PREPARED is
+            // posted. The newest index wins and the older command ids are folded into it; every one gets its PLAYER_TRACK.
+            internal Track TrackLater;
             // Held by anything that calls into the native player on this handle off the video thread (position reads, the display bind). The
             // video thread takes it, with a bound, before it destroys the handle.
             internal readonly object HandleGate = new object();
 
             internal Session(uint epoch) { Epoch = epoch; }
         }
+
+        private sealed class Track
+        {
+            internal int Index;
+            internal readonly List<long> Commands = new List<long>();
+        }
+
+        // PLAYER_TRACK's b when the track was not selected (plx_host.h, PLAYER_TRACK).
+        private const long TrackRefused = -1;
 
         private sealed class Seek
         {
@@ -222,6 +234,7 @@ namespace PlxHost
                 case Native.PLX_HOST_PLAYER_VERB_PLAY:
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE:
                 case Native.PLX_HOST_PLAYER_VERB_SEEK:
+                case Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK:
                     if (Interlocked.Read(ref latestEpoch) != epoch) return Native.PLX_HOST_PLAYER_E_STALE;
                     return TryEnqueue(epoch, () => DoVerb(epoch, (int)verb, arg0, arg1));
                 default:
@@ -353,6 +366,7 @@ namespace PlxHost
                 {
                     s.OpenFailed = true;
                     AnswerSeeks(s);
+                    AnswerTracks(s);
                 }
             }
         }
@@ -421,8 +435,9 @@ namespace PlxHost
             if (s == null || s.Epoch != epoch) return;
             if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed)
             {
-                // A dead player still owes its seek an answer (the library waits for every command id).
+                // A dead player still owes its seek or track an answer (the library waits for every command id).
                 if (verb == Native.PLX_HOST_PLAYER_VERB_SEEK) Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, arg1, SeekRefused);
+                if (verb == Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, arg1, TrackRefused);
                 return;
             }
             switch (verb)
@@ -430,7 +445,90 @@ namespace PlxHost
                 case Native.PLX_HOST_PLAYER_VERB_PLAY: DoPlay(s); break;
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE: DoPause(s); break;
                 case Native.PLX_HOST_PLAYER_VERB_SEEK: DoSeek(s, arg0, arg1); break;
+                case Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK: DoTrack(s, arg0, arg1); break;
             }
+        }
+
+        // An audio track: held until PREPARED (the native call needs a prepared player), then applied at once.
+        private void DoTrack(Session s, long index, long command)
+        {
+            if (s.TrackLater == null) s.TrackLater = new Track();
+            s.TrackLater.Index = (int)Math.Max(-1, Math.Min(index, int.MaxValue));
+            s.TrackLater.Commands.Add(command);
+            ApplyHeldTrack(s);
+        }
+
+        // Select the held track and answer its command ids with the index now selected, or TrackRefused. A refusal is not a PLAYER_ERROR: the
+        // player keeps the track it had.
+        private static void ApplyHeldTrack(Session s)
+        {
+            if (!s.Prepared || s.TrackLater == null) return;
+            Track track = s.TrackLater;
+            s.TrackLater = null;
+            long answer = TrackRefused;
+            int count, current;
+            int rcCount = MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count);
+            int rcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current);
+            if (track.Index < 0)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is no index");
+            }
+            else if (rcCurrent == 0 && current == track.Index)
+            {
+                answer = track.Index; // already the current track: nothing to call
+            }
+            else if (track.Index == 0 && (rcCount != 0 || count <= 1))
+            {
+                // The first and only track, or a player that cannot count its tracks: the one the player plays. Answered as selected, as it was
+                // before the verb existed, so a single-track title never fails on a count or a current index the player will not give.
+                PlxApp.Log("player: epoch " + s.Epoch + ": audio track 0 taken as selected (count rc " + rcCount + ", current rc " + rcCurrent + ")");
+                answer = 0;
+            }
+            else if (rcCount == 0 && track.Index >= count)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is not one of the " + count + " tracks");
+            }
+            else
+            {
+                int rc = MediaPlayerNative.player_select_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, track.Index);
+                if (rc == 0) answer = track.Index;
+                else PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track(audio, " + track.Index + ") returned " + rc);
+            }
+            PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " -> " + answer);
+            foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
+        }
+
+        // Answers a held track's command ids with TrackRefused and forgets it: the epoch is ending or never prepared.
+        private static void AnswerTracks(Session s)
+        {
+            Track held = s.TrackLater;
+            s.TrackLater = null;
+            if (held == null) return;
+            foreach (long command in held.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, TrackRefused);
+        }
+
+        // One line at PREPARED with the native audio tracks in the player's own order (count, current, each one's language), so a retail log
+        // can be compared with the title's audio list in Plex. A failed read is logged with its code and changes nothing.
+        private static void LogTracks(Session s)
+        {
+            int count, current;
+            int rc = MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count);
+            if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count(audio) returned " + rc); return; }
+            int rcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current);
+            var languages = new StringBuilder();
+            for (int i = 0; i < count && i < 32; i++)
+            {
+                IntPtr code;
+                string lang = "?";
+                if (MediaPlayerNative.player_get_track_language_code(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, i, out code) == 0 && code != IntPtr.Zero)
+                {
+                    try { lang = ReadUtf8(code); } finally { Marshal.FreeHGlobal(code); }
+                }
+                if (i > 0) languages.Append(',');
+                languages.Append(i).Append('=').Append(lang);
+            }
+            PlxApp.Log("player: epoch " + s.Epoch + ": audio tracks count=" + count + " current=" + (rcCurrent == 0 ? current.ToString() : "rc " + rcCurrent)
+                + " [" + languages + "]");
         }
 
         private void DoPlay(Session s)
@@ -532,6 +630,8 @@ namespace PlxHost
         private void OnPrepared(Session s)
         {
             s.Prepared = true;
+            LogTracks(s);
+            ApplyHeldTrack(s); // a track asked for before PREPARED is selected before the library hears PREPARED
             int duration;
             int rc = MediaPlayerNative.player_get_duration(s.Handle, out duration);
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PREPARED, s.Epoch, rc == 0 ? duration : 0, 0);
@@ -583,6 +683,7 @@ namespace PlxHost
             s.Closing = true;
             s.Playing = false;
             AnswerSeeks(s); // every command id is answered before PLAYER_CLOSED (the caller posts it after this returns)
+            AnswerTracks(s);
             if (s.Handle == IntPtr.Zero) return;
             // A position read or the display bind may be inside the handle: wait for it, with a bound. A read that never returns leaks the handle
             // (the process exit is its teardown) rather than destroying it under the read.
