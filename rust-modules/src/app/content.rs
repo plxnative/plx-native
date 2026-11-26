@@ -2979,6 +2979,28 @@ mod failed_pick_tests {
         assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the refused retry leaves the pair held for Try again");
     }
 
+    /// **Try again plays the pick it was made for**, through the real retry on a session that HAS a request:
+    /// the retry stops the failed playback (`stop_for_replacement`, the same player visit) and resolves
+    /// again; the pick is still held for it afterwards, not dropped by the stop.
+    #[test]
+    fn the_real_retry_keeps_the_pick_it_was_made_for() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        plx_media::route::seed_request_for_test(&mut session, "m1");
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        commit_failed_pick(
+            &mut session,
+            &pick(),
+            |s| crate::app::playback::retry_failed_playback(
+                s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::UserRetry),
+            || {},
+        );
+        assert_eq!(plx_media::route::failed_pick(&session), Some(pick()),
+            "the retry stopped and resolved again with the viewer's pick, which the failure screen still reads");
+    }
+
     /// **The `content_command` arm itself**, not only the helper it calls: a pick committed on the failure
     /// screen reaches the session's held pick through the product runner (`execute_resource_command`), and
     /// a retry that cannot start (this session has no request to resolve again) leaves the pair held for

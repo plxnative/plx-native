@@ -2392,12 +2392,18 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession) {
 
 /// A replacement ends the old server resources but still needs its descriptor to retry, or has
 /// already published the next item's request. A plain Stop/Back never retains that descriptor.
+/// This is the one door that means "stop, SAME player visit", so it retains the failure screen's
+/// [`PlaybackSession::held_pick`] beside the request: the retry it serves plays the viewer's pick.
+/// A queue handoff ends the visit through its own fresh request ([`begin_track_selection`] with no
+/// retry).
 pub(crate) fn retaining_request_for_replacement(
     ps: &mut PlaybackSession, stop: impl FnOnce(&mut PlaybackSession),
 ) {
     let request = ps.request.clone();
+    let held_pick = ps.held_pick.clone();
     stop(ps);
     ps.request = request;
+    ps.held_pick = held_pick;
 }
 
 pub fn transcode_session(ps: &PlaybackSession) -> String {
