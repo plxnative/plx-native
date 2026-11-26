@@ -741,8 +741,8 @@ E10-E13 are later runs on the same emulator. Measured on the emulator only; no r
   Samsung; ES2 context, RGBA8888; `eglMakeCurrent` on the Rust render thread; `eglSwapInterval(0)`
   then 1; renderer "YaGL GLESv2"; first frame presented, `glGetError` 0. The emulator draws through
   YaGL over llvmpipe, so this is no GPU, compositor or frame-rate result.
-- E7. Keys. Injected with `ecp-cli` as evdev events: Right keycode 114, Left 113, Up 111, Down 116 and
-  Return 36, reported as Ecore key names. Every press changed the colour. Key to frame took 8-30 ms (key
+- E7. Keys. Injected with `ecp-cli keycode`, which takes evdev numbers (Right 106, Left 105, Up 103, Down 108,
+  Return 28); the app reported X keycodes (evdev + 8: Right 114, Left 113, Up 111, Down 116, Return 36) and Ecore key names. Every press changed the colour. Key to frame took 8-30 ms (key
   on the host thread, colour on the render thread): an emulator figure, not a retail one. Back, media
   keys, digits and the channel rocker were not exercised by this run (the colour button came later, E11), and a
   retail remote's codes are not measured.
@@ -2037,12 +2037,13 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
   clears to (0, 0, 0, 0), the UI around it intact (the player route clears that way whether or not a plane is bound, `app/run.rs`
   `fr.player`, and `PlayerScreen` has no ground: measured at `3d56d35b2` with no plane ever bound, the "Playback failed" read-out sits on
-  exact (0, 0, 0) black on the emulator, whose compositor had nothing under the window; a retail set's answer is H6's); (b) the video plane mixes STRAIGHT alpha (pixel-exact: a straight
+  exact (0, 0, 0) black on the emulator, whose compositor had nothing under the window; a retail set's answer is H6's); (b) the video plane mixes STRAIGHT alpha (measured with the window translucent, not re-taken for the opaque `has_video` window; pixel-exact: a straight
   (255, 255, 255, 128) strip is a 50 % veil over it) while window-over-window composition is premultiplied, which is webOS's split, so
   the existing straighten pass and `frame_clear_through` / `opaque_route` chain are the answer, not a new one (D6); (c) the player
   raises nothing at OnPause: `player_pause` there and `player_start` at OnResume resume in about 130 ms at the same position, the picture
-  back when the window is (about 2 s). The code: `ecore::WINDOW_ALPHA` = 1 at window creation (the platform's frames go over a video
-  plane; a window flag, so `Shell::opaque_route` stays a stated no-op); the straighten COPY program is its own source,
+  back when the window is (about 2 s). The code: the window was made translucent at creation (alpha 1), and since 2026-11-26 it is opaque and states
+  `has_video` instead (`ecore::WindowMode`; a translucent window shows the TV's home screen through its alpha-0 pixels on a
+  retail set, `docs/tizen.md`). The mode is a window flag either way, so `Shell::opaque_route` stays a stated no-op; the straighten COPY program is its own source,
   `fs_straighten_copy.frag`, with no preprocessor directive (the suspect above: the shared file's `#extension` lines in branches not
   taken), the fetch file keeps the two fetch variants, a test pins the arithmetic equal; `PlxPlayer.PauseForHome` / `ResumeAfterHome`
   (C#, video thread) pause what is playing at OnPause (the OnResume start was dropped in the PR B1 review round: the library owns the resume); an accepted CLOSE retires its epoch at the

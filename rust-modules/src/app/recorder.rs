@@ -2883,11 +2883,21 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        // A recorded shelf carries the library it was decided for: previously 0x7410_4747_8858_9e13.
+        // The What's on page: the Live TV screen's shape lists its Recent channels (moved from 0x7410_4747_8858_9e13).
+        // The Channels shelf keeps every channel reachable: the Live TV stack has three shelves (moved from 0x2808_f237_5764_68bd).
+        // The hero row (#1553) moved the census to 0xb0b8_437b_410f_aab3 from 0xb985_c4dc_d4a9_4e97: the screen
+        // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's hero
+        // overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). A recorded shelf then carries the
+        // library it was decided for (`record::SHAPE`), which moves it again from 0xb0b8_437b_410f_aab3.
         // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape and the
         // lift and glide springs to `TableView::MOTION_SHAPE` (only the screen half moves): previously
-        // 0x1026_c131_7573_ba73.
-        assert_eq!(state_fp(), 0x25c8_ffc9_391e_a2c3, "current V13 producer census");
+        // 0xd80b_045a_c4aa_fc9b.
+        assert_eq!(state_fp(), 0xd80b_045a_c4aa_fc9b, "current V13 producer census");
+        assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");
+        assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
+        assert_ne!(state_fp(), 0xc0b2_71bb_16d2_d02f, "the hero row's census before the Live TV pages joined it");
+        assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");
+        assert_ne!(state_fp(), 0x7410_4747_8858_9e13, "the census before the What's on page");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");

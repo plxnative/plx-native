@@ -377,6 +377,16 @@ pub enum Art<'a> {
         key: &'a str,
         res: (c_int, c_int),
     },
+    /// **A Live TV channel's tile**: its logo, contained on a flat plate with the channel number
+    /// at the corner (`channel_tile`). The logo is a transparent PNG, so it is asked for as one
+    /// ([`ArtRequest::png`]); `name` is what stands in the logo's place when the channel has none.
+    /// `sid` is the raw id of the server that holds the logo, as every variant carries.
+    Channel {
+        sid: u16,
+        logo: &'a str,
+        number: &'a str,
+        name: &'a str,
+    },
 }
 
 impl Art<'_> {
@@ -393,6 +403,7 @@ impl Art<'_> {
             Self::Still(Some(m)) => (m.owner, m.src, still_key(m), 1),
             Self::Thumb { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 2),
             Self::Person { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 3),
+            Self::Channel { sid, logo, .. } => (logo.as_ptr() as usize, *sid, *logo, 4),
             Self::Poster(None) | Self::Still(None) => return None,
         };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -911,7 +922,7 @@ pub fn art_uv(art: &Art, tw: f32, th: f32, r: Rect) -> [f32; 4] {
 pub fn art_crop(art: &Art) -> crate::Crop {
     match art {
         Art::Person { .. } => crate::Crop::Headshot,
-        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } => crate::Crop::Centre,
+        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } | Art::Channel { .. } => crate::Crop::Centre,
     }
 }
 
@@ -947,27 +958,41 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |(srv, path, w, h)| resolve_tex_wh_on(srv, path, w, h, 0));
+    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |q| resolve_tex_wh_on(q.srv, q.path, q.w, q.h, c_int::from(q.png)));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
-        if let Some((srv, path, w, h)) = card_art_request(art) {
-            crate::card_probe::art(srv, path, w, h, tex != 0);
+        if let Some(q) = card_art_request(art) {
+            crate::card_probe::art(q.srv, q.path, q.w, q.h, tex != 0);
         }
     }
     let shown = admission.as_ref().map_or(1.0, |scope| scope.arrival(tex != 0));
     ArtImage { tex, w, h, shown }
 }
 
-/// The `(server, path, width, height)` [`resolve_card_art`] asks the source for, for a screen that
-/// must WARM exactly that key (the Library's at-rest lookahead). [`resolve_card_art`] resolves
-/// through this, so the two cannot name different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves` pins it. `None` for an empty slot.
-pub fn card_art_request<'a>(art: &Art<'a>) -> Option<(u16, &'a str, c_int, c_int)> {
-    Some(match art {
-        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES.0, POSTER_RES.1) }
-        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES.0, STILL_RES.1) }
-        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, res.0, res.1),
-    })
+/// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, and whether
+/// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArtRequest<'a> {
+    pub srv: u16,
+    pub path: &'a str,
+    pub w: c_int,
+    pub h: c_int,
+    pub png: bool,
+}
+
+/// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
+/// Library's at-rest lookahead). [`resolve_card_art`] resolves through this, so the two cannot name
+/// different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves`
+/// pins it. `None` for an empty slot.
+pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
+    let (srv, path, (w, h), png) = match art {
+        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES, false) }
+        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES, false) }
+        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
+        Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
+    };
+    Some(ArtRequest { srv, path, w, h, png })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -1143,6 +1168,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             // it too.
             let _ = m;
         }
+        Art::Channel { sid, logo, number, name } => channel_tile::draw(p, frame, r, rad, f, &channel_tile::Face { sid, logo, number, name }, image),
         Art::Person { key, .. } => {
             let ArtImage { tex: t, w: tw, h: th, .. } = image;
             if t != 0 {
@@ -1330,6 +1356,9 @@ const VEIL_TEX_PX: usize = 64;
 /// identical on every platform this targets), written once on the 0→nonzero transition below and
 /// read everywhere else — the same shape the diagnostic counters already uses in this file.
 static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
+/// The same falloff mirrored to peak at the TOP-LEFT corner ([`versions_mark`]'s). `tex_uv` reads a
+/// reversed window as a zero-width crop, not a flip, so the mirror is its own texture.
+static VEIL_TEX_LEFT: AtomicU32 = AtomicU32::new(0);
 
 /// The corner **veil** texture: white RGB with a radial alpha falloff peaking at the TOP-RIGHT
 /// corner, generated once and reused at every size. It is a texture rather than geometry because the
@@ -1341,7 +1370,15 @@ static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
 /// gets the tile's own silhouette for free — the veil's other three corners live in fully
 /// transparent territory, so rounding them changes nothing.
 fn veil_tex() -> std::os::raw::c_uint {
-    let cached = VEIL_TEX.load(Relaxed);
+    veil_tex_at(&VEIL_TEX, false)
+}
+
+fn veil_tex_left() -> std::os::raw::c_uint {
+    veil_tex_at(&VEIL_TEX_LEFT, true)
+}
+
+fn veil_tex_at(slot: &AtomicU32, mirrored: bool) -> std::os::raw::c_uint {
+    let cached = slot.load(Relaxed);
     if cached != 0 {
         return cached;
     }
@@ -1350,7 +1387,7 @@ fn veil_tex() -> std::os::raw::c_uint {
     for y in 0..n {
         for x in 0..n {
             // distance from the top-right corner, in units of the box's width
-            let dx = (n - 1 - x) as f32 / (n - 1) as f32;
+            let dx = (if mirrored { x } else { n - 1 - x }) as f32 / (n - 1) as f32;
             let dy = y as f32 / (n - 1) as f32;
             let a = (1.0 - (dx * dx + dy * dy).sqrt() / VEIL_EXTENT).clamp(0.0, 1.0);
             let i = (y * n + x) * 4;
@@ -1361,7 +1398,7 @@ fn veil_tex() -> std::os::raw::c_uint {
         }
     }
     let tex = plx_gfx::gfx::upload_rgba(0, n as std::os::raw::c_int, n as std::os::raw::c_int, px.as_ptr());
-    VEIL_TEX.store(tex, Relaxed);
+    slot.store(tex, Relaxed);
     tex
 }
 
@@ -1390,10 +1427,7 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         rad,
         theme::TILE_MARK_VEIL,
     );
-    // Quantized to 4px so the focus pop reuses a handful of cached masks instead of rasterizing +
-    // uploading one per rounded pixel, and proportional to the DRAWN tile so the mark rides the pop.
-    let d = ((card.w * TICK_RATIO) / 4.0).round() * 4.0; // 24px on a 250 card (26 → nearest rung)
-    let ins = card.w * TICK_INSET;
+    let (d, ins) = tick_box(card.w);
     let tick = Rect::new(card.x + card.w - ins - d, card.y + ins, d, d);
     p.shadow(
         tick,
@@ -1403,6 +1437,65 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         theme::TILE_MARK_SHADOW,
     );
     crate::icons::draw(p, icon, tick, theme::TILE_MARK_INK);
+}
+
+/// The tick's box and corner inset for a tile `w` wide. Quantized to 4px so the focus pop reuses a
+/// handful of cached masks instead of rasterizing + uploading one per rounded pixel, and
+/// proportional to the DRAWN tile so the mark rides the pop. 24px / 12px on a 250 card (26 → the
+/// nearest rung).
+fn tick_box(w: f32) -> (f32, f32) {
+    (((w * TICK_RATIO) / 4.0).round() * 4.0, w * TICK_INSET)
+}
+
+/// The least version count that earns [`versions_mark`]: one file is the normal case and says nothing.
+pub const VERSIONS_MARK_MIN: usize = 2;
+
+/// **The versions mark** on an episode still (VER-7 D3 E): the overlapping-sheets glyph and the file
+/// count as a numeral, `⧉ 2`, at the TOP-LEFT of the still, where the official app puts it. It is
+/// the watched tick's own object, mirrored: the same veil texture (flipped to the left corner), the
+/// same inset, glyph box and soft shadow ([`tick_box`]), the same ink, and a numeral in the caption
+/// face the still's footer is set in. No new colour or token.
+///
+/// `count` is the episode's number of files; under [`VERSIONS_MARK_MIN`] nothing is drawn. `card` is
+/// the rect actually drawn (scaled while popped) and `rad` its corner radius. `unit_w` is the width
+/// the mark's ratios are taken on: a 250 tile for a poster, so a wider still carries a mark of the
+/// same physical size (`CARD_W`, scaled with the pop) instead of a 44px glyph. Returns whether it
+/// drew.
+pub fn versions_mark(
+    p: Painter,
+    card: Rect,
+    rad: f32,
+    unit_w: f32,
+    count: usize,
+    measure: &dyn plx_machine::machine::Measure,
+) -> bool {
+    if count < VERSIONS_MARK_MIN {
+        return false;
+    }
+    let v = unit_w * VEIL_RATIO;
+    // The tick's veil mirrored, its peak at the TOP-LEFT corner. A recording painter submits
+    // nothing, so it must not upload the texture either (no GL context).
+    let veil = if p.is_recording() { 0 } else { veil_tex_left() };
+    p.tex(
+        veil,
+        Rect::new(card.x, card.y, v, v),
+        rad,
+        theme::TILE_MARK_VEIL,
+    );
+    let (d, ins) = tick_box(unit_w);
+    let glyph = Rect::new(card.x + ins, card.y + ins, d, d);
+    let sz = theme::size::CAPTION;
+    let text = count.to_string();
+    let (run, w) = measure.fit_line_measured(&text, v, sz, false);
+    let gap = theme::space::XS * 0.5;
+    // One shadow under glyph and numeral together, the tick's own (`corner_mark`).
+    let pill = Rect::new(glyph.x, glyph.y, d + gap + w, d);
+    p.shadow(pill, d * 0.5, d * TICK_SHADOW_BLUR, d * TICK_SHADOW_DY, theme::TILE_MARK_SHADOW);
+    crate::icons::draw(p, crate::icons::Icon::Collection, glyph, theme::TILE_MARK_INK);
+    let (cap_t, cap_b) = plx_gfx::text::text_cap_band(sz, 0);
+    let y = glyph.y + d * 0.5 - (cap_t + cap_b) * 0.5;
+    p.text(run.as_ptr(), glyph.x + d + gap, y, sz, theme::TILE_MARK_INK, 0, 0);
+    true
 }
 
 /// Person-glyph box as a fraction of a headshot tile — the [`Art::Person`] fallback's one ratio.
@@ -4352,6 +4445,10 @@ pub fn art_wash_split(r: Rect, art: Rect) -> Option<(Rect, [Option<Rect>; 4])> {
         ],
     ))
 }
+
+/// A Live TV channel's tile face (a plate, a contained logo, the number): [`Art::Channel`]'s draw.
+#[path = "widgets_channel_tile.rs"]
+pub mod channel_tile;
 
 // ---- PageGround: the item-keyed ground a BROWSING screen stands on. ----
 
@@ -9893,4 +9990,17 @@ fn button_progress_ring_uses_bounded_quadrants_and_leaves_the_default_face_uncha
     let plain = crate::draw_census::capture(|| make().draw(&Env::inert(), Painter::recording()));
     let zero = crate::draw_census::capture(|| make().progress_ring(0.0).draw(&Env::inert(), Painter::recording()));
     assert_eq!(plain, zero, "zero progress adds no geometry or alternate resting face");
+}
+
+/// A channel plate asks for its logo as a PNG (the transparent ground is the mark's), a poster for a JPEG.
+#[cfg(test)]
+#[test]
+fn a_channel_logo_is_requested_as_a_png_and_every_other_card_art_as_a_jpeg() {
+    let logo = Art::Channel { sid: 3, logo: "/logos/7.png", number: "7", name: "Seven" };
+    let asked = card_art_request(&logo).expect("a logo is asked for");
+    assert_eq!((asked.srv, asked.path, asked.png), (3, "/logos/7.png", true));
+    assert_eq!((asked.w, asked.h), channel_tile::LOGO_RES);
+    let thumb = card_art_request(&Art::Thumb { sid: 3, key: "/t/1", res: (10, 10) }).unwrap();
+    assert!(!thumb.png);
+    assert_eq!(card_art_request(&Art::Poster(None)), None);
 }
