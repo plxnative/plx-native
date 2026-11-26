@@ -1,4 +1,4 @@
-//! **The remembered version** (`version_choices`, the memory door's third tenant): what Resume and
+//! **The remembered version** (`version_choices`, a tenant of the memory door): what Resume and
 //! Play start when they name no version, what a play that names one leaves behind, and what the
 //! Detail page's facts line describes. Per ITEM and per profile, kept across a reload, and a choice
 //! whose media is gone from the item plays exactly what no choice would.

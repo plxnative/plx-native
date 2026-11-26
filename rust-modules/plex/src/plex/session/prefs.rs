@@ -387,8 +387,8 @@ pub struct Preferences {
     /// media still exists on the item, else the server's first file as before), and by the Detail
     /// page's facts line, which describes the file Play takes. Per ITEM, never per show.
     ///
-    /// The third tenant of the memory door (`media::route::{remember, recall}`), account-bound like
-    /// the other two (every record carries the account stamp; sign-out drops the whole key,
+    /// A tenant of the memory door (`media::route::{remember, recall}`), account-bound like
+    /// the others (every record carries the account stamp; sign-out drops the whole key,
     /// `storage::state::ACCOUNT_BOUND_PREFERENCES`). Not count-capped: bounded by
     /// [`VersionChoiceEntry`]'s byte budget ([`MemoryEntry::BUDGET`]), which evicts the oldest entry
     /// of the heaviest profile, and by the document guard (`shed_memory`).
@@ -1161,8 +1161,10 @@ pub(super) fn evict_by_rule<R: EvictionRecord>(
 ///
 /// `still_over(freed)` is asked before every step with the logical bytes this call has taken out of
 /// `preferences` so far, and the call stops as soon as it says no. Returns the lists that lost
-/// entries and how many each lost. A list that empties leaves the payload (all three skip
-/// themselves while empty), and a payload that does not hold a list as its typed form leaves it
+/// entries and how many each lost. The lists it sheds are `track_memory`, `subtitle_offsets`,
+/// `version_choices` and `library_sorts`, in that order; `recent_channels` is NOT shed (its own cap,
+/// [`MAX_RECENT`] per profile, bounds it). A list that empties leaves the payload (each skips
+/// itself while empty), and a payload that does not hold a list as its typed form leaves it
 /// alone: shedding is for data this build wrote, never a reason to rewrite what it cannot read.
 pub(super) fn shed_memory(
     preferences: &mut serde_json::Value,
