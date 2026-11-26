@@ -1930,6 +1930,22 @@ impl Detail {
         !self.part.is_empty()
     }
 
+    /// **Whether this page holds the item `(sid, rk)`** for a pre-play pick, and as what: the page IS
+    /// that item and carries a file of its own (its own `kind` and `show_rk`), or it is a show page whose
+    /// backfilled episode is `rk` ([`Self::play_episode_streaming`]; an `"episode"` of this show). The ONE
+    /// predicate `preplay_source` (what the picker shows) and `pick_step`'s `Chose` (where a pick may
+    /// land) both ask.
+    pub fn held_item(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<(&str, &str)> {
+        if self.sid != sid {
+            return None;
+        }
+        if plx_plex::plex::same_item((self.sid, &self.rk), (sid, rk)) && self.has_own_file() {
+            return Some((self.kind.as_str(), self.show_rk.as_str()));
+        }
+        self.play_episode_streaming(rk)?;
+        Some(("episode", self.rk.as_str()))
+    }
+
     /// The extras row whose rating key is `rk`, if this detail carries it.
     pub fn extra(&self, rk: &str) -> Option<&Extra> {
         self.extras.iter().find(|e| e.rk == rk)
@@ -3110,12 +3126,7 @@ fn preplay_source<'a>(
         return None;
     }
     let d = current(state).filter(|d| d.sid == sid && !d.audio.is_empty())?;
-    let (kind, show_rk) = if plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() {
-        (d.kind.as_str(), d.show_rk.as_str())
-    } else {
-        d.play_episode_streaming(rk)?;
-        ("episode", d.rk.as_str())
-    };
+    let (kind, show_rk) = d.held_item(sid, rk)?;
     // the file the page's streams describe: the page's own, or the backfilled episode's
     let default_part = d.streams_part();
     let chosen = version.and_then(|id| d.version_parts.iter().find(|p| p.id == id));
@@ -3177,11 +3188,7 @@ fn pick_step(state: &mut MetadataState, event: PickEvent<'_>) -> bool {
                 return false;
             }
             // Lands only when the loaded page holds the item ([`preplay_source`]'s two shapes).
-            let holds = current(state).is_some_and(|d| {
-                d.sid == sid
-                    && (plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk)) && d.has_own_file() || d.play_episode_streaming(rk).is_some())
-            });
-            if !holds {
+            if !current(state).is_some_and(|d| d.held_item(sid, rk).is_some()) {
                 return false;
             }
             let file = |s: &plx_plex::plex::ServerId, r: &String, p: &PreplayPick| {
