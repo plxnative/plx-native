@@ -391,11 +391,15 @@ fn poll_player_release(app: &mut App) {
 /// The clock reading ([`super::bridge::Bridge::publish_clock`], from [`clock::reading`], this call
 /// being that door's one caller too) goes out the same way, once: the `AppViews::wall` and the Live TV
 /// store's `now` are both taken from it, and it is nothing under a replay.
+///
+/// Returns whether the bar's clock face changed ([`super::bridge::Bridge::publish_clock`]): a new
+/// minute owes the settled screen one frame, which the caller asks for as present damage, the way a
+/// player-presentation change does. The same minute is `false`, so nothing repaints per frame.
 fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route::PlaybackSession,
-    was_player: bool, viewer_paused: Option<bool>) {
+    was_player: bool, viewer_paused: Option<bool>) -> bool {
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
-    bridge.publish_clock(clock::reading());
+    bridge.publish_clock(clock::reading())
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).
@@ -816,8 +820,11 @@ fn publish_product_frame(app: &mut App, was_player: bool) {
     if app.runtime.bridge(&mut app.bridge).publish_player_presentation(&app.player.session) {
         app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
     }
-    publish_frame(&mut app.runtime.bridge(&mut app.bridge), &app.player.session, was_player,
-        app.adapters.player.backend_viewer_paused());
+    if publish_frame(&mut app.runtime.bridge(&mut app.bridge), &app.player.session, was_player,
+        app.adapters.player.backend_viewer_paused()) {
+        // The bar's clock reached a new minute: one frame to show it, however still the screen is.
+        app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
+    }
     publish_player_model(app);
 }
 
@@ -3469,7 +3476,7 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                             };
                             plx_gfx::gfx::draw_number(
                                 *fps_shown,
-                                plx_base::surface::LOGICAL_W - 70.0,
+                                fps_counter_right_x(bridge.top_bar_clock_w()),
                                 64.0,
                                 46.0,
                                 fps_col.as_ptr(),
@@ -3485,6 +3492,16 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                 });
             });
     (vx, vy, vw, vh)
+}
+
+/// **Where the dev fps counter's `draw_number` anchor stands.** The counter (a `devtools` build only;
+/// a release build draws none) has always stood in the bar's band with its right digit on the right
+/// margin, which is where the bar's clock now ends. So it steps LEFT of the clock: by the clock's own
+/// width and one [`plx_ui::theme::space::SM`] of air, the rung the bar keeps between its own parts, and
+/// stays where it was when the bar has no clock to show (no zone, or no room beside the strip).
+#[cfg(feature = "devtools")]
+fn fps_counter_right_x(clock_w: Option<f32>) -> f32 {
+    plx_base::surface::LOGICAL_W - 70.0 - clock_w.map_or(0.0, |w| w + plx_ui::theme::space::SM)
 }
 
 /// **A screen visit ended: report how the app felt on it (`route.left`) and start the next one
@@ -6028,6 +6045,50 @@ pub(in crate::app) mod lifecycle_regression_tests {
         let mut fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
         let _scope = plx_base::task::FrameScope::enter();
         assert!(unsafe { ingress_token(&mut app, &mut fr, "hang-raw:1") });
+    }
+
+    /// **A settled screen owes the bar's clock one frame a minute, and no more.** The loop's
+    /// publication phase turns a new minute's face into present damage (the way a player-presentation
+    /// change does), and a frame published again within the minute adds none: the idle gate keeps its
+    /// whole saving, with no polling and no per-frame invalidation.
+    #[test]
+    fn a_new_minute_owes_the_settled_screen_one_frame_and_the_same_minute_none() {
+        const AT: i64 = 1_795_649_400;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        clock::pin_for_test(AT * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        let first = app.pages.present.damage_epoch();
+        for ms in [0, 17, 1_000, 59_999] {
+            clock::pin_for_test(AT * 1_000 + ms, 3_600);
+            publish_product_frame(&mut app, false);
+            assert_eq!(app.pages.present.damage_epoch(), first, "{ms} ms into the same minute: no damage");
+        }
+        clock::pin_for_test((AT + 60) * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        let next = app.pages.present.damage_epoch();
+        assert!(next > first, "the minute edge: one frame owed");
+        publish_product_frame(&mut app, false);
+        assert_eq!(app.pages.present.damage_epoch(), next, "and published again within the minute, none");
+        clock::unpin_for_test();
+    }
+
+    /// **The dev fps counter and the bar's clock do not collide.** The counter's right digit ends
+    /// where the clock does (the margin, 1824); with a clock on the bar it steps left of the clock by
+    /// at least the bar's own 16 px rung, whatever the face's width, and with none it has not moved.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn the_dev_fps_counter_steps_left_of_the_bars_clock() {
+        // `draw_digit` lays its digits `1.55 * s` apart, the rightmost starting `1.55 * s` left of the anchor
+        // and `s` wide, so its right edge is `0.55 * s` left of it (s = 46 as `draw` passes).
+        let digit_right = |right_x: f32| right_x - 0.55 * 46.0;
+        assert!((digit_right(fps_counter_right_x(None)) - plx_ui::widgets::TOP_BAR_CLOCK_RIGHT).abs() < 1.0,
+            "no clock: the counter is where it always was, on the margin");
+        for w in [62.0, 76.0, 130.0] {
+            let left = plx_ui::widgets::top_bar_clock_frame(w).x;
+            let right = digit_right(fps_counter_right_x(Some(w)));
+            assert!(right <= left - plx_ui::theme::space::SM + 1.0, "{w}: the counter ends at {right}, the clock begins at {left}");
+        }
     }
 
     /// **`state:<nonce>` notes no damage and is not recorded** (the a11y-ids plan, D7): the token is

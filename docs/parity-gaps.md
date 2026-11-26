@@ -584,6 +584,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
 
 - **No live clock** — `polish` / `small`
   The official home shows the current time top-right ('6:39 PM'). Our top chrome carries only the profile chip and the tab track; the FPS counter occupies that corner instead.
+  **Fixed:** the shared top bar ends in a wall-clock face on its right margin (`widgets::draw_top_bar_clock`, worded by `ChromeSnapshot::set_clock`). It is left out when no zone offset is readable, under a replay or `stillclock`, or when the strip's track leaves it no room. The dev fps counter steps left of it.
   *Where:* rust-modules/src/ui/fmt.rs (a time-of-day formatter over libc localtime_r) + rust-modules/src/ui/home.rs home_draw (and ui/library.rs for parity). No endpoint.
   *Verified:* Confirmed: home_draw (home.rs:818-830) is Backdrop/Hero/Grid + draw_chip + draw_tab_row and nothing else on the top band; library.rs:894 draws the same row. fmt.rs:40 clock(ms) is the PLAYBACK clock ('1:23:45'/'3:45'), used by chapters_panel.rs:151 and player_hud.rs:29. No wall-clock read exists anywhere in rust-modules/src: no localtime/strftime/gmtime/SystemTime/UNIX_EPOCH hits; the only time reads are monotonic Instant (capture.rs, task.rs:150, player/threads.rs:58) and SDL_GetTicks. Confirming the auditor's corner note: app.rs:2462-2463 draws the dev FPS number at SCR_W-70, y=64 on every n
 

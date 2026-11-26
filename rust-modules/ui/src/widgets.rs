@@ -3194,12 +3194,26 @@ pub struct ProfileChipRead<'a> {
     pub name_w: f32,
 }
 
+/// The bar's clock as the application captured it: the wall-clock face already worded in the
+/// television's clock style (`fmt::clock_face`) and its measured width. Rendering this view reads
+/// no clock and formats nothing; the owner re-captures it when the minute changes
+/// (`app::chrome::ChromeSnapshot::set_clock`).
+#[derive(Clone, Copy)]
+pub struct ClockRead<'a> {
+    pub text: &'a CStr,
+    pub w: f32,
+}
+
 /// The borrowed shared-chrome publication used by both its normal paint and a scrim lift.
+///
+/// `clock` is `None` when the app has no wall time to show (no zone offset, a replay, the
+/// screenshot pipeline's pinned clocks) or when the strip leaves it no room ([`top_bar_clock_fits`]).
 #[derive(Clone, Copy)]
 pub struct ChromeRead<'a> {
     pub profile: ProfileChipRead<'a>,
     pub labels: TabLabels<'a>,
     pub chip_expand: f32,
+    pub clock: Option<ClockRead<'a>>,
 }
 
 /// Measure and own the chip's two glyph runs when the application's captured profile changes, **or
@@ -7095,6 +7109,46 @@ const TAB_GAP: f32 = 16.0;
 /// the material.
 const TAB_SIDE_CLEAR: f32 = CHIP_FRAME.x + CHIP_D + theme::space::MD;
 const TAB_VIEW_MAX: f32 = crate::consts::SCR_W - 2.0 * (TAB_SIDE_CLEAR + TAB_TRACK_PAD);
+
+/// **The bar's clock: a status, not a control** (Live TV handoff SPEC-1 item 2, "the clock goes in
+/// the TopBar on every screen"). Its right edge stands on the safe frame's right margin,
+/// [`crate::consts::MARGIN_X`] in from the screen's edge: the chip's mirror at the far end of the bar.
+pub const TOP_BAR_CLOCK_RIGHT: f32 = crate::consts::SCR_W - crate::consts::MARGIN_X;
+/// The clock's text size: BODY, regular, in [`theme::TEXT_SECONDARY`] (see [`draw_top_bar_clock`]).
+pub const TOP_BAR_CLOCK_SIZE: c_int = theme::size::BODY;
+
+/// **The clock's layout box** for a face `w` wide: its right edge on [`TOP_BAR_CLOCK_RIGHT`] and its
+/// height the bar's own pill row ([`TOP_BAR_Y`], [`TAB_PILL_H`]), so the face is centred on the bar
+/// the way a pill's label is (by the font's cap band, `Label`'s `VAlign::Middle`).
+pub fn top_bar_clock_frame(w: f32) -> Rect {
+    Rect::new(TOP_BAR_CLOCK_RIGHT - w, TOP_BAR_Y, w, TAB_PILL_H)
+}
+
+/// **Does a face `clock_w` wide clear the strip's track?** The track is centred on the screen
+/// ([`tab_track_w`]), so its right edge is `(SCR_W + track_w) / 2`; the clock fits when its left
+/// edge stands [`BAND_AIR`] or more beyond it. Mirrors [`chip_name_budget`] at the other end of the
+/// bar: the strip is never capped for the clock's sake, the bar leaves the clock out when a track
+/// grown to [`TAB_VIEW_MAX`] (right edge `SCR_W - TAB_SIDE_CLEAR`, 92 px short of the margin) leaves
+/// it no room. A face is never elided: a clipped time reads as a wrong one.
+pub fn top_bar_clock_fits(track_w: f32, clock_w: f32) -> bool {
+    let track_right = (crate::consts::SCR_W + track_w) * 0.5;
+    track_right + BAND_AIR <= TOP_BAR_CLOCK_RIGHT - clock_w
+}
+
+/// **Draw the bar's clock** on `p` (the bar's own painter, so the page's tuck, fade and lift carry
+/// it): BODY 28 regular in [`theme::TEXT_SECONDARY`], right-aligned on [`TOP_BAR_CLOCK_RIGHT`],
+/// centred on the bar, with the caption's soft text shadow (a 1 px offset copy: the glyph path has
+/// no blur). Tabular figures are the face's own (every digit shares one advance, as
+/// [`FIELD_KEY_W`] relies on), so a minute changing never moves the right-aligned run's left edge.
+/// Never focusable and never registers a stop.
+pub fn draw_top_bar_clock(p: Painter, clock: ClockRead<'_>) {
+    let frame = top_bar_clock_frame(clock.w);
+    let shadow = Rect::new(frame.x, frame.y + crate::caption_policy::CAPTION_SHADOW_DY, frame.w, frame.h);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, crate::caption_policy::CAPTION_SHADOW)
+        .h(HAlign::Right)
+        .draw(p, shadow);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, theme::TEXT_SECONDARY).h(HAlign::Right).draw(p, frame);
+}
 /// **The shared top bar's outermost drawn chrome, for the overscan audit**
 /// ([`crate::consts::SAFE`]) — the one band Home, the Library and Search all wear, i.e. the
 /// "main page" LG's checklist item #2 is about.
@@ -9819,6 +9873,10 @@ mod test_support;
 #[cfg(test)]
 #[path = "widgets_tab_strip_geometry_tests.rs"]
 mod tab_strip_geometry_tests;
+
+#[cfg(test)]
+#[path = "widgets_top_bar_clock_tests.rs"]
+mod top_bar_clock_tests;
 
 #[cfg(test)]
 #[path = "widgets_control_face_tests.rs"]
