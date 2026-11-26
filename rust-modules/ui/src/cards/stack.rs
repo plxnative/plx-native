@@ -247,8 +247,9 @@ pub trait StackPage<H: Host> {
     fn reveal_margin(&self, _k: Self::Key) -> f32 {
         MARGIN_Y
     }
-    /// Air the page keeps under a shelf's block, counted in the block's height (the scroll reveals
-    /// it with the block): a page whose shelves are stacked with the label band's air under each.
+    /// Air the page keeps under a shelf's block, counted in the block's height (by default the
+    /// scroll reveals it with the block; a page whose foot is the next shelf's heading room says
+    /// [`reveal_foot`](Self::reveal_foot) `false`, and the scroll shows the tiles and open band only): a page whose shelves are stacked with the label band's air under each.
     /// Shelves are adjacent sections, never a `Custom` gap between two of them: the shelf above
     /// reads the heading of the one below as the thing under its caption
     /// ([`SectionFrame::below_rise`]), and a gap section hides it. A page that keeps the last
@@ -265,6 +266,14 @@ pub trait StackPage<H: Host> {
     /// (a constant air). Both must keep at least [`UNDER_LABEL_AIR`] under a shelf with another below it.
     fn shelf_foot_open(&self, cx: &Cx<'_, H>, k: Self::Key) -> f32 {
         self.shelf_foot(cx, k)
+    }
+    /// Whether the scroll that shows a focused shelf reveals its [`shelf_foot`](Self::shelf_foot) with the block
+    /// (the default: the focused shelf's foot is part of the block the scroll brings into view) or only the tiles and the open label band. A page whose foot is the room of the heading of the
+    /// shelf BELOW (the air between two stacked shelves, which that shelf's own reveal brings on) says `false`:
+    /// the gap under the focused shelf is not something that has to be visible, and revealing it scrolls a page
+    /// whose tiles already fit. The page still ends where its content does ([`Stack::max_scroll`]).
+    fn reveal_foot(&self, _k: Self::Key) -> bool {
+        true
     }
     /// Whether a shelf's group extent spans the page's width (the default) or is the shelf's own
     /// head tile.
@@ -937,6 +946,13 @@ impl<K: Copy + Eq> Stack<K> {
         let j = p.reveal_with(self.specs[i].key).and_then(|k| self.index(k)).unwrap_or(i);
         let h = |n: usize| self.settled_height(p, cx, n, i);
         let (top, height) = ((0..j).map(h).sum::<f32>(), h(j));
+        // a page that keeps the air under a shelf for the shelf below leaves it out of what is revealed
+        let height = match self.specs[j].kind {
+            Kind::Shelf { .. } if !p.reveal_foot(self.specs[j].key) && self.len_of(p, cx, j) > 0 => {
+                height - Self::foot(p, cx, self.specs[j].key, (j == i) as i32 as f32)
+            }
+            _ => height,
+        };
         let max = self.max_with_focus(p, cx, i);
         let hi = if matches!(self.specs[j].kind, Kind::Shelf { .. }) { top - p.reveal_margin(self.specs[j].key) } else { top };
         // a page that sets the target itself reveals from where it is headed, not where it is

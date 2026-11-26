@@ -231,7 +231,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (2, 0), "{case}");
                 assert_eq!(screen.page.regions().content, &[NOW_GROUP], "{case}");
                 assert_eq!(screen.page.mode, Mode::NowOnly, "{case}");
-                assert_eq!(screen.page.status, LiveTvStatus::Ready, "{case}");
+                assert!(!screen.page.mode.reads_out(), "{case}: rows, not a read-out");
             }
             (false, 2) => {
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 2), "{case}: the lineup shelf");
@@ -247,8 +247,8 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
             _ => {
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 0), "{case}: no shelf at all");
                 assert!(screen.page.regions().content.is_empty(), "{case}");
-                assert_eq!(screen.page.mode, Mode::Bare, "{case}");
-                assert_eq!(screen.page.status, LiveTvStatus::Empty, "{case}: the store's empty read-out");
+                assert_eq!(screen.page.mode, Mode::Empty, "{case}");
+                assert!(screen.page.mode.reads_out(), "{case}: the store's empty read-out");
                 assert_eq!(screen.page.status_overlay(0).caption, plx_os::i18n::msg::browse_livetv_empty_c());
             }
         }
@@ -371,10 +371,15 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
     assert!(screen.page.airings.is_empty(), "the store revision is read on Tick");
     assert!(screen.page.recent.is_empty(), "a page with nothing on has no Recent row of lineup channels");
     assert_eq!(screen.page.mode, Mode::ChannelsOnly, "it shows the lineup as its Channels shelf");
+    // a store that says Ready with no channel is the empty read-out too (the page never shows a bare Ready)
+    step(&mut screen, LiveTvView::for_test(LiveTvStatus::Ready, &[], &[], 150), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::Empty);
     for status in [LiveTvStatus::Loading, LiveTvStatus::Empty, LiveTvStatus::Failed] {
         let view = LiveTvView::for_test(status, &[], &[], 100 + status as u32);
         step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
-        assert_eq!(screen.page.status, status);
+        let mode = match status { LiveTvStatus::Loading => Mode::Loading, LiveTvStatus::Empty => Mode::Empty, _ => Mode::Failed };
+        assert_eq!(screen.page.mode, mode, "{status:?}");
+        assert!(screen.page.mode.reads_out() && screen.page.mode.rows().len() == usize::from(mode == Mode::Failed), "{status:?}: a read-out, with no row but the retry");
         let overlay = screen.page.status_overlay(0);
         assert_eq!(overlay.kind, match status { LiveTvStatus::Loading => StatusKind::Working, LiveTvStatus::Empty => StatusKind::Empty, _ => StatusKind::Failed });
         if status == LiveTvStatus::Empty { assert_eq!(overlay.caption, plx_os::i18n::msg::browse_livetv_empty_c()); }
@@ -535,4 +540,52 @@ fn the_channels_shelf_stands_under_on_now_and_moves_nothing_above_it() {
     assert_eq!(poster.y, 544.0);
     assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h));
     assert!(tile.y > poster.y + poster.h, "the Channels shelf is under On now's posters");
+}
+
+/// The page with `focus` held for a second: the scroll it comes to rest at, and where the cards of Recent, On
+/// now and Channels rest (`rect`, as drawn: the focused card's carries its focus pop).
+fn rest_with_focus(screen: &mut LiveTvScreen, view: LiveTvView<'_>, focus: u32) -> (f32, Rect, Rect, Rect) {
+    for frame in 1..=90 {
+        step(screen, view, Some(focus), &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    let context = cx(view, Some(focus));
+    let at = |elem: u32| Focusable::<TestHost>::place(screen, &elem, &context, At::Drawn).expect("the card is placed").rect;
+    (screen.stack.scroll(), at(FIRST_CARD_ELEM), at(FIRST_CARD_ELEM + 1), at(FIRST_CARD_ELEM + 4))
+}
+
+/// **Focusing On now's poster does not scroll the page when the Channels shelf stands under it.** The reveal
+/// brings the focused shelf's tiles and open label band onto the screen; the air the page keeps under the shelf
+/// for the shelf below's heading is that shelf's own, not part of what has to be visible. So a Down onto On now
+/// leaves Recent's plates where they were (300), and an Up to Recent leaves the page at scroll 0.
+#[test]
+fn focusing_on_now_with_channels_below_does_not_scroll_the_page() {
+    let (mut store, mut screen) = seeded();
+    let recent = [store.view().channels[0].clone()];
+    store.install_for_test(store.view().channels.to_vec());
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::RecentNowChannels);
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!(scroll, 0.0, "Recent's plate focused: the page at rest");
+    // Down onto On now: nothing scrolls, so the plates stay at 300
+    let (scroll, plate, poster, _) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    assert_eq!((scroll, plate.y), (0.0, 300.0), "On now's poster focused: the page does not scroll (poster at {})", poster.y);
+    // and an Up to Recent leaves it where it was
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!(scroll, 0.0, "Up to Recent: the page stays at rest");
+    // Down to On now again, then onto Channels: the page scrolls to show the tile, which ends within the safe frame
+    rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    let (scroll, _, _, tile) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 4);
+    assert!(scroll > 0.0, "the Channels tile has to be brought up");
+    assert!(tile.y + tile.h <= SCR_H - MARGIN_Y, "the focused Channels tile ends at {}", tile.y + tile.h);
+    // Up to On now from there: the shared minimal reveal brings the poster's block to the page's top margin
+    // (it is above the screen), the same as every stacked page; BACK or an unfocused page is what homes it
+    let (back, _, poster, _) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    assert!((back - 442.0).abs() < 0.1, "On now's heading ends at the top margin 54 (the block's top, 496, is brought to the margin): scroll {back} from {scroll}");
+    assert!(poster.y >= MARGIN_Y && poster.y + poster.h <= SCR_H - MARGIN_Y, "On now's poster is in the safe frame: {}", poster.y);
+    // and the page comes home with focus gone
+    for frame in 1..=90 {
+        step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: 2_000 + frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll().abs() < 0.01, "unfocused, the page is home: {}", screen.stack.scroll());
 }

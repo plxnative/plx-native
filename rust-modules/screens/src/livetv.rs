@@ -72,13 +72,15 @@ impl Sec {
 
 /// **Which rows the page shows**, decided once per store revision ([`Page::sync`], the one place the store's
 /// status is read) and matched everywhere after: the sections, the focus regions, the air under each shelf,
-/// the cards and the headings. A row has its own [`Sec`], and so its own shelf body and row style, in every
+/// the cards, the headings and the status read-out. The page keeps no status beside it. A row has its own [`Sec`], and so its own shelf body and row style, in every
 /// mode; the modes only say which of the rows are present. The rows come top to bottom: Recent, On now,
 /// Channels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    /// Nothing to list: the store is loading, or its lineup is empty (the status read-out speaks).
-    Bare,
+    /// The store is loading: no row, the working read-out.
+    Loading,
+    /// The lineup is empty: no row, the store's empty read-out.
+    Empty,
     /// The store failed: the retry read-out.
     Failed,
     /// Recent tiles over the programmes on now.
@@ -108,14 +110,15 @@ impl Mode {
             (false, true, true) => Mode::NowChannels,
             (false, true, false) => Mode::NowOnly,
             (false, false, true) => Mode::ChannelsOnly,
-            (false, false, false) => Mode::Bare,
+            // every channel of a lineup is on now, in Recent or in Channels: no channel, no row
+            (false, false, false) => Mode::Empty,
         }
     }
 
     /// The sections that take room, top to bottom.
     fn rows(self) -> &'static [Sec] {
         match self {
-            Mode::Bare => &[],
+            Mode::Loading | Mode::Empty => &[],
             Mode::Failed => &[Sec::Status],
             Mode::RecentNow => &[Sec::Recent, Sec::Now],
             Mode::RecentOnly => &[Sec::Recent],
@@ -129,6 +132,11 @@ impl Mode {
 
     fn has(self, k: Sec) -> bool {
         self.rows().contains(&k)
+    }
+
+    /// Whether the page is a status read-out (the working, empty and failed ones) rather than rows.
+    fn reads_out(self) -> bool {
+        matches!(self, Mode::Loading | Mode::Empty | Mode::Failed)
     }
 
     /// The first row: where the arrival is seated.
@@ -154,8 +162,7 @@ struct Page {
     /// The lineup channels with no programme on that are not in Recent, as indexes into the lineup, in the
     /// lineup's order: the Channels shelf, which keeps a channel without guide data reachable.
     rest: Vec<usize>,
-    status: LiveTvStatus,
-    /// The rows the page shows ([`Page::sync`] decides it from `status` and the three lists).
+    /// The rows the page shows ([`Page::sync`] decides it from the store's status and the three lists).
     mode: Mode,
     /// The focus groups of the rows, top to bottom, from [`Mode::rows`].
     content: Vec<GroupId>,
@@ -180,11 +187,12 @@ impl Page {
         // Every channel stays reachable: one with no programme on that is not in Recent has no tile above, so
         // it is in the Channels shelf.
         self.rest = (0..view.channels.len()).filter(|i| view.channels[*i].now.is_empty() && !self.recent.contains(i)).collect();
-        self.status = view.status;
         self.mode = match view.status {
+            LiveTvStatus::Loading => Mode::Loading,
+            LiveTvStatus::Empty => Mode::Empty,
             LiveTvStatus::Failed => Mode::Failed,
             LiveTvStatus::Ready if !view.channels.is_empty() => Mode::of(!self.recent.is_empty(), !self.airings.is_empty(), !self.rest.is_empty()),
-            _ => Mode::Bare,
+            LiveTvStatus::Ready => Mode::Empty,
         };
         self.content = self.mode.rows().iter().map(|k| k.group()).collect();
     }
@@ -214,13 +222,14 @@ impl Page {
     }
 
     fn status_overlay(&self, tick: u32) -> StatusOverlay<'static> {
-        match self.status {
+        match self.mode {
             // placeholder-exempt: built here, counted by StatusOverlay's Working draw.
-            LiveTvStatus::Loading => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_loading_c(), StatusKind::Working).phase(tick),
-            LiveTvStatus::Empty => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_empty_c(), StatusKind::Empty),
-            LiveTvStatus::Failed => StatusOverlay::new(Rect::FULL, plx_os::i18n::msg::browse_home_failed_c(), StatusKind::Failed)
+            Mode::Loading => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_loading_c(), StatusKind::Working).phase(tick),
+            Mode::Empty => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_empty_c(), StatusKind::Empty),
+            Mode::Failed => StatusOverlay::new(Rect::FULL, plx_os::i18n::msg::browse_home_failed_c(), StatusKind::Failed)
                 .page(plx_ui::icons::Icon::ServerBadgeMinus).action(plx_os::i18n::msg::browse_action_retry_c()),
-            LiveTvStatus::Ready => StatusOverlay::new(STATUS_FRAME, c"", StatusKind::Empty),
+            // rows are showing: nothing to read out (never drawn)
+            _ => StatusOverlay::new(STATUS_FRAME, c"", StatusKind::Empty),
         }
     }
 }
@@ -366,6 +375,9 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn shelf_foot_open(&self, cx: &Cx<'_, H>, k: Sec) -> f32 {
         if self.mode.shelf_under(k) { UNDER_LABEL_AIR + heading_ink_drop(cx.measure) } else { 0.0 }
     }
+    /// The air under a shelf is the room of the heading of the shelf below, which that shelf's own reveal brings
+    /// on: focusing a shelf scrolls for its tiles and open label band only.
+    fn reveal_foot(&self, _k: Sec) -> bool { false }
     fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
     fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
         let (order, row) = match k { Sec::Recent => (&self.recent, Row::Recent), Sec::Now => (&self.airings, Row::Now), Sec::Channels => (&self.rest, Row::Channels), _ => return None };
@@ -389,7 +401,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         if k == Sec::Head {
             let p = f.painter.alpha(f.page_alpha).alpha(self.handoff.head_alpha(r.y));
             self.header_row(f.measure).draw(p, r.y, &self.header_capsules, self.header_pop.scale_with(0, f.press), None);
-        } else if k == Sec::Status && self.status != LiveTvStatus::Ready {
+        } else if k == Sec::Status && self.mode.reads_out() {
             self.status_overlay(f.cx.tick.ms).focused(f.focus.current.is_some_and(|k| k.entry == self.entry && k.elem == RETRY_ELEM))
                 .draw_measured(&Env::inert(), f.painter.alpha(f.page_alpha), f.measure);
         }
@@ -424,8 +436,7 @@ impl LiveTvScreen {
                 airings: Vec::new(),
                 recent: Vec::new(),
                 rest: Vec::new(),
-                status: LiveTvStatus::Loading,
-                mode: Mode::Bare,
+                mode: Mode::Loading,
                 content: Vec::new(),
                 synced: None,
                 clock: 0,
@@ -569,7 +580,8 @@ plx_ui::focusable_via_view!(LiveTvScreen, H: [LiveTvLike], view);
 impl LogicalState for LiveTvScreen {
     fn write(&self, c: &mut Canon) {
         c.u32(self.page.entry.0);
-        c.u32(match self.page.status { LiveTvStatus::Loading => 0, LiveTvStatus::Ready => 1, LiveTvStatus::Empty => 2, LiveTvStatus::Failed => 3 });
+        // the store's status as the mode reads it: any row is `Ready` (1); a `Ready` store with no channel is the empty read-out (2)
+        c.u32(match self.page.mode { Mode::Loading => 0, Mode::Empty => 2, Mode::Failed => 3, _ => 1 });
         c.seq(self.page.channels.len());
         for (sid, rk) in &self.page.channels { c.u32(u32::from(sid.raw())).str(rk); }
         c.seq(self.page.airings.len());
