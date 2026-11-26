@@ -130,7 +130,7 @@ impl VersionsPanelScreen {
         if self.popover.is_some() {
             let w = self.form.table.measured_width(measure).clamp(plx_ui::table::MENU_MIN_W, plx_ui::table::MENU_MAX_W);
             let h = self.form.table.measured_height().clamp(120.0, plx_ui::consts::SAFE.h);
-            return plx_ui::popover::cover_opener(self.pill(), (w, h), plx_ui::consts::SAFE);
+            return plx_ui::detail_layout::hero_panel_over(self.pill(), y, (w, h));
         }
         plx_ui::popover::under_or_above(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
     }
