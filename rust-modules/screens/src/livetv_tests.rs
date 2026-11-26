@@ -5,7 +5,7 @@ use plx_data::stores::livetv::LiveTvStore;
 use plx_machine::machine::{Chrome, FocusRead, Host, InputOwner, InstanceId, PressId, PressRead, ScreenId, Stamped};
 use plx_ui::fixture::FixtureMeasure;
 use plx_ui::fmt::Wall;
-use plx_ui::screen::ScreenArg;
+use plx_ui::screen::{At, ScreenArg};
 
 use crate::registry::PlayIntent;
 
@@ -136,12 +136,20 @@ fn own_store_supplies_adjacent_recent_and_on_now_shelves_with_distinct_art() {
     let context = cx(view, None);
     let mut sections = Vec::new();
     StackPage::<TestHost>::sections(&screen.page, &context, &mut sections);
-    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Status]);
-    assert!(matches!(sections[1].kind, Kind::Shelf { .. }) && matches!(sections[2].kind, Kind::Shelf { .. }));
-    // the air under Recent: 30 at rest (the handoff's 48 from the tiles to On now's heading line, less the 18 of
-    // the collapsed label band, plus the ink drop), 22 with a tile focused (its 112), each plus the ink drop
-    assert_eq!(StackPage::<TestHost>::shelf_foot(&screen.page, &context, Sec::Recent), 30.0 + HEAD_INK_DROP);
-    assert_eq!(StackPage::<TestHost>::shelf_foot_open(&screen.page, &context, Sec::Recent), UNDER_LABEL_AIR + HEAD_INK_DROP);
+    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status]);
+    assert!(sections[1..4].iter().all(|s| matches!(s.kind, Kind::Shelf { .. })));
+    assert_eq!(screen.page.mode, Mode::RecentNowChannels, "the silent channel is in neither row above");
+    // the air under a shelf that has another under it: the handoff's 48 from the tiles to the next heading's line
+    // box at rest, less the 18 of the collapsed label band, plus the 8 of ink drop (38); with a tile focused the
+    // band's own air, 22, plus the drop (30). The last shelf keeps none.
+    for k in [Sec::Recent, Sec::Now] {
+        assert_eq!((StackPage::<TestHost>::shelf_foot(&screen.page, &context, k), StackPage::<TestHost>::shelf_foot_open(&screen.page, &context, k)), (38.0, 30.0), "{k:?}");
+    }
+    assert_eq!((StackPage::<TestHost>::shelf_foot(&screen.page, &context, Sec::Channels), StackPage::<TestHost>::shelf_foot_open(&screen.page, &context, Sec::Channels)), (0.0, 0.0));
+    let channels = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels).unwrap();
+    assert_eq!(CardSource::<TestHost>::len(&channels), 1, "the channel without a programme that is not in Recent");
+    assert!(matches!(CardSource::<TestHost>::art(&channels, 0), Art::Poster(Some(_))), "the lineup's own tile");
+    assert_eq!(CardSource::<TestHost>::elem(&channels, 0), FIRST_CARD_ELEM + 4, "channel 103, its tile on the even elements");
     let recent_cards = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent).unwrap();
     let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).unwrap();
     assert_eq!(CardSource::<TestHost>::len(&recent_cards), 2, "the profile's own channels, newest first");
@@ -174,12 +182,13 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     let recent = [channel("102", "Cartoons"), channel("101", "Family Channel")];
     step(&mut screen, with_recent(&store, &recent), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert_eq!(screen.page.recent, [1, 0], "newest first, as the store keeps it, by lineup position");
-    assert_eq!(screen.page.regions().content, &[RECENT_GROUP, NOW_GROUP]);
+    assert_eq!(screen.page.regions().content, &[RECENT_GROUP, NOW_GROUP, CHANNELS_GROUP], "the silent channel keeps a tile, in Channels");
     // no Recent channel and a programme on: the row is hidden
     store.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons")]);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty(), "Recent is empty while there are programmes to show");
     assert_eq!(screen.page.regions().content, &[NOW_GROUP]);
+    assert_eq!(screen.page.mode, Mode::NowOnly);
     // nothing recent and nothing on: still no Recent row; the lineup is the page's earlier Channels shelf
     let mut dark = channel("101", "Family Channel");
     dark.now.clear();
@@ -188,8 +197,8 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     store.install_for_test(vec![dark, dark2]);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty() && screen.page.airings.is_empty());
-    assert!(screen.page.lineup_only());
-    assert_eq!(screen.page.regions().content, &[RECENT_GROUP]);
+    assert_eq!(screen.page.mode, Mode::ChannelsOnly);
+    assert_eq!(screen.page.regions().content, &[CHANNELS_GROUP]);
 }
 
 /// An empty Recent means no Recent shelf, and never a "Recent channels" heading over other channels:
@@ -213,23 +222,22 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
         let context = cx(store.view(), None);
         let mut specs = Vec::new();
         StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
-        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Status], "{case}");
-        let first = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent);
-        let first_len = first.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c));
-        let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now);
-        let now_len = now.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c));
+        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status], "{case}");
+        let len = |k: Sec| StackPage::<TestHost>::cards(&screen.page, &context, k).map_or(0, |c| CardSource::<TestHost>::len(&c));
+        let first = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels);
+        assert_eq!(len(Sec::Recent), 0, "{case}: no Recent shelf");
         match (programmes, channels) {
             (true, _) => {
-                assert_eq!((first_len, now_len), (0, 2), "{case}: no Recent shelf");
+                assert_eq!((len(Sec::Now), len(Sec::Channels)), (2, 0), "{case}");
                 assert_eq!(screen.page.regions().content, &[NOW_GROUP], "{case}");
-                assert!(!screen.page.lineup_only(), "{case}");
+                assert_eq!(screen.page.mode, Mode::NowOnly, "{case}");
                 assert_eq!(screen.page.status, LiveTvStatus::Ready, "{case}");
             }
             (false, 2) => {
-                assert_eq!((first_len, now_len), (2, 0), "{case}: the lineup shelf");
-                assert_eq!(screen.page.regions().content, &[RECENT_GROUP], "{case}");
-                assert!(screen.page.lineup_only(), "{case}");
-                assert!(matches!(specs[1].kind, Kind::Shelf { style, .. } if *style == NOW_STYLE), "{case}: the earlier shelf's own row style");
+                assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 2), "{case}: the lineup shelf");
+                assert_eq!(screen.page.regions().content, &[CHANNELS_GROUP], "{case}");
+                assert_eq!(screen.page.mode, Mode::ChannelsOnly, "{case}");
+                assert!(matches!(specs[3].kind, Kind::Shelf { style, .. } if *style == NOW_STYLE), "{case}: the earlier shelf's own row style");
                 let cards = first.as_ref().expect("lineup cards");
                 assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Poster(Some(_))), "{case}: a poster tile, not a plate");
                 assert!(CardSource::<TestHost>::progress(cards, 0).is_none(), "{case}");
@@ -237,9 +245,9 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
                 assert_eq!(CardSource::<TestHost>::index_of(cards, &(FIRST_CARD_ELEM + 2)), Some(1), "{case}");
             }
             _ => {
-                assert_eq!((first_len, now_len), (0, 0), "{case}: no shelf at all");
+                assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 0), "{case}: no shelf at all");
                 assert!(screen.page.regions().content.is_empty(), "{case}");
-                assert!(!screen.page.lineup_only(), "{case}");
+                assert_eq!(screen.page.mode, Mode::Bare, "{case}");
                 assert_eq!(screen.page.status, LiveTvStatus::Empty, "{case}: the store's empty read-out");
                 assert_eq!(screen.page.status_overlay(0).caption, plx_os::i18n::msg::browse_livetv_empty_c());
             }
@@ -297,28 +305,30 @@ fn a_recent_tile_says_what_is_on_and_when_it_started_and_a_poster_says_which_cha
 fn the_page_asks_for_a_frame_when_the_words_of_an_airing_change_and_not_before() {
     let (store, mut screen) = seeded();
     let view = store.view();
-    // One tick; whether the page asked for a frame because of the clock (the page's own ground
-    // animates for a while after its first tick, so the clock stamp is what is read).
-    let tick = |screen: &mut LiveTvScreen, ms: u32| {
+    // One tick; what the step asked of the presenter. A fresh `Present` per tick starts dirty but names no
+    // cause: a cause is a damage the step itself raised, and the page's own ground animates (motion, not
+    // damage) for a while after its first tick, so the cause is what is read.
+    let tick = |screen: &mut LiveTvScreen, ms: u32| -> Option<Provenance> {
         let context = cx(view, None);
         let mut out = Vec::new();
         let mut present = plx_machine::present::Present::new();
-        let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(InstanceId(9)), &mut present);
-        let before = screen.page.clock;
-        Machine::<TestHost>::step(screen, &ScreenEvent::Tick(Tick { ms, dt_us: 16_667 }), &context, &mut fx);
-        screen.page.clock != before
+        {
+            let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(InstanceId(9)), &mut present);
+            Machine::<TestHost>::step(screen, &ScreenEvent::Tick(Tick { ms, dt_us: 16_667 }), &context, &mut fx);
+        }
+        present.why()
     };
     WALL.with(|w| w.set(None));
-    assert!(!tick(&mut screen, 16), "a page with no wall time has no clock words to redraw");
-    assert!(!tick(&mut screen, 32));
+    assert_eq!(tick(&mut screen, 16), None, "a page with no wall time has no clock words to redraw");
+    assert_eq!(tick(&mut screen, 32), None);
     // the airings begin at 20 s and end at 100 s: at 0 they have not begun, at 30 they are on air
     WALL.with(|w| w.set(Some(Wall::from_secs(0, 0))));
-    assert!(tick(&mut screen, 48), "the first wall time is read");
-    assert!(!tick(&mut screen, 64), "the same words: nothing to draw");
+    assert_eq!(tick(&mut screen, 48), Some(Provenance::Input), "the first wall time is read");
+    assert_eq!(tick(&mut screen, 64), None, "the same words: nothing to draw");
     WALL.with(|w| w.set(Some(Wall::from_secs(30, 0))));
-    assert!(tick(&mut screen, 80), "they began: the words and the bar change");
+    assert_eq!(tick(&mut screen, 80), Some(Provenance::Input), "they began: the words and the bar change");
     WALL.with(|w| w.set(Some(Wall::from_secs(31, 0))));
-    assert!(!tick(&mut screen, 96), "the same minute: the same words");
+    assert_eq!(tick(&mut screen, 96), None, "the same minute: the same words");
     WALL.with(|w| w.set(None));
 }
 
@@ -360,7 +370,7 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
     step(&mut screen, store.view(), None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
     assert!(screen.page.airings.is_empty(), "the store revision is read on Tick");
     assert!(screen.page.recent.is_empty(), "a page with nothing on has no Recent row of lineup channels");
-    assert!(screen.page.lineup_only(), "it shows the lineup as its Channels shelf");
+    assert_eq!(screen.page.mode, Mode::ChannelsOnly, "it shows the lineup as its Channels shelf");
     for status in [LiveTvStatus::Loading, LiveTvStatus::Empty, LiveTvStatus::Failed] {
         let view = LiveTvView::for_test(status, &[], &[], 100 + status as u32);
         step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
@@ -373,4 +383,156 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
     let failed = LiveTvView::for_test(LiveTvStatus::Failed, &[], &[], 200);
     let out = step(&mut screen, failed, Some(RETRY_ELEM), &ScreenEvent::Activate(RETRY_ELEM));
     assert!(out.iter().any(|s| matches!(&s.fx, Fx::App(AppFx::Store(StoreId::LiveTv, StoreCmd::LiveTv(LiveTvCmd::Retry))))));
+}
+
+/// A lineup of three channels, none with a programme: no guide data (the owner's Pluto channels).
+fn bare_lineup() -> Vec<Channel> {
+    ["101", "102", "103"].into_iter().map(|vcn| Channel { now: String::new(), ..channel(vcn, &format!("Channel {vcn}")) }).collect()
+}
+
+/// Where card `elem` is DRAWN once the page has been ticking a while (so the pop, the scroll and the
+/// layout are at rest): the placed rect the focus engine and the painter both use, never the spec.
+fn settled_rect(screen: &mut LiveTvScreen, view: LiveTvView<'_>, elem: u32) -> Rect {
+    for frame in 1..=60 {
+        step(screen, view, None, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    Focusable::<TestHost>::place(screen, &elem, &cx(view, None), At::Drawn).expect("the card is placed").rect
+}
+
+/// Scenario A: the tab opens while the lineup is still loading, then a lineup with no guide data arrives. A
+/// shelf's style is copied once when its body is made, so a row that keeps a key across the two draws the
+/// lineup's tiles at the Recent row's size.
+#[test]
+fn a_bare_lineup_that_arrives_after_loading_is_drawn_in_poster_tiles() {
+    let mut screen = LiveTvScreen::new(ENTRY);
+    let loading = LiveTvView::for_test(LiveTvStatus::Loading, &[], &[], 7_777);
+    step(&mut screen, loading, None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
+    step(&mut screen, loading, None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    let mut store = LiveTvStore::default();
+    store.install_for_test(bare_lineup());
+    let view = store.view();
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h), "the lineup's tile is a poster, not a 250 x 140 plate");
+}
+
+/// Scenario B: a lineup with no guide data, then a channel is tuned: it becomes Recent while the others stay
+/// reachable. The Recent plate is a plate (140 tall), whatever the row held before it, and the lineup's
+/// other channels stay in poster tiles.
+#[test]
+fn tuning_a_channel_in_a_bare_lineup_makes_a_plate_and_leaves_the_rest_in_posters() {
+    let (mut store, mut screen) = (LiveTvStore::default(), LiveTvScreen::new(ENTRY));
+    store.install_for_test(bare_lineup());
+    step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
+    let first = settled_rect(&mut screen, store.view(), FIRST_CARD_ELEM);
+    assert_eq!((first.w, first.h), (RowStyle::HOME.w, RowStyle::HOME.h), "before the tune: the lineup in poster tiles");
+    // channel 102 is tuned: the store bumps its revision and Recent holds it
+    store.install_for_test(bare_lineup());
+    let recent = [store.view().channels[1].clone()];
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    let plate = settled_rect(&mut screen, view, FIRST_CARD_ELEM + 2);
+    assert_eq!((plate.w, plate.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "Recent's tile is a 250 x 140 plate");
+    for index in [0_u32, 2] {
+        let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM + index * 2);
+        assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h), "channel {index} is still reachable, in a poster tile");
+        assert!(tile.y > plate.y + plate.h, "under Recent");
+    }
+}
+
+/// The rows the page shows, whatever the lineup holds: every mode, the shelves it has, and that every channel
+/// of the lineup has a tile in one of them (a channel without guide data is in Channels, never nowhere).
+#[test]
+fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
+    use Mode::*;
+    // 101 and 102 have a programme on; 103 and 104 have none
+    let lineup = |programmes: bool| -> Vec<Channel> {
+        let mut lineup = vec![channel("101", "One"), channel("102", "Two"), channel("103", "Three"), channel("104", "Four")];
+        for (i, c) in lineup.iter_mut().enumerate() { if !programmes || i >= 2 { c.now.clear(); } }
+        lineup
+    };
+    // (programmes on, the Recent channels by lineup position, the mode, the rows)
+    let cases: [(bool, &[usize], Mode, &[Sec]); 9] = [
+        (true, &[], NowChannels, &[Sec::Now, Sec::Channels]),
+        (true, &[0], RecentNowChannels, &[Sec::Recent, Sec::Now, Sec::Channels]),
+        (true, &[2], RecentNowChannels, &[Sec::Recent, Sec::Now, Sec::Channels]),
+        (true, &[2, 3], RecentNow, &[Sec::Recent, Sec::Now]),
+        (true, &[0, 1, 2, 3], RecentNow, &[Sec::Recent, Sec::Now]),
+        (false, &[], ChannelsOnly, &[Sec::Channels]),
+        (false, &[2], RecentChannels, &[Sec::Recent, Sec::Channels]),
+        (false, &[0, 1, 2, 3], RecentOnly, &[Sec::Recent]),
+        (false, &[3, 0], RecentChannels, &[Sec::Recent, Sec::Channels]),
+    ];
+    for (programmes, recent, mode, rows) in cases {
+        let (mut store, mut screen) = seeded();
+        store.install_for_test(lineup(programmes));
+        let recent: Vec<Channel> = recent.iter().map(|&i| store.view().channels[i].clone()).collect();
+        let view = with_recent(&store, &recent);
+        step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+        let case = format!("programmes {programmes}, recent {:?}", recent.iter().map(|c| c.vcn.as_str()).collect::<Vec<_>>());
+        assert_eq!((screen.page.mode, screen.page.mode.rows()), (mode, rows), "{case}");
+        let context = cx(view, None);
+        let mut tiles = std::collections::BTreeSet::new();
+        for k in [Sec::Recent, Sec::Now, Sec::Channels] {
+            let cards = StackPage::<TestHost>::cards(&screen.page, &context, k);
+            assert_eq!(cards.is_some(), rows.contains(&k), "{case}: {k:?}");
+            let Some(cards) = cards else { continue };
+            for i in 0..CardSource::<TestHost>::len(&cards) {
+                let elem = CardSource::<TestHost>::elem(&cards, i);
+                assert_eq!(CardSource::<TestHost>::index_of(&cards, &elem), Some(i), "{case}: {k:?} {i}");
+                assert!(tiles.insert(elem), "{case}: an element in two shelves");
+            }
+        }
+        // each channel: some tile names it (the element's index is the channel's lineup position)
+        for position in 0..4_u32 {
+            assert!(tiles.iter().any(|e| (e - FIRST_CARD_ELEM) / 2 == position), "{case}: channel {position} has no tile");
+        }
+    }
+}
+
+/// Recent only: a stored Recent that holds every channel, with no programme on, is one row of plates.
+#[test]
+fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {
+    let _policy = captions::PolicyPin::default_setting();
+    let (mut store, mut screen) = seeded();
+    let mut lineup = vec![channel("101", "Family Channel"), channel("102", "Cartoons")];
+    for c in &mut lineup { c.now.clear(); }
+    store.install_for_test(lineup);
+    let recent = store.view().channels.to_vec();
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::RecentOnly);
+    assert_eq!(screen.page.regions().content, &[RECENT_GROUP]);
+    let context = cx(view, None);
+    let mut specs = Vec::new();
+    StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
+    assert!(specs.iter().find(|s| s.key == Sec::Recent).is_some_and(|s| matches!(s.kind, Kind::Shelf { style, .. } if *style == RECENT_STYLE)));
+    let plates = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent).unwrap();
+    assert_eq!(CardSource::<TestHost>::len(&plates), 2);
+    assert!(matches!(CardSource::<TestHost>::art(&plates, 0), Art::Channel { .. }));
+    assert!(StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).is_none() && StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels).is_none());
+    // nothing is under it, so it keeps no air
+    assert_eq!(StackPage::<TestHost>::shelf_foot(&screen.page, &context, Sec::Recent), 0.0);
+    let plate = settled_rect(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!((plate.x, plate.y, plate.w, plate.h), (96.0, 300.0, 250.0, 140.0));
+}
+
+/// The Channels shelf stands under the other rows without moving them: Recent's plates at 300, On now's
+/// posters 544 (heading ink 496), and its tiles below On now's.
+#[test]
+fn the_channels_shelf_stands_under_on_now_and_moves_nothing_above_it() {
+    let (mut store, mut screen) = seeded();
+    // the seeded lineup: two programmes on, the third channel silent
+    let recent = [store.view().channels[0].clone()];
+    store.install_for_test(store.view().channels.to_vec());
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::RecentNowChannels);
+    let plate = settled_rect(&mut screen, view, FIRST_CARD_ELEM);
+    let poster = settled_rect(&mut screen, view, FIRST_CARD_ELEM + 1);
+    let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM + 4);
+    assert_eq!((plate.y, plate.h), (300.0, 140.0));
+    assert_eq!(poster.y, 544.0);
+    assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h));
+    assert!(tile.y > poster.y + poster.h, "the Channels shelf is under On now's posters");
 }

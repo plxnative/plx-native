@@ -1,6 +1,6 @@
-//! Conformance mounts of the real What's on page: its On now shelf (the long row, which scrolls) and its
+//! Conformance mounts of the real What's on page: its On now shelf (the long row, which scrolls), its
 //! Recent shelf (five tiles at most, which never does), both with the other shelf standing over or under
-//! them as on the page.
+//! them as on the page, and its Channels shelf (a lineup with no guide data, the page's only row).
 use super::*;
 use plx_data::livetv::MAX_RECENT;
 use plx_machine::machine::{FocusRead, Host, InputOwner, PressRead};
@@ -38,6 +38,8 @@ struct Harness {
 pub(crate) fn mount(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Now)) }
 /// The Recent shelf of an `n`-channel lineup (at most five tiles), On now below it.
 pub(crate) fn mount_recent(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Recent)) }
+/// The Channels shelf of an `n`-channel lineup with no programme and nothing recent: the page's only row.
+pub(crate) fn mount_channels(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Channels)) }
 
 pub(crate) fn livetv_conforms() -> plx_ui::a11y::Namespaces {
     use plx_ui::a11y::{conform, A11yPath};
@@ -58,12 +60,14 @@ pub(crate) fn livetv_conforms() -> plx_ui::a11y::Namespaces {
 impl Harness {
     fn new(n: usize, row: Row) -> Self {
         let mut store = plx_data::stores::livetv::LiveTvStore::default();
+        // the Channels shelf is a lineup with no guide data and nothing tuned
+        let programmes = row != Row::Channels;
         store.install_for_test((0..n).map(|i| plx_data::livetv::Channel {
             sid: plx_plex::plex::ServerId::UNSET, dvr: "1".into(), channel: format!("c{i}"),
             vcn: i.to_string(), name: format!("Channel {i}"), thumb: String::new(),
-            now: format!("Programme {i}"), now_thumb: String::new(), now_summary: String::new(), begins_at: 0, ends_at: 0,
+            now: if programmes { format!("Programme {i}") } else { String::new() }, now_thumb: String::new(), now_summary: String::new(), begins_at: 0, ends_at: 0,
         }).collect());
-        let recent = store.view().channels.iter().take(MAX_RECENT).cloned().collect();
+        let recent = if programmes { store.view().channels.iter().take(MAX_RECENT).cloned().collect() } else { Vec::new() };
         let mut h = Self { store, recent, row, screen: LiveTvScreen::new(ENTRY), focus: None, press: 1.0, ms: 0, n };
         h.step(ScreenEvent::Tick(Tick { ms: 0, dt_us: 16_667 }));
         h
@@ -92,7 +96,7 @@ impl Harness {
 }
 impl CardHarness for Harness {
     fn cards(&self) -> Vec<u32> {
-        let (n, odd) = match self.row { Row::Now => (self.n, 1), Row::Recent => (self.n.min(MAX_RECENT), 0), Row::Lineup => (self.n, 0) };
+        let (n, odd) = match self.row { Row::Now => (self.n, 1), Row::Recent => (self.n.min(MAX_RECENT), 0), Row::Channels => (self.n, 0) };
         (0..n).map(|i| FIRST_CARD_ELEM + i as u32 * 2 + odd).collect()
     }
     fn focused(&self) -> Option<u32> { self.focus.map(|k| k.elem) }
@@ -214,5 +218,31 @@ mod geometry {
         h.tick(120);
         assert_eq!(drawn(&h, poster(0)).y, 544.0, "and back");
         assert_eq!(h.scroll(), Some(0.0), "nothing scrolls vertically");
+    }
+
+    /// Where a shelf's heading is INKED (its cap top): the shelf's tiles less the heading the page gives it.
+    fn heading_ink(h: &Harness, k: Sec) -> f32 {
+        let cx = h.cx();
+        let frame = h.screen.stack.shelf_frame(&h.screen.page, &cx, k).expect("the shelf is laid out");
+        let mut specs = Vec::new();
+        StackPage::<LiveHost>::sections(&h.screen.page, &cx, &mut specs);
+        let Some(Kind::Shelf { heading, .. }) = specs.iter().find(|s| s.key == k).map(|s| s.kind) else { panic!("{k:?} is not a shelf") };
+        frame.y - heading
+    }
+
+    /// The handoff's heading lines are 40 px boxes at 244 (Recent) and 488 (On now), 552 while a Recent tile has
+    /// focus, with the 32 px type centred in the box: its cap top, where a shelf here draws, is 8 below each
+    /// (the fixture's caps and the shipped face's both give 8, `heading_ink_drop`). The tiles stand where the
+    /// board has them, 48 under the inked heading.
+    #[test]
+    fn the_headings_are_inked_where_the_board_centres_them() {
+        let mut h = settled(8);
+        h.focus(poster(5), By::Dir);
+        h.tick(120);
+        assert_eq!(heading_ink(&h, Sec::Recent), 252.0);
+        assert_eq!(heading_ink(&h, Sec::Now), 496.0, "488 + 8 at rest");
+        h.focus(recent(2), By::Dir);
+        h.tick(120);
+        assert_eq!(heading_ink(&h, Sec::Now), 560.0, "552 + 8 with a Recent tile focused");
     }
 }
