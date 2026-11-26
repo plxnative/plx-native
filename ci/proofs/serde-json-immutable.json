@@ -499,7 +499,7 @@
         ],
         "edition": "2021",
         "lib": "owp/src/lib.rs",
-        "lib_sha256": "625450f0ebc41f9114205753b30c004d7f05627dbe819e47281311bcd639491b"
+        "lib_sha256": "8247e3c97cb30a89245c07d0d9c0311161f3f36a1c8b968d1ddf61d2baa340be"
       },
       "platform-tizen/Cargo.toml": {
         "dependency": [

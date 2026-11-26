@@ -1,6 +1,7 @@
 use crate::clock::{ClockEvent, ClockSync, PongOutcome};
 use crate::code;
 use crate::json::{read, Json, Text, MAX_SAFE_INT};
+use crate::matching::{self, Candidate, Outcome, ProbeRun, Progress, Walk};
 use crate::media::{self, Direction, MediaRule, MAX_EXT_BYTES, MAX_MEDIA_BYTES};
 use crate::message::{decode, Incoming, InvalidMessage, Outgoing, PingId, PlayerState, Received, MAX_RELAY_MESSAGE_BYTES};
 use crate::reconcile::{self, Action, Player, Step, StepInput};
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 
 type Runner = fn(&Json) -> Json;
 
-const RUNNERS: [(&str, Runner); 9] = [
+const RUNNERS: [(&str, Runner); 10] = [
     ("names", names),
     ("code-routing", code_routing),
     ("relay-list", relay_list),
@@ -22,6 +23,7 @@ const RUNNERS: [(&str, Runner); 9] = [
     ("clock-sync", clock_sync),
     ("timeline", timeline),
     ("reconcile", reconcile),
+    ("matching", matching),
 ];
 
 fn fixtures() -> PathBuf {
@@ -217,6 +219,58 @@ fn reconcile(input: &Json) -> Json {
     ])
 }
 
+fn text_of(entry: &Json, name: &str) -> Option<String> {
+    entry.get(name).and_then(Json::as_text).map(|t| t.value.clone())
+}
+
+fn matching(input: &Json) -> Json {
+    let media = field(input, "media");
+    if media::check(media, Direction::Receive).is_err() {
+        return object(vec![("error", string("media"))]);
+    }
+    let entries = match field(input, "candidates") {
+        Json::Array(entries) => entries.as_slice(),
+        _ => &[],
+    };
+    let candidates = entries
+        .iter()
+        .map(|entry| Candidate {
+            id: text_of(entry, "id").unwrap_or_default(),
+            duration_ms: entry.get("durationMs").and_then(Json::as_int),
+            size_bytes: entry.get("sizeBytes").and_then(Json::as_int),
+            oshash: text_of(entry, "oshash"),
+            name: text_of(entry, "name"),
+            probe: !matches!(field(entry, "probe"), Json::Null),
+        })
+        .collect();
+    let ranked = matching::rank(media, candidates);
+    let answer_of = |id: &str| entries.iter().find(|entry| text_of(entry, "id").as_deref() == Some(id)).map_or(&Json::Null, |entry| field(entry, "probe"));
+    let mut walk = Walk::new(media, &ranked);
+    while let Progress::Probing { index, .. } = walk.progress() {
+        let answer = answer_of(&ranked[index].id);
+        walk = walk.answered(ProbeRun { duration_ms: field(answer, "durationMs").as_int(), took_ms: int(field(answer, "takesMs")) });
+    }
+    let id = |index: usize| string(&ranked[index].id);
+    let (result, choice, delta_ms) = match walk.progress() {
+        Progress::Done(Outcome::Matched { index, delta_ms }) => ("matched", id(index), Json::Int(delta_ms)),
+        Progress::Done(Outcome::Mismatch { index, delta_ms }) => ("mismatch", id(index), Json::Int(delta_ms)),
+        Progress::Done(Outcome::Unavailable) | Progress::Probing { .. } => ("unavailable", Json::Null, Json::Null),
+    };
+    let published = ranked
+        .iter()
+        .zip(walk.deltas())
+        .map(|(candidate, delta)| object(vec![("id", string(&candidate.id)), ("deltaMs", delta.map_or(Json::Null, Json::Int))]))
+        .collect();
+    object(vec![
+        ("order", Json::Array(ranked.iter().map(|candidate| string(&candidate.id)).collect())),
+        ("candidates", Json::Array(published)),
+        ("probed", Json::Array(walk.probed().iter().map(|index| id(*index)).collect())),
+        ("result", string(result)),
+        ("choice", choice),
+        ("deltaMs", delta_ms),
+    ])
+}
+
 fn run_table(name: &str, runner: Runner) {
     let table = load(fixtures().join("vectors").join(format!("{name}.json")));
     assert!(matches!(table.get("table"), Some(Json::Str(t)) if t.value == name));
@@ -284,6 +338,11 @@ fn timeline_table() {
 #[test]
 fn reconcile_table() {
     run_table("reconcile", reconcile);
+}
+
+#[test]
+fn matching_table() {
+    run_table("matching", matching);
 }
 
 const PLAYING: Player = Player { position_ms: 10_000, paused: false, buffering: false, duration_ms: Some(3_600_000), can_set_rate: true, applied_rate: 1.0, seek_accuracy_ms: 0 };
