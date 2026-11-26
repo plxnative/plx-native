@@ -176,8 +176,10 @@ pub struct PlaybackSession {
     /// for a playable, non-preview plan of the viewer's own and nothing else; moved to
     /// [`Self::confirmed_pick_spends`] by [`settle_route_start`]'s ordinary `Started` edge, the only
     /// confirmation (the reducer refuses a superseded attempt's result before it gets that far). A failed
-    /// start leaves it, so a retry that starts spends it; the next landing replaces it, a new request
-    /// ([`clear_track_selection`]) and a full stop ([`retire_stopped_playback`]) drop it unspent.
+    /// start leaves it, so a retry that starts spends it; the next landing replaces it
+    /// ([`apply_plan`]) and a full stop ([`retire_stopped_playback`]) drops it unspent. A new REQUEST
+    /// does not: one cancelled before it lands (`cancel_playback_request`) restores the old plan, whose
+    /// start still spends it.
     pick_spend_on_start: Option<PickSpend>,
     /// Starts the engine confirmed and the loop has not yet drained ([`Self::take_confirmed_pick_spends`],
     /// then [`spend_confirmed_picks`]): one typed effect per confirmed start, the session's hand-off to
@@ -11578,8 +11580,6 @@ fn clear_track_selection(s: &mut PlaybackSession) {
     s.cur_sub_sid = 0;
     s.selection_known = false;
     s.held_pick = None;
-    // a new request supersedes the plan whose start the pick was waiting for
-    s.pick_spend_on_start = None;
     s.cur_sub_sidecar = false;
     s.cur_sub_client_drawable = false;
     s.cur_sub_ordinal = -1;

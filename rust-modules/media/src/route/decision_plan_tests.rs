@@ -1960,3 +1960,26 @@ fn a_retry_of_the_landed_plan_under_a_new_transaction_spends_and_a_stopped_one_d
     assert!(rig.settle(second, RouteStartResult::Started));
     assert_eq!(rig.picks(), [off], "an abandoned playback never spends");
 }
+
+/// **A request cancelled before it lands leaves the pick with the plan it restores**: the plan lands and
+/// its start fails; a retry's request begins (it clears the live selection, as every request does) and is
+/// cancelled, which restores the old plan; that plan's start is then confirmed and spends the pick. A
+/// request dropping the pair at its start would lose it here, the pick surviving the page for good.
+#[test]
+fn a_cancelled_request_keeps_the_restored_plans_pick_to_spend() {
+    let mut rig = PickRig::new();
+    let off = rig.off;
+    let plan = rig.plan(PickRig::URL);
+    let first = rig.land(plan).expect("a playable plan");
+    assert!(rig.settle(first, RouteStartResult::StartFailed));
+    assert_eq!(rig.picks(), [off], "setup: the failed start spent nothing");
+
+    begin_playback_request().expect("request admission");
+    begin_track_selection(&mut rig.ps, None);
+    cancel_playback_request(&mut rig.ps, true);
+
+    let retry = begin_route_start().expect("the restored plan's failed route owns no engine");
+    let second = claim_route_start_attempt(retry).expect("the restored plan's attempt");
+    assert!(rig.settle(second, RouteStartResult::Started));
+    assert!(rig.picks().is_empty(), "the restored plan's start spent the pick the cancelled request found held");
+}
