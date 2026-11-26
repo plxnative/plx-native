@@ -653,7 +653,7 @@
         ],
         "edition": "2021",
         "lib": "ui/src/lib.rs",
-        "lib_sha256": "f971a02f6b5864b6858772b3c9abc1a758b119f712ca077d6dcce3a66a872017"
+        "lib_sha256": "63ae890c60ee92b4ff1f20405883cad9537ce30e24b18eed09a97cf7d27b8dad"
       }
     },
     "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"
