@@ -4,6 +4,7 @@ use crate::stores::fanout::{Fanout, Standing};
 use plx_machine::job::{Job, Port};
 use plx_machine::machine::{Addr, MachineId, RequestId};
 use plx_plex::plex::livetv::{self, LiveChannel};
+pub use plx_plex::plex::livetv::LiveAiring;
 use plx_plex::plex::{Client, ClientKey, ClientKeys, ServerId};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -37,13 +38,17 @@ pub struct Channel {
     pub now_summary: String,
     pub begins_at: i64,
     pub ends_at: i64,
+    /// The programmes after the current one that start inside the Guide's window, earliest first (empty: the
+    /// guide has none, or no data at all).
+    pub later: Vec<LiveAiring>,
 }
 
 impl Channel {
     fn of(sid: ServerId, ch: &LiveChannel) -> Self {
         Self { sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), vcn: ch.vcn.clone(),
             name: ch.name.clone(), thumb: ch.thumb.clone(), now: ch.now.clone(),
-            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at }
+            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at,
+            later: ch.later.clone() }
     }
 }
 
@@ -120,9 +125,13 @@ impl Guide {
         self.strikes = self.strikes.saturating_add(1);
     }
     fn due(&self, now: i64) -> bool { self.retry_cd == 0 && now >= self.refresh_at }
+    /// When the guide is next read: when the soonest airing on now ends, or when the Guide's window next
+    /// moves (every half hour, [`livetv::window_start`]) if that comes first, so a programme that enters the
+    /// window's far end is asked for the half hour it does and not only when some airing happens to end.
     fn next_refresh(channels: &[LiveChannel], now: i64) -> i64 {
+        let roll = livetv::window_start(now).saturating_add(livetv::WINDOW_STEP_SECONDS);
         channels.iter().filter_map(|c| (c.ends_at > now).then_some(c.ends_at)).min()
-            .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS))
+            .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS)).min(roll)
     }
 }
 
@@ -374,12 +383,12 @@ fn finish_with(port: &LiveTvPort, addr: Addr, req: LiveTvReq,
 trait LiveTvIo {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>);
     fn channels(&self, provider: &str) -> (Option<i32>, Option<Vec<plx_plex::plex::EpgChannel>>);
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>>;
+    fn guide(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>>;
 }
 impl LiveTvIo for Client {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) { self.live_tv_dvrs() }
     fn channels(&self, provider: &str) -> (Option<i32>, Option<Vec<plx_plex::plex::EpgChannel>>) { self.epg_channels(provider) }
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> { self.epg_on_now(provider, now) }
+    fn guide(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> { self.epg_guide(provider, now) }
 }
 
 /// What one lineup read says its HTTP status was: `none` when the transport never answered (so the
@@ -434,15 +443,15 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
                     result.complete = false; result.retry = true; continue;
                 };
                 let mapped = channels.len();
-                let mut channels = livetv::lineup(dvr, &channels, &[]);
+                let mut channels = livetv::lineup(dvr, &channels, &[], req.now);
                 log_lineup(req.sid, &dvr.key, status, mapped, channels.len());
                 if channels.is_empty() {
                     result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels,
                         refresh_at: i64::MAX, retry_cd: 0, strikes: 0 });
                     continue;
                 }
-                let airings = client.on_now(&dvr.epg_identifier, req.now);
-                if let Some(airings) = airings.as_deref() { livetv::update_on_now(&mut channels, airings); }
+                let airings = client.guide(&dvr.epg_identifier, req.now);
+                if let Some(airings) = airings.as_deref() { livetv::update_airings(&mut channels, airings, req.now); }
                 let refresh_at = if airings.is_some() { Guide::next_refresh(&channels, req.now) }
                     else { result.retry = true; req.now };
                 result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0 });
@@ -450,9 +459,9 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
             Some(result)
         }
         Work::Grid(guide) => {
-            let now = client.on_now(&guide.provider, req.now)?;
+            let airings = client.guide(&guide.provider, req.now)?;
             let mut updated = guide.clone();
-            livetv::update_on_now(&mut updated.channels, &now);
+            livetv::update_airings(&mut updated.channels, &airings, req.now);
             updated.refresh_at = Guide::next_refresh(&updated.channels, req.now);
             updated.strikes = 0;
             Some(ReadResult { guides: vec![updated], roster: None, complete: true, retry: false })

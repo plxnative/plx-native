@@ -73,6 +73,11 @@ def guide(pms, encoded=True):
     return jcall(pms, "GET", f"{EPG}/grid?{keys}")["Metadata"]
 
 
+def window_guide(pms, until, now=None):
+    """`GET /{epg}/grid?beginsAt<=until&endsAt>=now`: the Guide's window read (the client sends the operators encoded)."""
+    return jcall(pms, "GET", f"{EPG}/grid?beginsAt%3C={until}&endsAt%3E={NOW if now is None else now}")["Metadata"]
+
+
 def segments(playlist):
     return [line.decode() for line in playlist.splitlines() if line.endswith(b".ts")]
 
@@ -155,6 +160,35 @@ class LiveTvMock(unittest.TestCase):
         ep = next(r for r in guide(make_live()) if r["Media"][0]["channelVcn"] == "101")
         self.assertEqual((ep["type"], ep["grandparentTitle"]), ("episode", "Family Show"))
         self.assertTrue(ep["thumb"] and ep["grandparentThumb"])
+
+    def test_the_window_read_answers_the_programmes_that_follow_on_most_rows_and_none_on_some(self):
+        """Both bounds are honoured: `beginsAt<=until` lets programmes after the one on now in, `endsAt>=now` keeps the
+        ones that have ended out; the instant read (until == now) still answers exactly the fifteen rows on now."""
+        pms = make_live()
+        self.assertEqual(len(window_guide(pms, NOW)), 15, "the instant form is unchanged")
+        until = NOW - NOW % 1800 + 5400
+        by_channel = {}
+        for row in window_guide(pms, until):
+            by_channel.setdefault(row["Media"][0]["channelVcn"], []).append(row["Media"][0])
+        self.assertEqual(sorted(by_channel), ["101", "102", "104", "105"] + [str(v) for v in range(106, 117)])
+        for vcn, airings in by_channel.items():
+            airings.sort(key=lambda m: m["beginsAt"])
+            self.assertLessEqual(airings[0]["beginsAt"], NOW, vcn)
+            self.assertGreaterEqual(airings[0]["endsAt"], NOW, vcn)
+            for before, after in zip(airings, airings[1:]):
+                self.assertEqual(after["beginsAt"], before["endsAt"], f"{vcn}: programmes follow one another")
+                self.assertGreater(after["beginsAt"], NOW, vcn)
+            self.assertLessEqual(airings[-1]["beginsAt"], until, vcn)
+        solo = sorted(vcn for vcn, airings in by_channel.items() if len(airings) == 1)
+        self.assertEqual(solo, sorted(pms.livetv.SOLO), "a guide of current airings only, on exactly the solo channels")
+        self.assertTrue(any(len(airings) > 1 for airings in by_channel.values()), "most rows have a next")
+
+    def test_the_window_read_keeps_ended_airings_out(self):
+        """`endsAt>=now` bounds from below: asked a half hour later, the five that aired the half hour of NOW are gone."""
+        pms = make_live()
+        later = NOW + 1800
+        first_half = {r["Media"][0]["beginsAt"] for r in window_guide(pms, later, now=later) if r["Media"][0]["channelVcn"] == "101"}
+        self.assertEqual(first_half, {NOW - NOW % 1800 + 1800})
 
     def test_grid_encoded_and_literal_keys(self):
         pms = make_live()

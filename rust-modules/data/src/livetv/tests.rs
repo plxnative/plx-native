@@ -22,7 +22,7 @@ fn guide(numbers: &[&str], end: i64) -> Guide {
     Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, channels: numbers.iter()
         .map(|number| LiveChannel { dvr: "7".into(), channel: format!("C{number}"), vcn: number.to_string(),
             name: "Channel".into(), thumb: "/logo".into(), now: "Show".into(),
-            now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end }).collect() }
+            now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end, later: Vec::new() }).collect() }
 }
 fn complete(guides: Vec<Guide>) -> ReadResult { ReadResult { guides, roster: None, complete: true, retry: false } }
 fn answer(stores: &mut Stores, result: Option<Vec<Guide>>) {
@@ -257,9 +257,12 @@ struct Script {
     fail_grid: std::cell::Cell<bool>,
     empty_grid: bool,
     empty_lineup: bool,
+    later: bool,
 }
 impl Script {
-    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), empty_grid: false, empty_lineup: false } }
+    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), empty_grid: false, empty_lineup: false, later: false } }
+    /// The grid answers a second airing after the one on now.
+    fn with_later(mut self) -> Self { self.later = true; self }
 }
 impl LiveTvIo for Script {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) {
@@ -274,12 +277,19 @@ impl LiveTvIo for Script {
         if self.empty_lineup { return (Some(200), Some(Vec::new())); }
         (Some(200), Some(vec![plx_plex::plex::EpgChannel { grid_key: "C2".into(), vcn: "2".into(), title: "2 Channel".into(), thumb: "/logo".into() }]))
     }
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> {
+    fn guide(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> {
         self.calls.borrow_mut().push(format!("grid:{provider}:{now}"));
         if self.fail_grid.get() { None }
         else if self.empty_grid { Some(Vec::new()) }
-        else { Some(vec![serde_json::from_value(serde_json::json!({"title":"Programme","thumb":"/programme",
-            "Media":[{"channelVcn":"2","channelIdentifier":"C2","endsAt":now + 50}]})).unwrap()]) }
+        else {
+            let mut rows = vec![serde_json::from_value(serde_json::json!({"title":"Programme","thumb":"/programme",
+                "Media":[{"channelVcn":"2","channelIdentifier":"C2","endsAt":now + 50}]})).unwrap()];
+            if self.later {
+                rows.push(serde_json::from_value(serde_json::json!({"title":"Next",
+                    "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":now + 50,"endsAt":now + 800}]})).unwrap());
+            }
+            Some(rows)
+        }
     }
 }
 fn execute(stores: &mut Stores, io: &Script) {
@@ -415,6 +425,27 @@ fn livetv_play_title_preserves_the_unnumbered_name_and_stale_guides_do_not_spin(
         assert_eq!(channel_name_of(&channel_tile(&channel)), Some("Family Channel"));
     }
     assert_eq!(Guide::next_refresh(&guide(&["1"], 200).channels, 201), 261);
+}
+
+/// The Guide's window slides every half hour, so the guide is read again when it does even if the airing on now
+/// runs far past it: otherwise a programme entering the window's far end waits for some airing to end.
+#[test]
+fn the_guide_is_read_again_when_the_window_moves_if_that_comes_before_an_airing_ends() {
+    let ends_much_later = 1_792_522_800 + 6 * 3_600;
+    let channels = guide(&["1"], ends_much_later).channels;
+    let now = 1_792_522_800 + 600;
+    assert_eq!(Guide::next_refresh(&channels, now), 1_792_522_800 + 1_800, "the next half hour, not the airing's end");
+    assert_eq!(Guide::next_refresh(&guide(&["1"], now + 60).channels, now), now + 60, "an airing that ends first is read at its end");
+    assert_eq!(Guide::next_refresh(&[], 1_792_522_800 + 1_790), 1_792_524_600, "the poll never runs past the window's move");
+}
+
+#[test]
+fn livetv_the_grid_read_publishes_the_programmes_after_the_one_on_now() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    let channel = &stores.livetv_view().channels[0];
+    assert_eq!(channel.now, "Programme");
+    assert_eq!(channel.later.iter().map(|a| (a.title.as_str(), a.begins_at, a.ends_at)).collect::<Vec<_>>(), [("Next", 150, 900)]);
 }
 
 #[test]

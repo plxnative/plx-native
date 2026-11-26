@@ -3087,9 +3087,16 @@ class LiveTvFixture:
         return [{"id": c["id"], "gridKey": c["id"], "vcn": c["vcn"], "thumb": c["thumb"],
                  "title": c["title"], "callSign": c["title"]} for c in self.CHANNELS]
 
-    def grid(self, now):
-        """The `Metadata` rows of `GET /{epgIdentifier}/grid` at `now`: one airing per channel that has one,
-        on the half hour `now` falls in (`beginsAt` is that half hour, `endsAt` the next one)."""
+    # The channels whose guide is current airings only: no programme follows the one on now. Every other airing
+    # channel is followed by programmes of its own length, so a Guide has a next programme on most rows and none on some.
+    SOLO = frozenset({"104", "110", "115"})
+
+    def grid(self, now, until=None):
+        """The `Metadata` rows of `GET /{epgIdentifier}/grid?beginsAt<=until&endsAt>=now`: per channel that has
+        guide data the airing on now (on the half hour `now` falls in: `beginsAt` is that half hour, `endsAt` the next
+        one) and then the programmes that follow it that BEGIN by `until`, each of the same length (except on the
+        `SOLO` channels, which have none). `until` defaults to `now`, the instant read: the airing on now alone."""
+        until = now if until is None else until
         half = now - now % 1800
         rows = []
         for c in self.CHANNELS:
@@ -3103,20 +3110,24 @@ class LiveTvFixture:
                 if self.anchor is None:
                     self.anchor = now
                 length = airing["mins"] * 60
-                begins = self.anchor - airing["ago"] * 60
-                begins += max(0, (now - begins) // length) * length
-                ends = begins + length
+                first = self.anchor - airing["ago"] * 60
+                first += max(0, (now - first) // length) * length
             else:
-                begins = half
-                ends = begins + 1800
+                length = 1800
+                first = half
             thumb = f"{self.ORIGIN}/art/{c['vcn']}.jpg"
-            row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": airing["type"],
-                   "title": airing["title"], "thumb": thumb, "onAir": True,
-                   "Media": [{"channelVcn": c["vcn"], "channelIdentifier": c["id"], "protocol": "livetv",
-                              "beginsAt": begins, "endsAt": ends, "onAir": True}]}
-            if "grandparentTitle" in airing:
-                row.update(grandparentTitle=airing["grandparentTitle"], grandparentThumb=thumb)
-            rows.append(row)
+            for k in range(1 + max(0, (until - first) // length)):
+                begins = first + k * length
+                if k and c["vcn"] in self.SOLO:
+                    break
+                title = airing["title"] if k == 0 else f"{airing['title']} ({'next' if k == 1 else f'+{k}'})"
+                row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": airing["type"],
+                       "title": title, "thumb": thumb, "onAir": k == 0,
+                       "Media": [{"channelVcn": c["vcn"], "channelIdentifier": c["id"], "protocol": "livetv",
+                                  "beginsAt": begins, "endsAt": begins + length, "onAir": k == 0}]}
+                if "grandparentTitle" in airing:
+                    row.update(grandparentTitle=airing["grandparentTitle"], grandparentThumb=thumb)
+                rows.append(row)
         return rows
 
 
@@ -3606,10 +3617,13 @@ class MockPms:
             rows = lv.lineup()
             return j(self.container(size=len(rows), Channel=rows))
         if reads and segs == [lv.EPG_ID, "grid"]:
-            # The client sends `beginsAt%3C=N`, which `parse_qs` decodes to the key `beginsAt<`; a literal
-            # `beginsAt<=N` parses to the same key. Without a number, the clock.
-            now = q.get("beginsAt<", "")
-            return j(self.container(Metadata=lv.grid(int(now) if now.isdigit() else int(time.time()))))
+            # The client sends `beginsAt%3C=U&endsAt%3E=N`, which `parse_qs` decodes to the keys `beginsAt<` and
+            # `endsAt>`; a literal `beginsAt<=U` parses to the same key. Both bounds are honoured: the airings that
+            # have not ended by N and begin by U (the instant read has U == N). A missing bound falls back to the other,
+            # and without either, to the clock.
+            until, now = q.get("beginsAt<", ""), q.get("endsAt>", "")
+            at = int(now) if now.isdigit() else int(until) if until.isdigit() else int(time.time())
+            return j(self.container(Metadata=lv.grid(at, int(until) if until.isdigit() else at)))
         if (method == "POST" and len(segs) == 6 and segs[:2] == ["livetv", "dvrs"]
                 and segs[3] == "channels" and segs[5] == "tune"):
             sid = q.get("X-Plex-Session-Identifier") or headers.get("X-Plex-Session-Identifier")
