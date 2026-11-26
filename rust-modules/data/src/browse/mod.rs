@@ -1114,6 +1114,38 @@ pub struct PinCommit {
     pub recorded: bool,
 }
 
+/// One library of the table, in the server's own order: the input `plex::library_order` lays an order
+/// out over. `machine_id` is empty while the registry has not learned the server's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderSlot {
+    /// the section table index (an identity only inside one table epoch)
+    pub section: usize,
+    pub machine_id: String,
+    pub key: i64,
+}
+
+/// **The table indices in the order to PRESENT** the libraries of `slots` (the default order) under
+/// `record`: plex's own [`effective`](plx_plex::plex::library_order::effective), so a library the
+/// record cannot name falls right after its default predecessor. The store lays its table out with
+/// this, and Settings' Library order page lays out the order a held library would leave with this
+/// same call, so what the page shows during a move is what the store publishes after the drop.
+pub fn presented_sections(slots: &[OrderSlot], record: Option<&plx_plex::plex::session::LibraryOrder>) -> Vec<usize> {
+    let libs: Vec<plx_plex::plex::library_order::Lib<'_>> = slots.iter()
+        .map(|slot| plx_plex::plex::library_order::Lib { machine_id: &slot.machine_id, key: slot.key }).collect();
+    plx_plex::plex::library_order::effective(&libs, record).into_iter().map(|at| slots[at].section).collect()
+}
+/// [`presented_sections`] for an order named as `(machine id, section key)` pairs, first shown first:
+/// where the table's libraries land were exactly these recorded (what a drop's command will make the
+/// store publish).
+pub fn presented_sections_named(slots: &[OrderSlot], named: &[(String, i64)]) -> Vec<usize> {
+    use plx_plex::plex::session::{LibraryOrder, OrderedLib};
+    let record = LibraryOrder {
+        libs: named.iter().map(|(machine_id, key)| OrderedLib { machine_id: machine_id.clone(), key: *key, ..Default::default() }).collect(),
+        ..Default::default()
+    };
+    presented_sections(slots, Some(&record))
+}
+
 pub use plx_plex::plex::library_order::OrderState;
 pub use preferences_job::WriteState;
 
@@ -2202,21 +2234,19 @@ impl BrowseState {
         });
         order
     }
-    /// The libraries at `order` (table indices) as `plex::library_order` sees them.
-    fn libs_in<'a>(&'a self, order: &[usize]) -> Vec<plx_plex::plex::library_order::Lib<'a>> {
-        order.iter().map(|&index| {
-            let section = &self.sections[index];
-            plx_plex::plex::library_order::Lib {
-                machine_id: self.sources.get(section.src).map_or("", |source| source.machine_id.as_str()),
-                key: section.key,
-            }
+    /// **The table in its default order, as `plex::library_order` sees it**: the one input every
+    /// presentation of a Library order is laid out from, the store's own and Settings' page (which
+    /// reads it from the publication, [`DirectoryView::library_order_slots`]).
+    fn order_slots(&self) -> Vec<OrderSlot> {
+        self.default_section_order().into_iter().filter_map(|index| {
+            let section = self.sections.get(index)?;
+            let machine_id = self.sources.get(section.src).map_or("", |source| source.machine_id.as_str());
+            Some(OrderSlot { section: index, machine_id: machine_id.to_string(), key: section.key })
         }).collect()
     }
     /// Every table index in the order to PRESENT: the default order under this profile's record.
     fn section_order(&self) -> Vec<usize> {
-        let default = self.default_section_order();
-        plx_plex::plex::library_order::effective(&self.libs_in(&default), self.order_record.as_ref())
-            .into_iter().map(|at| default[at]).collect()
+        presented_sections(&self.order_slots(), self.order_record.as_ref())
     }
     /// The favourites (table indices) in presentation order.
     fn favorite_order(&self) -> Vec<usize> {

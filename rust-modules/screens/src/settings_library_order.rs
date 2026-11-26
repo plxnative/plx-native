@@ -19,10 +19,12 @@
 //! saved order names it by, which survives a rebuild of the section table (whose indices
 //! ([`LibraryOrderRow::section`]) do not). The mode, the focus, the sentence and the rows' keys all
 //! follow a library by it. A library whose server's machine id is not learned yet has no identity an
-//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why; it stands still on the
-//! page while the named libraries move around it, and a drop's command leaves it out. The store
-//! places it by its own rule (right after its default predecessor), so once the store publishes, the
-//! row may sit elsewhere than where the page held it; the page never applies that rule itself.
+//! order can record ([`LibId::Unnamed`]): it is listed, not pickable, and says why, and a drop's
+//! command leaves it out. **The page lays every order out with the store's own rule**
+//! ([`PageState::laid_out`]): the named order a move leaves is handed to `plx_data::browse`'s
+//! `presented_sections_named`, the call the store makes over the same table in its server order (the
+//! publication's [`Published::slots`]), so a row no order names lands right after its default
+//! predecessor, on the page as in the publication that follows, and the echo moves no row.
 //!
 //! **What the store says and what the page shows are two things, and the state between them has a
 //! name** ([`Shown`]). The page reads the publication through ONE adapter ([`Published`]); after a
@@ -44,7 +46,7 @@
 //! where the real header does; its ⋯ and the note about it appear only when names are folded.
 
 use super::*;
-use plx_data::browse::{LibraryOrderRow, OrderState, SecKind, WriteState};
+use plx_data::browse::{presented_sections_named, LibraryOrderRow, OrderSlot, OrderState, SecKind, WriteState};
 use plx_data::stores::browse::{BrowseCmd, DirectoryView};
 use plx_data::stores::{StoreCmd, StoreId};
 use plx_machine::machine::{Edge, InputEvent, InputKind};
@@ -63,17 +65,24 @@ use plx_ui::widgets::{CtlPop, TabStrip};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Published {
     rows: Vec<LibraryOrderRow>,
+    /// The table in the server's own order, which `rows` were laid out from: the input an order a
+    /// move leaves is laid out from again.
+    slots: Vec<OrderSlot>,
     state: OrderState,
     write: WriteState,
 }
 
 impl Published {
     fn read(directory: DirectoryView<'_>) -> Self {
-        Self { rows: rows_of(directory).to_vec(), state: directory.library_order_state(), write: directory.library_order_write() }
+        Self {
+            rows: rows_of(directory).to_vec(), slots: directory.library_order_slots().to_vec(),
+            state: directory.library_order_state(), write: directory.library_order_write(),
+        }
     }
     /// Does `directory` publish exactly this (no clone, for the per-frame question)?
     fn is_current(&self, directory: DirectoryView<'_>) -> bool {
         self.rows == rows_of(directory)
+            && self.slots == directory.library_order_slots()
             && self.state == directory.library_order_state()
             && self.write == directory.library_order_write()
     }
@@ -215,8 +224,9 @@ enum Mode {
 
 /// A library row's part in the reorder, from the mode ([`RowMove`] is the table's one language for it).
 ///
-/// A library moves among the libraries an order can name (`rank` of `named`): a row no order can
-/// name stays where it stands, so every move changes the order a drop sends.
+/// A library moves among the libraries an order can name (`rank` of `named`), so every move changes
+/// the order a drop sends; where a row no order names lies is the store's rule's business
+/// ([`PageState::laid_out`]).
 fn move_of(mode: &Mode, rank: Option<usize>, named: usize, row: &LibraryOrderRow) -> RowMove {
     let (can_up, can_down) = rank.map_or((false, false), |rank| (rank > 0, rank + 1 < named));
     match (mode, LibraryRef::of(row)) {
@@ -304,6 +314,19 @@ impl PageState {
 
     fn row_of(&self, lib: &LibraryRef) -> Option<&LibraryOrderRow> {
         self.shown.iter().find(|row| LibraryRef::of(row).as_ref() == Some(lib))
+    }
+
+    /// **The shown rows for a named order**, laid out by the store's rule: the libraries of the
+    /// table in the order `presented_sections_named` puts them were `named` recorded, over the table
+    /// the shown rows were read with ([`Published::slots`]). A row no order can name lands where the
+    /// store will place it, so the page shows what the store publishes after the drop. `None` when
+    /// the rows and the table disagree (the publication moved under the page): the caller leaves the
+    /// rows as they are.
+    fn laid_out(&self, named: &[LibraryRef]) -> Option<Vec<LibraryOrderRow>> {
+        let named: Vec<(String, i64)> = named.iter().map(|lib| (lib.machine_id.clone(), lib.key)).collect();
+        let laid: Vec<LibraryOrderRow> = presented_sections_named(&self.seen.slots, &named).into_iter()
+            .filter_map(|section| self.shown.iter().find(|row| row.section == section).cloned()).collect();
+        (laid.len() == self.shown.len()).then_some(laid)
     }
 
     /// The library row the focus is on, `None` on Reset.
@@ -728,16 +751,18 @@ impl LibraryOrderPage {
         self.set_mode(Mode::ResetDone);
     }
 
-    /// Move the held library one place (`-1` up, `1` down); at either end nothing moves.
+    /// Move the held library one place among the libraries an order can name (`-1` up, `1` down); at
+    /// either end nothing moves. Only the NAMED order is permuted: the rows are then laid out by the
+    /// store's rule ([`PageState::laid_out`]), unnamed ones included.
     fn carry(&mut self, delta: isize) {
         let Mode::Moving { lifted, .. } = &self.state.mode else { return };
-        let Some(at) = self.state.position(lifted) else { return };
-        // a row no order can name stays where it stands: the held library trades places with the
-        // next one an order can name, so a move always changes the order a drop sends
-        let named: Vec<usize> = (0..self.state.shown.len()).filter(|i| LibraryRef::of(&self.state.shown[*i]).is_some()).collect();
-        let Some(rank) = named.iter().position(|i| *i == at) else { return };
-        let Some(to) = rank.checked_add_signed(delta).and_then(|rank| named.get(rank)).copied() else { return };
-        self.state.shown.swap(at, to);
+        let lifted = lifted.clone();
+        let mut named = named_order(&self.state.shown);
+        let Some(rank) = named.iter().position(|lib| *lib == lifted) else { return };
+        let Some(to) = rank.checked_add_signed(delta).filter(|to| *to < named.len()) else { return };
+        named.swap(rank, to);
+        let Some(laid) = self.state.laid_out(&named) else { return };
+        self.state.shown = laid;
         self.rebuild();
     }
 

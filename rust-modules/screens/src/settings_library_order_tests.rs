@@ -153,9 +153,8 @@ fn a_drop_that_moved_nothing_writes_nothing() {
 
 /// A library whose server has not reported its machine id is no library an order can name. The
 /// command a drop sends is the order of the libraries that CAN be named, in the order shown (here
-/// five of six); the unnamed one is not in it (the store places it by its default rule), cannot be
-/// picked up, and stands where it is while the named ones move around it. An empty command is
-/// never sent.
+/// five of six); the unnamed one is not in it, cannot be picked up, and is laid out by the store's
+/// rule while the named ones move. An empty command is never sent.
 #[test]
 fn a_library_whose_server_has_no_machine_id_yet_is_left_out_of_the_command() {
     let mut rows = six();
@@ -172,29 +171,35 @@ fn a_library_whose_server_has_no_machine_id_yet_is_left_out_of_the_command() {
 }
 
 #[test]
-fn a_move_steps_over_a_library_no_order_can_name_so_the_named_order_always_changes() {
-    // shown = [A, U (unnamed), B, ...]: A down must trade with B, never with U
-    let mut rows = six();
-    rows[1].machine_id.clear();
-    let s = snap(rows, OrderState::Server, WriteState::Idle);
+fn a_move_steps_over_a_library_no_order_can_name_and_the_page_shows_what_the_store_will_publish() {
+    // shown = [A, U (unnamed), B, C, ...]: A down trades with B, never with U, and U follows its
+    // default predecessor A (the store's rule), so the page reads [B, A, U, C, ...] before any echo
+    let mut table = six();
+    table[1].machine_id.clear();
+    let s = snap(table.clone(), OrderState::Server, WriteState::Idle);
     let mut page = page_of(&s);
     pick_up(&mut page, &s, 0);
     press(&mut page, &s, Key::Down);
-    assert_eq!(order(&page), [2, 1, 0, 3, 4, 5], "A took B's place; the unnamed row stood still");
+    assert_eq!(order(&page), [2, 0, 1, 3, 4, 5], "[B, A, U, C, ..]: A took B's place and U kept following A");
     let Some(Sent::Set(libs)) = sent(&ok_lib(&mut page, &s, 0)).pop() else { panic!("a move of the named order sends it") };
     let keys: Vec<i64> = libs.iter().map(|(_, key)| *key).collect();
     assert_eq!(keys, [3, 1, 4, 5, 6]);
     assert!(matches!(page.state.mode, Mode::Dropped(_)));
     assert!(matches!(page.state.basis, Shown::AwaitingEcho { .. }));
-    // the store's echo of that order, as the store places it: the unnamed row follows its default
-    // predecessor (Movies), so it no longer stands where the page held it, and nothing snaps back
-    let mut table = six();
-    table[1].machine_id.clear();
+    // the store's echo of that order, built by plex's own rule (not by the page's): the same rows
     let echo = snap(published(&table, &libs), RECORDED, WriteState::InFlight);
     let echoed: Vec<usize> = echo.view().library_order().iter().map(|r| r.section).collect();
-    assert_eq!(echoed, [2, 0, 1, 3, 4, 5], "the store's placement of the unnamed row, not the page's");
+    assert_eq!(echoed, order(&page), "the page already shows the store's publication");
+    // let the move's glide finish, then the echo lands: it moves no row
+    for _ in 0..400 {
+        step_page(&mut page, &s, tick_ev());
+        if !page.form.table.gliding() { break; }
+    }
+    assert!(!page.form.table.gliding(), "the move's glide settled");
     step_page(&mut page, &echo, tick_ev());
     assert_eq!(page.state.basis, Shown::Published);
+    assert_eq!(order(&page), echoed);
+    assert!(!page.form.table.gliding(), "nothing glides at the echo");
 }
 
 #[test]
