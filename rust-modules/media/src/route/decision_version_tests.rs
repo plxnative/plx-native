@@ -1293,3 +1293,64 @@ fn the_published_resolver_is_readable_and_an_absence_clears_it() {
 
 #[path = "decision_composition_tests.rs"]
 mod composition_tests;
+
+/// A play's `/decision` reserves its Streaming Resource under the logical session; the playback can
+/// move onto an encoder id derived from it (`-abr-1`), which is what the stop names. The stop must
+/// still close the resource the decision reserved, or the server keeps the stream slot until its
+/// own timeout.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn the_stop_closes_the_resource_the_decision_reserved_under_the_logical_session() {
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    assert!(plx_net::net::global_init());
+    let (port, done, server) = versions_pms_with(URI_DTS, MDE_PMS_OUTPUT);
+    let sid = plx_plex::plex::register_for_test("logical-close-pms", "127.0.0.1", port,
+        "token", "logical-close-client");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_play(&mut ps, &mut meta, plx_os::devcaps::caps(), sid,
+        "rk-v", "/library/parts/3134/1/file.mkv", "h264", "dca", "Film", "", None, ""));
+    assert!(wait_resolve_workers_for_test(std::time::Duration::from_secs(15)));
+    let _ = pump_play(&mut ps, &mut meta);
+    let logical = sess(&ps);
+    assert!(!logical.is_empty());
+    install_active_encoder_for_test(&format!("{logical}-abr-1"));
+    scrobble_stop(&mut ps, None, None);
+    drain_scrobble();
+    done.send(()).unwrap();
+    let requests = server.join().unwrap();
+    let identifier = format!("X-Plex-Session-Identifier={logical}");
+    assert!(requests.iter().any(|l| l.starts_with("POST /status/sessions/close?") && l.contains(&identifier)),
+        "the logical resource is closed at the stop: {requests:?}");
+    plx_plex::plex::reset_servers_for_test();
+}
+
+/// A hero trailer writes no watch state, but its `/decision` reserves a stream slot like any play:
+/// retiring the preview must close the resource, or each trailer holds a slot until the server's
+/// timeout and the next real play finds the server full.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn retiring_a_trailer_preview_closes_the_resource_its_decision_reserved() {
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, done, server) = versions_pms_with(URI_DTS, MDE_PMS_OUTPUT);
+    let sid = plx_plex::plex::register_for_test("preview-close", "127.0.0.1", port, "token", "preview-close-client");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_play(&mut ps, &mut meta, plx_os::devcaps::caps(), sid,
+        "rk-v", "/library/parts/3134/1/file.mkv", "h264", "dca", "Film", "", None, ""));
+    assert!(wait_resolve_workers_for_test(std::time::Duration::from_secs(15)));
+    pump_play(&mut ps, &mut meta).expect("accepted PMS output start");
+    mark_preview_for_test(&mut ps);
+    let logical = sess(&ps);
+    install_active_encoder_for_test(&format!("{logical}-abr-1"));
+    scrobble_stop(&mut ps, Some(("rk-v".into(), 30_000, 60_000)), None);
+    drain_scrobble();
+    done.send(()).unwrap();
+    let requests = server.join().unwrap();
+    assert!(requests.iter().any(|line| line.starts_with("POST /status/sessions/close?")
+            && line.contains(&format!("X-Plex-Session-Identifier={logical}"))),
+        "the trailer's resource is closed at its retirement: {requests:?}");
+    assert!(!requests.iter().any(|line| line.contains("/:/timeline") || line.contains("/:/scrobble")),
+        "a trailer writes no watch state: {requests:?}");
+    plx_plex::plex::reset_servers_for_test();
+}

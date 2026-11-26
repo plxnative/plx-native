@@ -677,15 +677,22 @@ impl Client {
         if session.is_empty() {
             return false;
         }
-        match self.get_status(&self.transcode_stop_query(session, true)) {
+        let status = self.get_status(&self.transcode_stop_query(session, true));
+        plx_base::eventlog::log(&format!(
+            "transcode stop status={}",
+            status.map_or_else(|| "none".to_owned(), |s| s.to_string())
+        ));
+        match status {
             Some(200..=299) => true,
-            // Decision-only session: close its reserved stream slot, or the server holds it
-            // until its own timeout.
-            Some(404) => {
-                let _ = self.transcode_resource_reconciled(session);
+            // The server answered but kept the stop (404: no transcoder under this id, it only
+            // ever ran /decision). Its Streaming Resource holds a stream slot the stop's own close
+            // never reached: close it directly, or the server holds it until its own timeout.
+            Some(_) => {
+                let closed = self.transcode_resource_reconciled(session);
+                plx_base::eventlog::log(&format!("transcode resource close ok={}", closed.is_some() as i32));
                 false
             }
-            _ => false,
+            None => false,
         }
     }
 

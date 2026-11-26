@@ -8664,6 +8664,9 @@ struct ScrobbleWork {
     audio_stream_id: i64,
     subtitle_stream_id: i64,
     transcode_session: String,
+    /// The id the play's `/decision` reserved its Streaming Resource under. The playback may have
+    /// moved onto an encoder id derived from it, which a stop never names.
+    logical_session: String,
     /// The item whose last reported id [`ScrobbleWork::run`] takes ([`ReportedTimeline`]), and the
     /// server it was reported to. The take is the worker's, after the reporter is joined: a tick
     /// in flight when the stop began still writes the record, and a take on the main thread
@@ -8859,6 +8862,10 @@ impl ScrobbleWork {
                 .is_some_and(|c| c.transcode_stop(&self.transcode_session));
             plx_base::eventlog::log(&format!("transcode stopped ok={}", ok as i32));
         }
+        if !self.logical_session.is_empty() && self.logical_session != self.transcode_session {
+            let closed = self.client.and_then(|c| c.transcode_resource_reconciled(&self.logical_session));
+            plx_base::eventlog::log(&format!("logical resource close ok={}", closed.is_some() as i32));
+        }
     }
 }
 
@@ -8883,15 +8890,14 @@ pub fn scrobble_stop(
     final_report: Option<(String, i64, i64)>,
     report_th: Option<std::thread::JoinHandle<()>>,
 ) {
-    if preview_request(ps) {
-        return;
-    }
+    // A trailer writes no watch state, but its `/decision` reserved a stream slot all the same.
+    let final_report = final_report.filter(|_| !preview_request(ps));
     let (logical_session, pq, pqi) = (sess(ps), pq_id(ps), pq_item_id(ps));
     let mark_watched = std::mem::take(&mut ps.finished);
     let (aud, sub) = (cur_audio_sid(ps), cur_sub_sid(ps)); // the selection this playback reported under
     let tsession = take_active_encoder();
     let session = if tsession.is_empty() {
-        logical_session
+        logical_session.clone()
     } else {
         tsession.clone()
     };
@@ -8909,7 +8915,7 @@ pub fn scrobble_stop(
         s.tsession.clear();
         s.cur_contract.remux = false;
     } };
-    if final_report.is_none() && tsession.is_empty() && report_th.is_none() && live.is_none() {
+    if final_report.is_none() && tsession.is_empty() && report_th.is_none() && live.is_none() && logical_session.is_empty() {
         // Nothing to post and nobody to wait for, so no worker. The record a reporter left must
         // still go with its playback, and a take is only ordered after the reporter's last POST
         // while the effect lane is free: a reporter cut loose by a reload may be mid-POST on it.
@@ -8964,6 +8970,7 @@ pub fn scrobble_stop(
         } else {
             tsession
         },
+        logical_session,
         reported_sid,
         reported_rk,
         timeline_stop,

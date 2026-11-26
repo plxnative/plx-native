@@ -628,7 +628,7 @@ fn a_stop_that_finished_the_item_scrobbles_it_after_the_stopped_report() {
     assert!(!ps.finished, "the stop took the flag, so it cannot mark the next item");
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 2, "the stopped report and the scrobble, nothing else: {lines:?}");
+        assert_eq!(lines.len(), 3, "the stopped report, the scrobble and the logical close: {lines:?}");
         assert!(lines[0].contains("state=stopped"), "`stopped` goes first: {}", lines[0]);
         assert!(lines[1].contains("/:/scrobble?key=7"), "then the scrobble: {}", lines[1]);
     }
@@ -645,8 +645,8 @@ fn a_stop_that_finished_the_item_scrobbles_it_after_the_stopped_report() {
     drain_scrobble();
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 3, "only the `stopped` report: {lines:?}");
-        assert!(lines[2].contains("state=stopped"), "{}", lines[2]);
+        assert_eq!(lines.len(), 5, "only the `stopped` report and the logical close: {lines:?}");
+        assert!(lines[3].contains("state=stopped"), "{}", lines[3]);
     }
     let stops = take_landed_stops();
     assert_eq!((stops[0].pos_ms, stops[0].dur_ms), (30_000, 60_000));
@@ -691,7 +691,7 @@ fn a_finishing_stop_past_the_servers_threshold_posts_stopped_alone() {
     assert!(!ps.finished, "the stop took the flag even though it did not scrobble");
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 1, "only the `stopped` report, no second view: {lines:?}");
+        assert_eq!(lines.len(), 2, "the `stopped` report and the logical close, no second view: {lines:?}");
         assert!(lines[0].contains("state=stopped"), "{}", lines[0]);
     }
     let stops = take_landed_stops();
@@ -893,7 +893,7 @@ fn server_stop_is_visible_while_dashboard_cleanup_waits_and_retires_the_row_once
     assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
     assert_eq!(shape.detail, "stopped by the admin");
     assert!(!replacement_sent, "the replacement reporter must send no playing report");
-    assert_eq!(remaining.len(), 2, "only the final stopped and the encoder stop: {remaining:#?}");
+    assert_eq!(remaining.len(), 3, "the final stopped, the encoder stop and the logical close: {remaining:#?}");
     assert!(remaining[0].contains("state=stopped") && !remaining[0].contains("continuing=1"));
     assert!(remaining[0].contains("X-Plex-Session-Identifier=logical-1236-abr-2"));
     assert!(remaining[1].contains("/transcode/universal/stop"));
@@ -1098,8 +1098,8 @@ fn the_final_stop_also_retires_the_last_reported_id_when_it_moved_on() {
     leave_recording_pms_case(&mut ps);
     assert_eq!(
         lines.len(),
-        4,
-        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop: {lines:#?}"
+        5,
+        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[1].contains("state=stopped")
@@ -1131,7 +1131,7 @@ fn the_final_stop_under_the_reported_id_sends_no_extra_stopped() {
 
     let lines = requests_until_quiet(&rx);
     leave_recording_pms_case(&mut ps);
-    assert_eq!(lines.len(), 3, "playing, the final stopped, the encoder stop: {lines:#?}");
+    assert_eq!(lines.len(), 4, "playing, the final stopped, the encoder stop, the logical close: {lines:#?}");
     assert!(
         lines[1].contains("state=stopped")
             && !lines[1].contains("continuing")
@@ -1161,8 +1161,8 @@ fn the_final_stop_retires_the_last_reported_id_after_the_engine_teardown_ran_fir
     leave_recording_pms_case(&mut ps);
     assert_eq!(
         lines.len(),
-        4,
-        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop: {lines:#?}"
+        5,
+        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[1].contains("state=stopped")
@@ -1269,8 +1269,8 @@ fn a_tick_in_flight_at_the_stop_is_not_retired_twice_and_leaves_no_record() {
     );
     assert_eq!(
         lines.len(),
-        5,
-        "playing(A), stopped(A), playing(B), the final stopped(B), the encoder stop: {lines:#?}"
+        6,
+        "playing(A), stopped(A), playing(B), the final stopped(B), the encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[3].contains("state=stopped")
