@@ -423,8 +423,9 @@ Measured on the TV 10.0 emulator:
 - The log reads `ecore: media keys grabbed TOPMOST; refused []`.
 - During playback, Pause (`XF86AudioPause`, code 209) still reaches the app and pauses (`player event Paused`), and Play
   (`XF86AudioPlay`, code 208) resumes (`Started`).
-- The skin remote's Play/Pause button sends evdev code 244 (`KEY_PLAY_PAUSE` in the skin's `controller/Smart(2016)/layout.xml`;
-  `ecp-cli keycode 244` presses it from a script). The app reads it as `XF86PlayBack` (code 252) -> `PlayPause`.
+- The skin remote's Play/Pause button is `KEY_PLAY_PAUSE`, code 244, in the skin's `controller/Smart(2016)/layout.xml`.
+  The skin numbers its buttons in evdev (Up is 103), and `ecp-cli keycode` takes the same numbers, so `ecp-cli keycode 244`
+  presses it from a script. The app receives it as X keycode 252, `XF86PlayBack` -> `PlayPause`.
 - The popup appears about 1 s after the key and stays about 2.5 s, so a capture taken right after the key misses it. Frames
   captured every 300 ms for 4 s after code 244:
   - on Smart Hub, where no app grabs the key: "Not Available" shows;
