@@ -3311,7 +3311,10 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Previous pin: 0xeb60_634f_6b5f_c9ac.
 // Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains
 // `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin: 0x62a1_9fdc_6c66_d317.
-const SCREEN_SHAPES_PIN: u64 = 0x1990_0160_ac8b_0137;
+// The Live TV Guide (PR6) joins the Live TV screen's canon: the scope and the board's page, window start and whether the
+// reader holds the window ahead (`scope`, `guide:Option<(page,window,ahead)>`). Previous pin: 0x1990_0160_ac8b_0137.
+// Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0xd1ed_8cb4_ad5b_5093;
 
 #[cfg(test)]
 mod arg_tests {
