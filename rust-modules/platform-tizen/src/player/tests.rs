@@ -686,12 +686,29 @@ fn the_native_track_is_the_one_whose_language_is_the_streams() {
         let (a, _) = prepared_with(&mut driver, &fake, SECOND, 1, NativeTrackCheck::Language(unknown.into()), &["eng", "ger"]);
         assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Refused(Failure::Unsupported), "{unknown:?}");
     }
-    // A source with one audio stream needs no language: its ordinal is the track.
-    let (mut driver, fake) = rig();
+}
+
+/// **A sole audio stream is settled by construction, with no host call** (review round 2 of #1566). The player plays
+/// the only track it has, so asking it is no evidence and a firmware that reports no track in READY (a count of 0, a
+/// failed read, a missing `player_select_track`) would answer -1 and halt the start of every single-audio title, the
+/// kind that already plays on the retail set. It settles as main settled it: `TrackSelected` and `TrackSettled` at
+/// once, no `VERB_AUDIO_TRACK`. A `Sole` check at any ordinal but 0 is no single stream and is refused.
+#[test]
+fn a_sole_audio_stream_settles_by_construction_without_asking_the_host() {
     let first = TrackSelection { kind: TrackKind::Audio, id: 31342 };
+    let (mut driver, fake) = rig();
     let (a, _) = prepared_with(&mut driver, &fake, first, 0, NativeTrackCheck::Sole, &[]);
     assert_eq!(dispatch(&mut driver, a, 2, pick(31342)), DispatchResult::Queued);
-    assert_eq!(fake.verbs(), [Verb::AudioTrack { index: 0, command: 2 }]);
+    assert!(fake.verbs().is_empty(), "no verb for a sole stream: {:?}", fake.verbs());
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(first))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Audio, choice: TrackChoice::Selected(31342) },
+    ]);
+
+    let (mut driver, fake) = rig();
+    let (a, _) = prepared_with(&mut driver, &fake, first, 1, NativeTrackCheck::Sole, &[]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick(31342)), DispatchResult::Refused(Failure::Unsupported));
+    assert!(fake.verbs().is_empty());
 }
 
 /// PMS states a stream's language as ISO 639-2 (`ger`, `fre`, `cze`: the B codes Plex writes) and a container can

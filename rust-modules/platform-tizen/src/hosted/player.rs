@@ -195,6 +195,26 @@ mod tests {
         );
     }
 
+    /// The PREPARED burst fits: the host posts every native audio track's language (up to the cap) and then PREPARED,
+    /// VIDEO_SIZE and the answers held for PREPARED in one go, before the loop drains anything (review round 2 of #1566).
+    #[test]
+    fn the_prepared_burst_fits_the_queue() {
+        let link = PlayerLink::new();
+        link.opened(1);
+        for index in 0..host_abi::AUDIO_LANGUAGE_REPORTS {
+            assert_eq!(link.accept(ev(1, PlayerKind::AudioLanguage, index as i64)), Ok(()));
+        }
+        let others = [PlayerKind::Track, PlayerKind::SeekDone, PlayerKind::Prepared, PlayerKind::VideoSize,
+            PlayerKind::Started, PlayerKind::Buffering, PlayerKind::Position];
+        assert!(others.len() <= PREPARED_BURST_EVENTS);
+        for kind in others {
+            assert_eq!(link.accept(ev(1, kind, 0)), Ok(()), "{kind:?}");
+        }
+        let mut out = Vec::new();
+        assert!(!link.drain(&mut out).overflowed);
+        assert_eq!(out.len(), host_abi::AUDIO_LANGUAGE_REPORTS + others.len());
+    }
+
     /// A lossless event that does not fit is an overflow the drain reports (never a silent drop); a full
     /// queue still takes the latest position of an epoch that already has one queued.
     #[test]
