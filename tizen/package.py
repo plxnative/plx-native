@@ -59,13 +59,15 @@ SIGNING_VARS = ("PLX_TIZEN_AUTHOR_P12", "PLX_TIZEN_AUTHOR_PASS", "PLX_TIZEN_DIST
 # real is ever put here. A real credential in this file would be published with the package.
 DEV_BOOT_TOKEN = "plxnative-emulator-placeholder-token"
 
-# The fonts are the application directory's (`res/`, `DirectoryInfo.Resource`): Inter for the UI, and what the renderer and the text path read
-# beside it. `appfont-cjk.ttf` is the subtitle renderer's default face (`plx_ass_create`) and the UI's CJK fallback; the Arabic and Hebrew faces
-# are what the right-to-left text path shapes with (rust-modules/gfx/src/rtl.rs); the per-script subtitle faces are SUBS_FONT_DIR's.
+# The fonts are the application directory's (`res/`, `DirectoryInfo.Resource`): every face of the UI text chain (rust-modules/gfx/src/text.rs:
+# Inter, CJK, emoji, Arabic, Hebrew; ci/test_shipped_faces.py holds this list to it), which the subtitle renderer reads too. `appfont-cjk.ttf` is
+# the renderer's default face (`plx_ass_create`) as well as the UI's CJK fallback; the Arabic and Hebrew faces are what the right-to-left text
+# path shapes with the renderer's library (rust-modules/gfx/src/rtl.rs); the per-script subtitle faces are SUBS_FONT_DIR's.
 PAYLOAD = (
     ("pkg/appfont.ttf", "res/appfont.ttf"),
     ("pkg/appfont-bold.ttf", "res/appfont-bold.ttf"),
     ("pkg/appfont-cjk.ttf", "res/appfont-cjk.ttf"),
+    ("pkg/appfont-emoji.ttf", "res/appfont-emoji.ttf"),
     ("pkg/appfont-arabic.ttf", "res/appfont-arabic.ttf"),
     ("pkg/appfont-arabic-bold.ttf", "res/appfont-arabic-bold.ttf"),
     ("pkg/appfont-hebrew.ttf", "res/appfont-hebrew.ttf"),
