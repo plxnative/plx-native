@@ -286,7 +286,7 @@ pub mod shade {
     /// ...and has fallen to nothing at these. Both are curves, so the shade has no straight top or
     /// right edge for the eye to read as a plate (discussion #1460).
     pub const DETAIL_SIDE_REACH: [f32; 2] = [1900.0, 1020.0];
-    /// Grow the side shade upward as the preview logo travels into the corner.
+    /// Grow the side shade's reach upward as the preview logo travels into the corner.
     pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
     pub const DETAIL_PREVIEW_TOP_Y: [f32; 2] = [20.0, 245.0];

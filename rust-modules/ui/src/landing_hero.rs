@@ -145,8 +145,11 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let rise = theme::shade::DETAIL_PREVIEW_RISE * t;
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));
-    let [hold, reach] = [theme::shade::DETAIL_SIDE_HOLD, theme::shade::DETAIL_SIDE_REACH].map(|[a, b]| [a, b + rise]);
-    edge_wash(ramp, hold, reach, top_fade,
+    // The rise grows only the reach: the hold already stands near the top-left, and growing it too
+    // would hold the side's full darkness over the corner the logo is travelling into while the side
+    // is fading out, so the corner would lighten before the top fade takes it over.
+    let [reach_x, reach_y] = theme::shade::DETAIL_SIDE_REACH;
+    edge_wash(ramp, theme::shade::DETAIL_SIDE_HOLD, [reach_x, reach_y + rise], top_fade,
         theme::shade::DETAIL_SIDE_A * field * (1.0 - t), base.max(field.min(1.0)))
 }
 
