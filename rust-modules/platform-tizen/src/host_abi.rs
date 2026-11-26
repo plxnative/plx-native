@@ -561,6 +561,18 @@ mod tests {
     /// A player event is decoded with its epoch and payload words; a short `size` (a version-1 sized event
     /// carrying a player kind) is refused, and a version-1 pause is still accepted at its own size.
     #[test]
+    fn the_language_word_is_the_codes_ascii_bytes_and_anything_else_is_none() {
+        let word = |s: &str| { let mut b = [0u8; 8]; b[..s.len()].copy_from_slice(s.as_bytes()); i64::from_le_bytes(b) };
+        assert_eq!(language_of_word(word("deu")), Some("deu".to_owned()));
+        assert_eq!(language_of_word(word("en")), Some("en".to_owned()));
+        assert_eq!(language_of_word(0x0075_6564), Some("deu".to_owned()), "first character in the lowest byte");
+        assert_eq!(language_of_word(0), None, "no code");
+        assert_eq!(language_of_word(word("e1")), None, "not letters");
+        assert_eq!(language_of_word(word("de-DE")), None, "not a bare code");
+        assert_eq!(language_of_word(word("abcdefgh")), None, "longer than a language code");
+    }
+
+    #[test]
     fn a_player_event_is_decoded_and_a_short_one_is_refused() {
         let ev = |size, kind, epoch, a, b| PlxHostEvent { size, kind, epoch, reserved: 0, a, b };
         assert_eq!(
@@ -574,7 +586,7 @@ mod tests {
         );
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PLAYER_COMPLETED, 3, 0, 0)) }, Err(E_ARGS), "short");
         assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE - 1, EVENT_PLAYER_POSITION, 3, 9, 0)) }, Err(E_ARGS), "short by one byte");
-        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_TRACK + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_AUDIO_LANGUAGE + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
         // A v1 host's pause is 8 bytes in memory: only 8 are readable and only 8 are read.
         let pause = [EVENT_V1_SIZE, EVENT_PAUSE];
         assert_eq!(unsafe { read_event(pause.as_ptr().cast()) }, Ok(HostEvent::Pause));
