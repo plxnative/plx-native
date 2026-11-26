@@ -508,6 +508,15 @@ namespace PlxHost
             foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
         }
 
+        // Answers a held track's command ids with TrackRefused and forgets it: the epoch is ending or never prepared.
+        private static void AnswerTracks(Session s)
+        {
+            Track held = s.TrackLater;
+            s.TrackLater = null;
+            if (held == null) return;
+            foreach (long command in held.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, TrackRefused);
+        }
+
         // A native call that threw (an entry point missing on some firmware) reads as a failed call, so a play is never failed by a read.
         private const int NativeThrew = int.MinValue;
 
