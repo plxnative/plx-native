@@ -700,16 +700,14 @@ impl DirectorySnapshot {
     }
 
     /// This directory publishing a Library order: `rows` (the favourites in presentation order,
-    /// what [`DirectoryView::library_order`] reads), what the profile's record is and where its
-    /// last write stands. For a page test that has no store to drive.
+    /// what [`DirectoryView::library_order`] reads), `slots` (EVERY library of the table in the
+    /// server's own order, favourites or not: what [`DirectoryView::library_order_slots`] reads),
+    /// what the profile's record is and where its last write stands. For a page test that has no
+    /// store to drive; [`super::library_order_publication`] is the real store's.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn with_library_order(mut self, rows: Vec<super::LibraryOrderRow>, state: super::OrderState, write: super::WriteState) -> Self {
+    pub fn with_library_order(mut self, rows: Vec<super::LibraryOrderRow>, slots: Vec<super::OrderSlot>,
+        state: super::OrderState, write: super::WriteState) -> Self {
         let data = Arc::make_mut(&mut self.data);
-        // the test table's server order is the sections' own (a fixture's rows are in section order
-        // when it is the default, in the order shown when it stands for a publication)
-        let mut slots: Vec<super::OrderSlot> = rows.iter()
-            .map(|row| super::OrderSlot { section: row.section, machine_id: row.machine_id.clone(), key: row.key }).collect();
-        slots.sort_by_key(|slot| slot.section);
         data.order_slots = slots;
         data.order_rows = rows;
         data.order_state = state;

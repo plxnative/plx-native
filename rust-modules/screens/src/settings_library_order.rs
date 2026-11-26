@@ -24,7 +24,11 @@
 //! ([`PageState::laid_out`]): the named order a move leaves is handed to `plx_data::browse`'s
 //! `presented_sections_named`, the call the store makes over the same table in its server order (the
 //! publication's [`Published::slots`]), so a row no order names lands right after its default
-//! predecessor, on the page as in the publication that follows, and the echo moves no row.
+//! predecessor. A drop that SENDS an order shows what the store publishes for it (the store keeps
+//! no entry of a library on a present server that the order does not name, so the record becomes
+//! exactly the named order), and the echo moves no row. A drop that sends nothing shows the rows that
+//! were picked up, as Back does: the record stays as it was, and it may name libraries that are no
+//! favourites, which would place the rows differently.
 //!
 //! **What the store says and what the page shows are two things, and the state between them has a
 //! name** ([`Shown`]). The page reads the publication through ONE adapter ([`Published`]); after a
@@ -724,7 +728,8 @@ impl LibraryOrderPage {
     }
 
     /// Put the held library down: one write of the named order, and only when it changed. A
-    /// drop that sends nothing says nothing of a place (the page is idle again).
+    /// drop that sends nothing says nothing of a place and puts back the rows picked up (the page is
+    /// idle again, as after Back).
     fn drop_held(&mut self, fx: &mut Effects<'_, InnerHost>) {
         let Mode::Moving { lifted, before } = std::mem::replace(&mut self.state.mode, Mode::Idle) else { return };
         match order_command(&self.state.shown).filter(|_| named_order(&before) != named_order(&self.state.shown)) {
@@ -733,7 +738,13 @@ impl LibraryOrderPage {
                 self.state.basis = Shown::AwaitingEcho { order: named_order(&self.state.shown), since: None };
                 self.set_mode(Mode::Dropped(lifted));
             }
-            None => self.set_mode(Mode::Idle),
+            // nothing was written: the store publishes nothing new, so the page shows what it picked up
+            // (a round trip lays the named order out as if exactly it were recorded, which a record
+            // that also names libraries that are no favourites need not have published)
+            None => {
+                self.state.shown = before;
+                self.set_mode(Mode::Idle);
+            }
         }
     }
 

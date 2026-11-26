@@ -4438,6 +4438,47 @@ pub fn set_pinned_for_owner_test(state: &mut BrowseState, index: usize, on: bool
     }
 }
 
+/// One library of a table described for [`library_order_publication`]: `(machine id, section key,
+/// title, kind, favourite)`.
+#[cfg(any(test, feature = "test-support"))]
+pub type TestLibrary<'a> = (&'a str, i64, &'a str, SecKind, bool);
+
+/// **A REAL store's publication of the Library order** over a table a test describes, for the page
+/// tests above this layer (which cannot reach the store's state): `libs` in the table's own order
+/// (each distinct machine id is one own server, in the order first seen; an empty machine id is a
+/// server whose id the registry has not learned), `record` the profile's order as `(machine id,
+/// key)` pairs, which may name libraries that are not favourites. The rows, the server-order slots
+/// and the record state are what [`BrowseState`] publishes for them, not a fixture's guess.
+#[cfg(any(test, feature = "test-support"))]
+pub fn library_order_publication(libs: &[TestLibrary<'_>], record: &[(&str, i64)]) -> crate::stores::browse::DirectorySnapshot {
+    let session = plx_plex::plex::session::Session {
+        client_id: "order-client".into(), account_token: "order-account".into(), ..Default::default()
+    };
+    let mut state = BrowseState::default();
+    let mut machines: Vec<&str> = Vec::new();
+    for (machine, ..) in libs {
+        if !machines.contains(machine) { machines.push(machine); }
+    }
+    state.sources = machines.iter().map(|machine| a_source(machine, "", true)).collect();
+    state.preference_writes.prepare(&session, 0);
+    for (source, machine) in machines.iter().enumerate() {
+        let list: Vec<(i64, String, SecKind)> = libs.iter().filter(|lib| lib.0 == *machine)
+            .map(|(_, key, title, kind, _)| (*key, (*title).to_string(), *kind)).collect();
+        state.append_sections_with(source, list, &session, "");
+    }
+    for section in &mut state.sections {
+        let machine = state.sources[section.src].machine_id.as_str();
+        section.pinned = libs.iter().any(|lib| lib.0 == machine && lib.1 == section.key && lib.4);
+    }
+    if !record.is_empty() {
+        let named: Vec<(String, i64)> = record.iter().map(|(machine, key)| ((*machine).to_string(), *key)).collect();
+        state.set_library_order_from(named, &session);
+    }
+    let mut snapshot = crate::stores::browse::DirectorySnapshot::default();
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    snapshot
+}
+
 #[cfg(any(test, feature = "test-support"))]
 pub fn land_pin_for_owner_test(state: &mut BrowseState, pinned: bool) {
     plx_base::testlock::assert_held("an owned browse section table (land_pin_for_test)");

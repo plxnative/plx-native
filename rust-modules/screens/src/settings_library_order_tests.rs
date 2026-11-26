@@ -4,7 +4,7 @@
 //! value, and the fit of every string in every shipped language.
 use super::*;
 use super::super::test_support::*;
-use plx_data::browse::{OrderState, SecKind, WriteState};
+use plx_data::browse::{OrderSlot, OrderState, SecKind, WriteState};
 use plx_data::stores::browse::DirectorySnapshot;
 use plx_machine::present::Present;
 use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
@@ -25,7 +25,11 @@ fn six() -> Vec<LibraryOrderRow> {
 }
 
 fn snap(rows: Vec<LibraryOrderRow>, state: OrderState, write: WriteState) -> DirectorySnapshot {
-    DirectorySnapshot::default().with_library_order(rows, state, write)
+    // a fixture's table is its favourites, in section order (the server's order when it is the default)
+    let mut slots: Vec<OrderSlot> = rows.iter()
+        .map(|row| OrderSlot { section: row.section, machine_id: row.machine_id.clone(), key: row.key }).collect();
+    slots.sort_by_key(|slot| slot.section);
+    DirectorySnapshot::default().with_library_order(rows, slots, state, write)
 }
 
 /// What a step sent to the Browse store.
@@ -221,6 +225,56 @@ fn an_echo_is_still_the_order_sent_when_a_library_gains_its_machine_id_during_th
     step_page(&mut page, &echo, tick_ev());
     assert_eq!(page.state.basis, Shown::Published, "the order sent is in the publication, among the six: the wait ends on it");
     assert!(matches!(page.state.mode, Mode::Dropped(_)), "and the place is announced, not given up on");
+}
+
+#[test]
+fn a_round_trip_and_a_drop_that_sends_nothing_leave_the_rows_the_store_published() {
+    use plx_data::browse::library_order_publication;
+    // the REAL store's publication. Server order [A, X, U, B]: X is no favourite but the record names
+    // it, U is a favourite whose server has no machine id. The record [B, X, A] publishes [B, U, A].
+    let libs = [
+        ("home", 1, "A", SecKind::Movie, true), ("home", 2, "X", SecKind::Show, false),
+        ("", 3, "U", SecKind::Show, true), ("nas", 4, "B", SecKind::Movie, true),
+    ];
+    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)]);
+    let titles = |page: &LibraryOrderPage| page.state.shown.iter().map(|row| row.title.clone()).collect::<Vec<_>>();
+    let mut page = page_of(&s);
+    assert_eq!(titles(&page), ["B", "U", "A"], "the store's publication");
+    let b = s.view().library_order().iter().find(|row| row.title == "B").map(|row| row.section).expect("B");
+    pick_up(&mut page, &s, b);
+    press(&mut page, &s, Key::Down);
+    assert_eq!(titles(&page), ["A", "U", "B"], "laid out as if exactly [A, B] were recorded: X's place is the store's, not the page's");
+    press(&mut page, &s, Key::Up);
+    assert_eq!(titles(&page), ["B", "A", "U"], "back in the named order, but not the order the record published");
+    assert!(sent(&ok_lib(&mut page, &s, b)).is_empty(), "the named order is the one that was held: nothing is sent");
+    assert_eq!(page.state.mode, Mode::Idle);
+    assert_eq!(page.state.basis, Shown::Published);
+    assert_eq!(titles(&page), ["B", "U", "A"], "no order was written, so the rows are the ones the store published");
+}
+
+#[test]
+fn a_drop_that_sends_an_order_shows_the_rows_the_real_store_publishes_for_it() {
+    use plx_data::browse::library_order_publication;
+    // the same table and record as above (X, no favourite, is in the record), but the order is changed
+    let libs = [
+        ("home", 1, "A", SecKind::Movie, true), ("home", 2, "X", SecKind::Show, false),
+        ("", 3, "U", SecKind::Show, true), ("nas", 4, "B", SecKind::Movie, true),
+    ];
+    let s = library_order_publication(&libs, &[("nas", 4), ("home", 2), ("home", 1)]);
+    let mut page = page_of(&s);
+    let b = s.view().library_order().iter().find(|row| row.title == "B").map(|row| row.section).expect("B");
+    pick_up(&mut page, &s, b);
+    press(&mut page, &s, Key::Down);
+    let Some(Sent::Set(sent_order)) = sent(&ok_lib(&mut page, &s, b)).pop() else { panic!("the named order changed: it is sent") };
+    // the store writes exactly the named order (X is on a present server and is not named, so it goes)
+    let record: Vec<(&str, i64)> = sent_order.iter().map(|(machine, key)| (machine.as_str(), *key)).collect();
+    let echo = library_order_publication(&libs, &record);
+    let published: Vec<String> = echo.view().library_order().iter().map(|row| row.title.clone()).collect();
+    let shown: Vec<String> = page.state.shown.iter().map(|row| row.title.clone()).collect();
+    assert_eq!(shown, published, "what the page shows after the drop is what the store publishes for it");
+    step_page(&mut page, &echo, tick_ev());
+    assert_eq!(page.state.basis, Shown::Published, "and the echo is that order");
+    assert_eq!(page.state.shown.iter().map(|row| row.title.clone()).collect::<Vec<_>>(), published);
 }
 
 #[test]
