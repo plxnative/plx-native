@@ -346,8 +346,7 @@ pub fn airing_line_in(cx: &LocaleContext, surface: Airing, begin: i64, end: i64,
         return None;
     }
     let offset_s = i64::from(wall.utc_offset_s);
-    // The generated accessor takes its arguments in name order: end, then start.
-    let range = msg::core_airing_range_in(cx, &face_in(cx, end, offset_s)?, &face_in(cx, begin, offset_s)?);
+    let range = airing_range_in(cx, begin, end, offset_s)?;
     let pair = |first: String, second: String| msg::core_airing_pair_in(cx, &first, &second);
     let left = |left| footer_left_minutes_in(cx, left);
     Some(match (phase, surface) {

@@ -276,7 +276,7 @@ impl Board {
         match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
             None => self.grid.is_unscheduled(at.row),
             Some(CellSrc::Now) => true,
-            Some(CellSrc::Later(_)) => self.grid.span(at).is_some_and(|span| span.begins <= now && now < span.ends),
+            Some(CellSrc::Later(_)) => self.grid.span(at).is_some_and(|span| span.contains(now)),
         }
     }
 }
@@ -642,11 +642,10 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     }
     /// A cell says what it is (its programme, or its channel's name) and acts on its channel, as a card does: the
     /// subject is the channel's, the one `press` plays.
-    fn plain_a11y<'a>(&'a self, cx: &Cx<'_, H>, k: Sec, n: usize, a11y: A11y<'a>) -> A11y<'a> {
+    fn plain_a11y<'a>(&'a self, cx: &Cx<'_, H>, k: Sec, n: usize, mut a11y: A11y<'a>) -> A11y<'a> {
         let Some(board) = self.board.as_ref().filter(|_| k == Sec::Guide) else { return a11y };
         let Some(cell) = board.grid.nth(n) else { return a11y };
         let view = H::livetv(cx);
-        let mut a11y = a11y;
         let title = board.title(view.channels, cell);
         if !title.is_empty() {
             a11y = a11y.with_label(title.to_owned());
@@ -800,7 +799,7 @@ impl LiveTvScreen {
     fn press<H: LiveTvLike>(&self, elem: u32, cx: &Cx<'_, H>) -> Option<ContentReq> {
         if let Some((board, cell)) = self.page.board.as_ref().and_then(|board| Some((board, board.grid.locate(elem)?))) {
             let tunes = board.tunes(cell, H::wall(cx)?.unix_s());
-            return tunes.then(|| H::livetv(cx).channels.get(cell.row)).flatten().map(Self::play);
+            return H::livetv(cx).channels.get(cell.row).filter(|_| tunes).map(Self::play);
         }
         let index = elem.checked_sub(FIRST_CARD_ELEM)? as usize / 2;
         let view = H::livetv(cx);

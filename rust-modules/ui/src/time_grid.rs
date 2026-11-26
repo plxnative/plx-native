@@ -39,26 +39,27 @@ use crate::text_view::TextView;
 use crate::{card_shadow_params, theme, Painter, Rect};
 
 /// Channels in a page of the board (`SPEC-3`: "six channels a page").
-pub const PAGE_ROWS: usize = 6;
+const PAGE_ROWS: usize = 6;
 /// The channel cell's left edge, width and radius.
-pub const CHANNEL_X: f32 = 96.0;
-pub const CHANNEL_W: f32 = 320.0;
-pub const CHANNEL_RADIUS: f32 = 14.0;
+const CHANNEL_X: f32 = 96.0;
+const CHANNEL_W: f32 = 320.0;
+const CHANNEL_RADIUS: f32 = 14.0;
 /// A row's height, the pitch from one row to the next, and the first row's top.
-pub const CELL_H: f32 = 100.0;
-pub const ROW_PITCH: f32 = 108.0;
-pub const FIRST_ROW_Y: f32 = 292.0;
+const CELL_H: f32 = 100.0;
+const ROW_PITCH: f32 = 108.0;
+const FIRST_ROW_Y: f32 = 292.0;
 /// A programme cell's radius, and the air its right edge keeps from the next.
-pub const CELL_RADIUS: f32 = 10.0;
-pub const CELL_GAP: f32 = 8.0;
+const CELL_RADIUS: f32 = 10.0;
+const CELL_GAP: f32 = 8.0;
 /// The time ruler's line (the page indicator stands on it too): top and height.
 pub const RULER_Y: f32 = 236.0;
-pub const RULER_H: f32 = 40.0;
+const RULER_H: f32 = 40.0;
 /// The time axis' left and right edges on the frame: 1392 px for the window.
-pub const AXIS_X0: f32 = 432.0;
-pub const AXIS_X1: f32 = 1824.0;
-/// The ruler labels every half hour.
-pub const TICK_STEP_S: i64 = 30 * 60;
+const AXIS_X0: f32 = 432.0;
+const AXIS_X1: f32 = 1824.0;
+/// The ruler labels every half hour: the same grain the window starts snap to (`plx_plex::plex::livetv::WINDOW_STEP_SECONDS`;
+/// this crate does not depend on that one, and `Axis::new` takes whatever start it is given).
+const TICK_STEP_S: i64 = 30 * 60;
 /// A ruler tick (2 x 32) and the air between it and its label.
 const TICK_W: f32 = 2.0;
 const TICK_H: f32 = 32.0;
@@ -78,12 +79,12 @@ const LOGO_X: f32 = 128.0;
 const LOGO_W: f32 = 175.0;
 const LOGO_H: f32 = 98.0;
 /// The logo box and its content are the Recent tile's, at 70%.
-pub const LOGO_SCALE: f32 = 0.7;
+const LOGO_SCALE: f32 = 0.7;
 /// A cell narrower than this draws no text: a title that is all ellipsis says nothing.
 const MIN_TEXT_W: f32 = 64.0;
 /// How far apart the elements of two rows are: more than the seconds in any window the board has, so no row runs
 /// into the next whatever the guide sends.
-pub const ROW_STRIDE: u32 = 8_192;
+const ROW_STRIDE: u32 = 8_192;
 /// Where a cell that is not on the page is parked: above the frame, so it is neither drawn nor hit.
 const PARKED_Y: f32 = -10_000.0;
 
@@ -97,6 +98,11 @@ pub struct Span {
 impl Span {
     pub const fn new(begins: i64, ends: i64) -> Self {
         Self { begins, ends }
+    }
+
+    /// Whether `t` is within the span (its start included, its end not).
+    pub const fn contains(self, t: i64) -> bool {
+        self.begins <= t && t < self.ends
     }
 
     /// How much time `self` and `other` share, in seconds.
@@ -324,12 +330,14 @@ impl TimeGrid {
     }
 
     /// Where a cell stands on the frame while its row is on the page showing; `None` while it is not.
-    fn placed(&self, at: Cell) -> Option<Rect> {
+    /// The top of `row` on the frame, while it is on the page showing.
+    fn row_top(&self, row: usize) -> Option<f32> {
         let shown = self.shown();
-        if !shown.contains(&at.row) {
-            return None;
-        }
-        let y = FIRST_ROW_Y + (at.row - shown.start) as f32 * ROW_PITCH;
+        shown.contains(&row).then(|| FIRST_ROW_Y + (row - shown.start) as f32 * ROW_PITCH)
+    }
+
+    fn placed(&self, at: Cell) -> Option<Rect> {
+        let y = self.row_top(at.row)?;
         let (x, w) = self.span(at).and_then(|span| self.axis.cell(span)).unwrap_or((AXIS_X0, 0.0));
         Some(Rect::new(x, y, w, CELL_H))
     }
@@ -342,8 +350,7 @@ impl TimeGrid {
 
     /// The row's channel cell, while it is on the page.
     pub fn channel_rect(&self, row: usize) -> Option<Rect> {
-        let top = self.placed(Cell { row, index: 0 })?.y;
-        Some(Rect::new(CHANNEL_X, top, CHANNEL_W, CELL_H))
+        Some(Rect::new(CHANNEL_X, self.row_top(row)?, CHANNEL_W, CELL_H))
     }
 
     /// The cell of `row` that shares the most time with `from` (clipped to the window), the earliest on a tie; when
@@ -397,7 +404,7 @@ impl TimeGrid {
             return None;
         }
         let on_now = (0..self.cells(row)).find(|&index| {
-            self.span(Cell { row, index }).is_some_and(|span| span.begins <= now && now < span.ends)
+            self.span(Cell { row, index }).is_some_and(|span| span.contains(now))
         });
         Some(Cell { row, index: on_now.unwrap_or(0) })
     }
@@ -449,7 +456,7 @@ impl TimeGrid {
     fn draw_chip(&self, p: Painter, measure: &dyn Measure, offset: i64, now: i64, now_x: f32) {
         let micro = theme::size::MICRO;
         let label = fmt::clock_face(now, offset).unwrap_or_default();
-        let text_w = std::ffi::CString::new(label.as_str()).map_or(0.0, |c| measure.width(&c, micro, true));
+        let text_w = measure.width_str(&label, micro, true);
         let w = CHIP_W.max(text_w + 2.0 * CHIP_PAD);
         let chip = Rect::new(now_x - w * 0.5, RULER_Y + (RULER_H - CHIP_H) * 0.5, w, CHIP_H);
         p.rrect(chip, CHIP_H * 0.5, CHIP_H * 0.5, theme::GUIDE_NOW);
