@@ -3,11 +3,10 @@
 //! lineup. A Recent tile and a programme poster both ask the content owner to play their channel.
 //!
 //! **On now has one fixed order**: the most recent start first, a tie in lineup order. **Recent never
-//! reorders** (the store keeps it, newest first) and is hidden while it is empty, except that a page with
-//! neither a Recent channel nor a programme shows the first lineup channels in its place, so a guide that
-//! answered nothing is not a dead end. The page reads the frame's wall time ([`LiveTvLike::wall`]) for its
+//! reorders** (the store keeps it, newest first) and is hidden while it is empty. A page with neither a
+//! Recent channel nor a programme reads out the store's empty state (plan D5). The page reads the frame's wall time ([`LiveTvLike::wall`]) for its
 //! captions and progress bars, and asks for a frame when the words of any airing change.
-use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView, MAX_RECENT};
+use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView};
 use plx_data::stores::{StoreCmd, StoreId};
 use plx_data::stores::livetv::LiveTvCmd;
 use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, Enter, EntryId, FocusKey, FocusTarget,
@@ -81,13 +80,13 @@ impl Page {
     fn sync(&mut self, view: LiveTvView<'_>) {
         if self.synced == Some(view.revision()) { return; }
         self.synced = Some(view.revision());
-        self.status = view.status;
         self.channels = view.tiles.iter().map(|m| (m.sid, m.rk.clone())).collect();
         self.airings = on_now_order(view.channels);
+        // An empty Recent is a row to hide, whatever else the page holds.
         self.recent = view.recent.iter().filter_map(|r| lineup_index(view.channels, r)).collect();
-        if self.recent.is_empty() && self.airings.is_empty() {
-            self.recent = (0..view.channels.len().min(MAX_RECENT)).collect();
-        }
+        // Nothing to show in either row (a lineup with no guide data and no channel tuned) is the page's
+        // existing empty read-out (plan D5); no row stands in for it.
+        self.status = if view.status == LiveTvStatus::Ready && self.recent.is_empty() && self.airings.is_empty() { LiveTvStatus::Empty } else { view.status };
     }
 
     /// One number that moves exactly when the words or the bar of any airing the page shows does

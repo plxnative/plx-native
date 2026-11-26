@@ -2,6 +2,7 @@
 //! Recent shelf (five tiles at most, which never does), both with the other shelf standing over or under
 //! them as on the page.
 use super::*;
+use plx_data::livetv::MAX_RECENT;
 use plx_machine::machine::{FocusRead, Host, InputOwner, PressRead};
 use plx_ui::cards::conformance::{CardHarness, Landing, Nb};
 use plx_ui::fixture::FixtureMeasure;

@@ -180,15 +180,41 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty(), "Recent is empty while there are programmes to show");
     assert_eq!(screen.page.regions().content, &[NOW_GROUP]);
-    // nothing recent and nothing on: the first lineup channels stand in, so the page is not a dead end
+    // nothing recent and nothing on: still no Recent row, no row stands in, and the page reads out its
+    // existing empty state
     let mut dark = channel("101", "Family Channel");
     dark.now.clear();
     let mut dark2 = channel("102", "Cartoons");
     dark2.now.clear();
     store.install_for_test(vec![dark, dark2]);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
-    assert_eq!(screen.page.recent, [0, 1]);
-    assert_eq!(screen.page.regions().content, &[RECENT_GROUP]);
+    assert!(screen.page.recent.is_empty() && screen.page.airings.is_empty());
+    assert!(screen.page.regions().content.is_empty());
+    assert_eq!(screen.page.status, LiveTvStatus::Empty);
+}
+
+/// An empty Recent means no Recent shelf: with programmes on now the page is On now alone, and with
+/// nothing on either it is the empty read-out, never a Recent row of lineup channels.
+#[test]
+fn an_empty_recent_is_no_recent_shelf_with_programmes_on_or_with_none() {
+    let _policy = captions::PolicyPin::default_setting();
+    for programmes in [true, false] {
+        let (mut store, mut screen) = seeded();
+        let mut lineup = vec![channel("101", "Family Channel"), channel("102", "Cartoons")];
+        if !programmes { for c in &mut lineup { c.now.clear(); } }
+        store.install_for_test(lineup);
+        step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+        let context = cx(store.view(), None);
+        let mut specs = Vec::new();
+        StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
+        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Status], "the section list is fixed; a shelf without cards is nothing");
+        let recent = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent);
+        assert_eq!(recent.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c)), 0, "programmes on: {programmes}");
+        let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now);
+        assert_eq!(now.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c)), if programmes { 2 } else { 0 });
+        assert_eq!(screen.page.regions().content.to_vec(), if programmes { vec![NOW_GROUP] } else { Vec::new() }, "no group for a Recent row");
+        assert_eq!(screen.page.status, if programmes { LiveTvStatus::Ready } else { LiveTvStatus::Empty });
+    }
 }
 
 #[test]
@@ -303,7 +329,8 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
     store.install_for_test(vec![changed]);
     step(&mut screen, store.view(), None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
     assert!(screen.page.airings.is_empty(), "the store revision is read on Tick");
-    assert_eq!(screen.page.recent, [0], "a page with nothing on shows the lineup's first channels as Recent");
+    assert!(screen.page.recent.is_empty(), "a page with nothing on has no Recent row of lineup channels");
+    assert_eq!(screen.page.status, LiveTvStatus::Empty, "and reads out the empty state");
     for status in [LiveTvStatus::Loading, LiveTvStatus::Empty, LiveTvStatus::Failed] {
         let view = LiveTvView::for_test(status, &[], &[], 100 + status as u32);
         step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
