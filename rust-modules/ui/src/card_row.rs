@@ -81,7 +81,9 @@ pub struct RowStyle {
     pub under_tile: f32,
     /// **How the tile's art meets its box** ([`ArtFit`]): [`ArtFit::Cover`] (fill and crop) for every
     /// row but Live TV's programme posters ([`RowStyle::PROGRAMME`]), whose non-poster art is
-    /// contained over its own blurred copy. Read by the shared card draw, never by a screen.
+    /// contained over its own blurred copy. Read by the shared card draw, never by a screen; only the
+    /// shelf tile draws (`draw_tile_led`, `draw_focused_tile_led`) honour it, and
+    /// [`ArtFit::ContainOnBlur`] is only valid for 2:3 tiles (the copy is made against 2:3).
     pub fit: ArtFit,
 }
 

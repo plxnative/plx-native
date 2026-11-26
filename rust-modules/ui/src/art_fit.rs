@@ -51,10 +51,10 @@ const POSTER_ASPECT: f32 = 2.0 / 3.0;
 /// Texels on the short side of the blurred copy. The GPU's bilinear upscale of this to a 250 x 375
 /// tile spreads each texel over ~15 px, which is the blur's radius: 16 reads as a colour field with
 /// no recognisable shape, which is what a backdrop behind a contained picture should be.
-pub const BACKDROP_SHORT_SIDE: u32 = 16;
+const BACKDROP_SHORT_SIDE: usize = 16;
 
 /// Texels on the long side, at the most: a panorama is not given a wider copy than it can use.
-pub const BACKDROP_LONG_SIDE_MAX: u32 = 64;
+const BACKDROP_LONG_SIDE_MAX: usize = 64;
 
 /// The most taps [`backdrop_of`] takes per output texel along one axis. A 667 x 375 picture reduced
 /// to 28 x 16 spans ~24 source texels per output texel; sampling 4 x 4 of them on an even grid is
@@ -104,17 +104,15 @@ pub fn place(fit: ArtFit, crop: Crop, tw: f32, th: f32, r: Rect, has_backdrop: b
     if fit != ArtFit::ContainOnBlur || !has_backdrop || r.w <= 0.0 || r.h <= 0.0 || within_tolerance(r.w / r.h, tw, th) {
         return Placement::Cover { uv: cover };
     }
-    let k = (r.w / tw).min(r.h / th);
-    let (w, h) = (tw * k, th * k);
-    Placement::Contained { inner: Rect::new(r.x + (r.w - w) * 0.5, r.y + (r.h - h) * 0.5, w, h), backdrop_uv: cover }
+    Placement::Contained { inner: r.contain(tw, th), backdrop_uv: cover }
 }
 
 /// The size of the blurred copy of a `w` x `h` picture: [`BACKDROP_SHORT_SIDE`] on the short side,
 /// the same aspect on the long one (at most [`BACKDROP_LONG_SIDE_MAX`]).
 fn backdrop_size(w: usize, h: usize) -> (usize, usize) {
-    let short = BACKDROP_SHORT_SIDE as usize;
+    let short = BACKDROP_SHORT_SIDE;
     let long = ((short * w.max(h)) as f32 / w.min(h) as f32).round() as usize;
-    let long = long.clamp(short, BACKDROP_LONG_SIDE_MAX as usize);
+    let long = long.clamp(short, BACKDROP_LONG_SIDE_MAX);
     if w >= h { (long, short) } else { (short, long) }
 }
 
@@ -123,16 +121,16 @@ fn backdrop_size(w: usize, h: usize) -> (usize, usize) {
 /// a short or empty buffer), or it has no size. Pure over the pixels; no GL.
 ///
 /// Each output texel is the mean of an even grid of at most [`TAPS_PER_AXIS`]^2 source texels under
-/// it, and one 3 x 3 box pass (edges clamped) smooths the result. The copy is opaque and keeps the
+/// it (not `card_art::resample`'s full-area box mean, which would read every texel of a ~375 KB
+/// picture on the main thread, and would need the buffer copied into its `Rgba`), and one 3 x 3 box pass (edges clamped) smooths the result. The copy is opaque and keeps the
 /// picture's aspect, so the tile's cover window ([`Placement::Contained::backdrop_uv`]) addresses it
 /// as it addresses the picture.
 pub fn backdrop_of(d: &Decoded) -> Option<Decoded> {
     let (w, h) = (d.w as usize, d.h as usize);
-    if w == 0 || h == 0 || d.rgba.len() < w * h * 4 || within_tolerance(POSTER_ASPECT, w as f32, h as f32) {
-        return None;
-    }
     // A copy is smaller than its picture or it is not a blur of it: a thumbnail this small is its own.
-    if w.min(h) <= BACKDROP_SHORT_SIDE as usize {
+    if w <= BACKDROP_SHORT_SIDE || h <= BACKDROP_SHORT_SIDE || d.rgba.len() < w * h * 4
+        || within_tolerance(POSTER_ASPECT, w as f32, h as f32)
+    {
         return None;
     }
     let (bw, bh) = backdrop_size(w, h);

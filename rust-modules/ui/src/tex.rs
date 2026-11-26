@@ -268,13 +268,8 @@ pub fn resolve_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> u32 {
 
 /// [`resolve_on`] plus the decoded pixel size — `(0, 0.0, 0.0)` until resident. Same one probe.
 pub fn resolve_wh_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> (u32, f32, f32) {
-    if path.is_empty() {
-        return (0, 0.0, 0.0);
-    }
-    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png), None) else {
-        return (0, 0.0, 0.0);
-    };
-    resolve_key(key)
+    let a = resolve_art_on(srv, path, w, h, png);
+    (a.id, a.w, a.h)
 }
 
 /// What a tile's draw asks of the cache for one picture: the texture, its decoded size, and the
@@ -655,11 +650,9 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
             }
             let tex = up.upload(&d);
             up.warm(tex);
-            let backdrop = d.backdrop.as_deref().map(|b| {
-                let t = up.upload(b);
-                up.warm(t);
-                t
-            });
+            // Uploaded, not warmed: a texture this small has no first-sample stall to move off the
+            // back buffer, and a warm is an offscreen pass of its own.
+            let backdrop = d.backdrop.as_deref().map(|b| up.upload(b));
             self.clock += 1;
             self.bytes += bytes;
             match self.resident.get_mut(&key) {
@@ -912,7 +905,7 @@ mod tests {
         let (t, b) = c.resolve_art(1).expect("resident");
         assert_eq!((t.id, b.map(|b| b.id)), (1, Some(2)), "the picture, then its copy, uploaded in that order");
         assert_eq!(c.resolve_art(2).map(|(t, b)| (t.id, b)), Some((3, None)), "a picture with no copy answers none");
-        assert_eq!(up.warmed, vec![1, 2, 3], "the copy is warmed too");
+        assert_eq!(up.warmed, vec![1, 3], "the pictures are warmed; a 1 KB copy has nothing to warm");
         assert_eq!(c.resident_bytes(), 210, "the copy's bytes are the entry's");
 
         // replaced in place by a picture with no copy: the old copy goes, the bytes follow
