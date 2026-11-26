@@ -2884,8 +2884,9 @@ mod tests {
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
         // A recorded shelf carries the library it was decided for: previously 0x7410_4747_8858_9e13.
-        // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape (only
-        // the screen half moves): previously 0x1026_c131_7573_ba73.
+        // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape and the
+        // lift and glide springs to `TableView::MOTION_SHAPE` (only the screen half moves): previously
+        // 0x1026_c131_7573_ba73.
         assert_eq!(state_fp(), 0x25c8_ffc9_391e_a2c3, "current V13 producer census");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");

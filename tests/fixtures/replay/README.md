@@ -743,7 +743,8 @@ were recorded afresh against the synthetic server (`MOCK_PORT=32685 tests/focusf
 with `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a
 `ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter at zero (998 and
 1343 frames). The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122, #1554) then moved the
-shape once more (to `2722707214457283267`, the screen half only); both anchors were re-recorded the same way, and the
+shape once more (to `2722707214457283267`, the screen half only: the Settings argument shape's new variant and
+`TableView::MOTION_SHAPE`'s new lift and glide springs); both anchors were re-recorded the same way, and the
 closed alphabet's owner-word pattern gained `library-order`. Targets and Resolve report SAME again with every
 difference counter at zero (975 and 1291 frames).
 `docs/ui-replay-v13-anchor.md` has the record.

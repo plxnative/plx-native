@@ -3051,7 +3051,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
 // Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
-// Library order adds `SettingsPage::LibraryOrder` (ScreenId 122) to the Settings family's arg shape.
+// Library order adds `SettingsPage::LibraryOrder` (ScreenId 122) to the Settings family's arg shape, and
+// `TableView::MOTION_SHAPE` gains the lift and glide springs (`library::menu::SHAPE[1]` and
+// `alt_sources::SHAPE[1]` carry it).
 // Previous pin: 0x17bd_9205_2e59_cd6e.
 const SCREEN_SHAPES_PIN: u64 = 0x0468_f845_c3c7_f5f6;
 
