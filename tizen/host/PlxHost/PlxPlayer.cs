@@ -391,6 +391,7 @@ namespace PlxHost
             MediaPlayerNative.player_set_error_cb(s.Handle, ErrorCb, user);
             MediaPlayerNative.player_set_buffering_cb(s.Handle, BufferingCb, user);
             MediaPlayerNative.player_set_interrupted_cb(s.Handle, InterruptedCb, user);
+            SubtitleProbe.BeforePrepare(s.Handle); // PROBE ONLY
             rc = MediaPlayerNative.player_prepare_async(s.Handle, PreparedCb, user);
             if (rc != 0) { Fail(s, "player_prepare_async", rc); return false; }
             return true;
@@ -703,6 +704,7 @@ namespace PlxHost
             int rc = MediaPlayerNative.player_get_duration(s.Handle, out duration);
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PREPARED, s.Epoch, rc == 0 ? duration : 0, 0);
             LogTracks(s, s.Tracks); // after PREPARED: a diagnostic, off the start path
+            SubtitleProbe.AtPrepared(s.Handle); // PROBE ONLY
             int width, height;
             if (MediaPlayerNative.player_get_video_size(s.Handle, out width, out height) == 0 && width > 0 && height > 0)
             {
