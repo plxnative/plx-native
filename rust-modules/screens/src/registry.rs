@@ -3165,7 +3165,13 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
 // Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
 // Live TV adds its route and a screen shape for the store status, shelves and current airings.
-const SCREEN_SHAPES_PIN: u64 = 0xde99_c01f_cb88_02a4;
+// The What's on page's Recent row replaces the lineup shelf: its shape lists the Recent channels
+// (`recent:[u32]`). Previous pin: 0x17bd_9205_2e59_cd6e. Re-record incompatible replay anchors.
+// The Channels shelf keeps every channel reachable: the Live TV screen's stack has three shelves
+// (`Shelf{row,pop}` x 3). Previous pin: 0x6353_575b_3c41_8806. Re-record incompatible replay anchors.
+// The hero row (#1553) adds the Audio & Subtitles panel (`PreplayPanel`) and the item menu's hero
+// overflow (`HeroOverflow{rows:len}`). Previous pins: 0x16f9_ab79_9300_dc0a (main), 0xde99_c01f_cb88_02a4 (this branch before the merge).
+const SCREEN_SHAPES_PIN: u64 = 0xa2bc_fa1b_e96e_0118;
 
 #[cfg(test)]
 mod arg_tests {
