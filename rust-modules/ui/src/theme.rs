@@ -386,6 +386,10 @@ pub mod logo {
     pub const CHANNEL_H_MAX: f32 = 84.0;
     /// ...and this wide: the tile's 250 less 16 px on each side.
     pub const CHANNEL_W_MAX: f32 = 218.0;
+    /// A logo sized by its ink box ([`hero_logo::fit_ink`](crate::hero_logo::fit_ink)) is drawn at most this many
+    /// pixels per texel of the box: a mark only a few texels across stands as a small smear, not a slot-filling one.
+    /// A Pluto-size logo (576 x 288, decoded 436 wide) is drawn at no more than 0.65 px per texel (measured on 40 of them), far under it.
+    pub const INK_UPSCALE: f32 = 2.0;
 }
 
 // ── Accent / control ─────────────────────────────────────────────────────────
@@ -823,7 +827,7 @@ pub const CARD_ABSENT: [f32; 4] = COOL_850;
 /// transparent ground reads the same whatever the channel's brand colour is.
 pub const CHANNEL_PLATE: [f32; 4] = COOL_825;
 /// [`CHANNEL_PLATE`] as the bytes a one-texel ground texture carries (a poster tile that contains a
-/// picture with a transparent ground, [`crate::art_fit::BackdropSpec::ground`]). Pinned equal by a test.
+/// picture with a transparent ground, [`crate::art_fit::CopySpec::ground`]). Pinned equal by a test.
 pub const CHANNEL_PLATE_RGB8: [u8; 3] = [0x22, 0x27, 0x2d];
 /// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
 /// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,

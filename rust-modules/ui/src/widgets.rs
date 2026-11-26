@@ -2,7 +2,7 @@
 //! Button, CircleButton, TabPill, TransportButton, PageDots, Badge, plus the shared art-card
 //! core (`card`/`draw_card`) and the poster-resolve helper. (Multi-line text wrapping
 //! now lives in the `TextView` primitive in `text_view.rs`.)
-use crate::art_fit::{place, ArtFit, BackdropSpec, Placement};
+use crate::art_fit::{place, ArtFit, Derive, Ink, Placement};
 use crate::hstack::{Align as StackAlign, HStack, Item as HItem};
 use crate::vstack::{Anchor as VAnchor, VStack};
 use crate::label::{HAlign, Label, VAlign};
@@ -940,8 +940,8 @@ pub struct ArtImage {
     /// with one, else 0: what a tile that CONTAINS its art ([`crate::art_fit::ArtFit`]) draws behind it.
     pub backdrop: u32,
     /// The bounding box of the picture's ink ([`crate::tex::Decoded::ink`]) when its request asked for
-    /// one ([`BackdropSpec::INK`]: a channel's logo), else `None`: what a tile sizes the MARK by, not the canvas.
-    pub ink: Option<crate::art_fit::InkBox>,
+    /// one ([`Derive::INK`]: a channel's logo), else `None`: what a tile sizes the MARK by, not the canvas.
+    pub ink: Option<Ink>,
     pub shown: f32,
 }
 
@@ -966,13 +966,13 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
 }
 
 /// [`resolve_card_art`] for a tile that draws its art under `fit`: the request names the blurred copy
-/// that fit contains over ([`ArtFit::copy_request`]), and the answer carries it ([`ArtImage::backdrop`]).
+/// that fit contains over ([`ArtFit::derive_request`]), and the answer carries it ([`ArtImage::backdrop`]).
 pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFit) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
     let crate::tex::ArtTex { id: tex, w, h, backdrop, ink } = card_art_request_fitted(art, fit)
-        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.backdrop));
+        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.derive));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
@@ -996,8 +996,8 @@ pub struct ArtRequest<'a> {
     pub h: c_int,
     pub png: bool,
     /// What to derive and deliver with the picture: a poster's blurred copy under a fit that contains
-    /// ([`ArtFit::copy_request`]), or a channel logo's ink box ([`BackdropSpec::INK`]).
-    pub backdrop: Option<BackdropSpec>,
+    /// ([`ArtFit::derive_request`]), or a channel logo's ink box ([`Derive::INK`]).
+    pub derive: Option<Derive>,
 }
 
 /// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
@@ -1009,7 +1009,7 @@ pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
 }
 
 /// [`card_art_request`] for a tile that draws its art under `fit`: a POSTER's request names the
-/// blurred copy `fit` contains over, and a CHANNEL's its logo's ink box ([`BackdropSpec::INK`]); no other
+/// blurred copy `fit` contains over, and a CHANNEL's its logo's ink box ([`Derive::INK`]); no other
 /// art asks for anything (a still, a headshot are never contained, whatever the row says). A screen that warms art for a row warms with the row's `fit`,
 /// so the warm and the draw name one key.
 pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequest<'a>> {
@@ -1019,12 +1019,12 @@ pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequ
         Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
         Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
     };
-    let backdrop = match art {
-        Art::Poster(_) => fit.copy_request(),
-        Art::Channel { .. } => Some(BackdropSpec::INK),
+    let derive = match art {
+        Art::Poster(_) => fit.derive_request(),
+        Art::Channel { .. } => Some(Derive::INK),
         _ => None,
     };
-    Some(ArtRequest { srv, path, w, h, png, backdrop })
+    Some(ArtRequest { srv, path, w, h, png, derive })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -10078,7 +10078,7 @@ fn a_channel_logo_is_requested_as_a_png_and_every_other_card_art_as_a_jpeg() {
     let asked = card_art_request(&logo).expect("a logo is asked for");
     assert_eq!((asked.srv, asked.path, asked.png), (3, "/logos/7.png", true));
     assert_eq!((asked.w, asked.h), channel_tile::LOGO_RES);
-    assert_eq!(asked.backdrop, Some(BackdropSpec::INK), "the plate sizes the mark by its ink, so the request asks for the box");
+    assert_eq!(asked.derive, Some(Derive::INK), "the plate sizes the mark by its ink, so the request asks for the box");
     let thumb = card_art_request(&Art::Thumb { sid: 3, key: "/t/1", res: (10, 10) }).unwrap();
     assert!(!thumb.png);
     assert_eq!(card_art_request(&Art::Poster(None)), None);

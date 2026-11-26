@@ -49,7 +49,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::frame::{Budget, Class};
-use crate::art_fit::{BackdropSpec, InkBox};
+use crate::art_fit::{Derive, Ink};
 use plx_machine::machine::{PosterKey, PresentHandle};
 use plx_machine::present::{PresentEvent, Provenance, ResourceKind};
 
@@ -70,7 +70,7 @@ pub enum Warm {
 }
 
 /// The application's SOURCE half of image caching (spec §10), as the library sees it: an
-/// interning of `(server, path, w, h, png, backdrop)` (the request plus what it asks derived from the picture)
+/// interning of `(server, path, w, h, png, derive)` (the request plus what it asks derived from the picture)
 /// into an opaque [`PosterKey`], a fetch it starts on a
 /// miss, and a decoded image it hands back through [`accept`]. `srv` is the server's raw id —
 /// the library never names an application type. Installed once at boot ([`install`]).
@@ -84,18 +84,18 @@ pub trait Source {
     /// asking again next frame is how a deferred request is eventually honoured. Touches the
     /// source's LRU.
     ///
-    /// `backdrop` is what this request wants derived from the picture and delivered with it: a blurred
-    /// copy, and/or its ink box ([`crate::art_fit::BackdropSpec`]; `None` for neither). It is part of
+    /// `derive` is what this request wants derived from the picture and delivered with it: a blurred
+    /// copy, and/or its ink box ([`crate::art_fit::Derive`]; `None` asks for nothing). It is part of
     /// the request's identity: the same art asked for with and without is two entries, so a request can
     /// never be answered with a picture that lacks what it declared.
-    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Option<PosterKey>;
+    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Option<PosterKey>;
     /// The prefetch twin: start the fetch, take nothing, protect nothing.
-    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm;
+    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm;
     /// The AT-REST lookahead twin of [`warm`](Self::warm): the same request, but the claimed slot
     /// is kept (see [`AHEAD_SET_MAX`]) instead of being the next miss's first victim. A source
     /// with no such distinction answers as `warm` does.
-    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
-        self.warm(srv, path, w, h, png, backdrop)
+    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
+        self.warm(srv, path, w, h, png, derive)
     }
     /// An item's clearLogo, at the source's one logo request box. `logo` is a stamped path
     /// or a legacy rating key.
@@ -281,24 +281,24 @@ pub fn resolve_wh_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> (u32, f
 
 /// What a tile's draw asks of the cache for one picture: the texture, its decoded size, and the
 /// texture of its backdrop ([`Decoded::backdrop`]: a blurred copy, or the flat ground of a picture with
-/// transparency), `0` when the picture has none, and its [`InkBox`] ([`Decoded::ink`]) when the request asked.
+/// transparency), `0` when the picture has none, and its [`Ink`] ([`Decoded::ink`]) when the request asked.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct ArtTex {
     pub id: u32,
     pub w: f32,
     pub h: f32,
     pub backdrop: u32,
-    pub ink: Option<InkBox>,
+    pub ink: Option<Ink>,
 }
 
-/// [`resolve_wh_on`] with the blurred copy the request asks for (`backdrop`): the same ONE probe and
+/// [`resolve_wh_on`] with what the request asks derived (`derive`): the same ONE probe and
 /// ONE use stamp, so a tile that draws the picture and its backdrop asks the source once, as any
 /// tile does.
-pub fn resolve_art_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> ArtTex {
+pub fn resolve_art_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> ArtTex {
     if path.is_empty() {
         return ArtTex::default();
     }
-    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png, backdrop), None) else {
+    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png, derive), None) else {
         return ArtTex::default();
     };
     CACHE.with(|c| match c.borrow_mut().resolve_art(key) {
@@ -321,11 +321,11 @@ pub fn resident(key: PosterKey) -> bool {
 
 /// The prefetch twin of [`resolve_on`]: same arguments on purpose, so a screen warms EXACTLY the
 /// key it will later resolve.
-pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
+pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm(srv, path, w, h, png, backdrop), Warm::Known)
+    with_source(|s| s.warm(srv, path, w, h, png, derive), Warm::Known)
 }
 
 /// The most cards a screen may ask [`warm_ahead_on`] to keep resident at once. A source holds a
@@ -343,11 +343,11 @@ pub const ON_SCREEN_ART_MAX: usize = 30;
 /// The at-rest lookahead twin of [`warm_on`]: the same arguments (so the same key a card will
 /// later resolve), a claim that outlives the next miss. For a screen at rest only, one card per
 /// frame, nearest first, stopping at the first [`Warm::Claimed`] or [`Warm::Full`].
-pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool, backdrop: Option<BackdropSpec>) -> Warm {
+pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm_ahead(srv, path, w, h, png, backdrop), Warm::Known)
+    with_source(|s| s.warm_ahead(srv, path, w, h, png, derive), Warm::Known)
 }
 
 /// An item's clearLogo as a texture plus its TRUE pixel size; `None` while pending or absent.
@@ -438,17 +438,17 @@ pub struct Decoded {
     pub w: u16,
     pub h: u16,
     pub rgba: Box<[u8]>,
-    /// The tiny backdrop of this picture ([`crate::art_fit::attach_backdrop`]) that its request
-    /// asked for ([`crate::art_fit::BackdropSpec`]): a blurred copy, or for a picture with
+    /// The tiny backdrop of this picture ([`crate::art_fit::attach_derived`]) that its request
+    /// asked for ([`crate::art_fit::Derive`]): a blurred copy, or for a picture with
     /// transparency a one-texel flat ground. Made once when the picture arrives. It is
     /// uploaded with the picture, held in the same [`Entry`] and freed with it, so it never outlives
     /// or lags the texture it was made from. `None` when the request asked for none, or the picture
     /// needs none.
     pub backdrop: Option<Box<Decoded>>,
-    /// The bounding box of this picture's ink ([`crate::art_fit::ink_of`]) when its request asked for
-    /// it ([`crate::art_fit::BackdropSpec::ink`]): found once when the picture arrives, held in the same
+    /// What the request found of this picture's ink ([`crate::art_fit::ink_of`]) when its request asked for
+    /// it ([`crate::art_fit::Derive::INK`]): found once when the picture arrives, held in the same
     /// [`Entry`] and gone with it. `None` when the request asked for none, or the picture has no ink.
-    pub ink: Option<InkBox>,
+    pub ink: Option<Ink>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -486,7 +486,7 @@ pub trait Uploader {
 pub struct Resident {
     pub tex: Tex,
     pub backdrop: Option<Tex>,
-    pub ink: Option<InkBox>,
+    pub ink: Option<Ink>,
 }
 
 struct Entry {
@@ -495,7 +495,7 @@ struct Entry {
     /// `tex`.
     backdrop: Option<Tex>,
     /// The picture's [`Decoded::ink`], held for as long as the entry is.
-    ink: Option<InkBox>,
+    ink: Option<Ink>,
     last_used: u64,
     /// The decoded bytes this entry accounts for in [`TexCache::bytes`] (the picture's and its blurred
     /// copy's). Carried on the entry rather than recomputed from `tex.w * tex.h * 4` at each release,
@@ -962,7 +962,7 @@ mod tests {
     /// is not pixels, so it adds nothing to the entry's bytes.
     #[test]
     fn a_pictures_ink_box_is_resolved_with_it_replaced_with_it_and_gone_with_it() {
-        let boxed = InkBox { x: 1, y: 2, w: 3, h: 4 };
+        let boxed = Ink::Box(crate::art_fit::InkBox { x: 1, y: 2, w: 3, h: 4 });
         let with_ink = |k: u32| {
             let mut r = sized(k, 100);
             if let Ok(d) = r.result.as_mut() { d.ink = Some(boxed); }

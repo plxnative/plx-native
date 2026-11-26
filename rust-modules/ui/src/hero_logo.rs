@@ -172,20 +172,38 @@ pub fn fit(rung: LogoRung, src_w: f32, src_h: f32, col_w: f32) -> (f32, f32) {
     (w * scale, h * scale)
 }
 
-/// **The DRAWN size of a logo texture and the texture window that draws it, sized by its INK.** A logo
+/// **The DRAWN quad of a logo texture and the texture window that draws it, sized by its INK.** A logo
 /// is often delivered on a canvas far larger than its mark (a resizer's `fit=contain` pads it to the
 /// requested box with clear texels), and [`fit`] on the canvas sizes the padding as if it were ink, so
 /// the mark comes out small: a 5:1 wordmark at three quarters of a 16:9 canvas's width drew ~100 px wide
 /// on the Live TV channel plate. With the picture's [`InkBox`] (its request asked:
-/// [`crate::art_fit::BackdropSpec::INK`]) the size is [`fit`] of the BOX, and the window is the box's
-/// share of the texture, so drawing the window at the size draws the mark alone. Without one (no box
-/// came, or the request never asked) it is [`fit`] of the whole texture and the whole texture, as before.
+/// [`crate::art_fit::Derive::INK`]) the size is [`fit`] of the BOX, so the mark is the size the rung says.
+/// Without one (the request never asked) it is [`fit`] of the whole texture and the whole texture, as before.
+///
+/// The window is the box grown by up to [`INK_FEATHER`] texels on every side (fewer where the texture ends,
+/// the same on all four so the mark stays centred), and the quad by as many pixels: the box is cut where alpha
+/// falls under a visibility threshold, and a soft glow or an anti-aliased edge would otherwise end on a hard
+/// line. The mark itself is the size [`fit`] gave; the margin is clear texels beside it.
+///
+/// **No texel is drawn larger than [`theme::logo::INK_UPSCALE`] pixels**: a 1 x 1 box would otherwise fill the
+/// slot with one smeared texel. The cap shrinks the drawn size (and keeps its aspect), never grows it.
 pub fn fit_ink(rung: LogoRung, tex_w: f32, tex_h: f32, ink: Option<InkBox>, col_w: f32) -> ((f32, f32), [f32; 4]) {
-    match ink {
-        Some(b) => (fit(rung, b.w as f32, b.h as f32, col_w), b.uv(tex_w, tex_h)),
-        None => (fit(rung, tex_w, tex_h, col_w), plx_gfx::gfx::UV_FULL),
+    let (src_w, src_h) = ink.map_or((tex_w, tex_h), |b| (b.w as f32, b.h as f32));
+    let (w, h) = fit(rung, src_w, src_h, col_w);
+    let cap = (theme::logo::INK_UPSCALE * src_w / w).min(theme::logo::INK_UPSCALE * src_h / h).min(1.0);
+    let (w, h) = (w * cap, h * cap);
+    let Some(b) = ink else { return ((w, h), plx_gfx::gfx::UV_FULL) };
+    if tex_w <= 0.0 || tex_h <= 0.0 || b.w == 0 || b.h == 0 {
+        return ((w, h), plx_gfx::gfx::UV_FULL);
     }
+    let (x, y, bw, bh) = (b.x as f32, b.y as f32, b.w as f32, b.h as f32);
+    let g = INK_FEATHER.min(x).min(y).min(tex_w - (x + bw)).min(tex_h - (y + bh)).max(0.0).floor();
+    let (kx, ky) = (w / bw, h / bh);
+    ((w + 2.0 * g * kx, h + 2.0 * g * ky), [(x - g) / tex_w, (y - g) / tex_h, (bw + 2.0 * g) / tex_w, (bh + 2.0 * g) / tex_h])
 }
+
+/// The texels [`fit_ink`] grows an ink box's window by on each side, where the texture has them.
+const INK_FEATHER: f32 = 2.0;
 
 /// Bottom-anchor a `w`×`h` logo in `band`: its BOTTOM EDGE lands on the band's bottom edge. The text
 /// fallback's painted box (descenders included) ends on the same line on the Hero rung, with its
@@ -640,10 +658,10 @@ mod tests {
         peeks: &'static std::cell::Cell<u32>,
     }
     impl crate::tex::Source for LogoStore {
-        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Option<plx_machine::machine::PosterKey> {
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Option<plx_machine::machine::PosterKey> {
             None
         }
-        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> crate::tex::Warm {
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> crate::tex::Warm {
             crate::tex::Warm::Known
         }
         fn logo(&self, _: u16, _: &str) -> Option<plx_machine::machine::PosterKey> {
@@ -847,14 +865,48 @@ mod channel_tests {
         let drawn_before = (square_w * 200.0 / 400.0, square_h * 50.0 / 400.0);
         assert!(drawn_before.0 < 43.0 && drawn_before.1 < 11.0, "before: the mark drew {drawn_before:?}");
         let ((w, h), uv) = fit_ink(LogoRung::Channel, 400.0, 400.0, Some(ink), theme::logo::CHANNEL_W_MAX);
-        assert!((w - 200.0).abs() < 0.01 && (h - 50.0).abs() < 0.01, "after: {w}x{h}");
-        assert_eq!(uv, [0.25, 0.4375, 0.5, 0.125], "only the mark's window of the texture");
+        // the mark is 200 x 50; the quad carries INK_FEATHER (2) texels of margin on every side at 1 px a texel
+        assert!((w - 204.0).abs() < 0.01 && (h - 54.0).abs() < 0.01, "after: {w}x{h}");
+        assert_eq!(uv, [98.0 / 400.0, 173.0 / 400.0, 204.0 / 400.0, 54.0 / 400.0], "only the mark's window of the texture");
         // a 5:1 wordmark at three quarters of a 16:9 canvas (the owner's ~100 px): width-limited at 218
         let wordmark = InkBox { x: 240, y: 396, w: 1440, h: 288 };
         let (bw, _) = fit(LogoRung::Channel, 1920.0, 1080.0, theme::logo::CHANNEL_W_MAX);
         assert!((bw * 0.75 - 100.0).abs() < 1.0, "before: ~100 px wide, {}", bw * 0.75);
         let ((w, h), _) = fit_ink(LogoRung::Channel, 1920.0, 1080.0, Some(wordmark), theme::logo::CHANNEL_W_MAX);
-        assert!((w - 218.0).abs() < 0.01 && (h - 43.6).abs() < 0.01, "after: {w}x{h}");
+        let k = 218.0 / 1440.0; // the mark is 218 x 43.6, and the margin is 2 texels a side
+        assert!((w - (218.0 + 4.0 * k)).abs() < 0.01 && (h - (43.6 + 4.0 * k)).abs() < 0.01, "after: {w}x{h}");
+    }
+
+    /// The box is cut where alpha falls under the visibility threshold, so the window is drawn a texel or two
+    /// wider: a soft edge is not cut on a hard line. Where the box touches the texture's edge there is no margin
+    /// to take, and it is the same on all four sides, so the mark stays centred.
+    #[test]
+    fn the_window_is_the_box_grown_by_a_margin_the_texture_has() {
+        let w = theme::logo::CHANNEL_W_MAX;
+        let (_, uv) = fit_ink(LogoRung::Channel, 100.0, 100.0, Some(InkBox { x: 40, y: 40, w: 20, h: 20 }), w);
+        assert_eq!(uv, [0.38, 0.38, 0.24, 0.24], "two texels each side");
+        let ((qw, qh), uv) = fit_ink(LogoRung::Channel, 100.0, 100.0, Some(InkBox { x: 1, y: 40, w: 20, h: 20 }), w);
+        assert_eq!(uv, [0.0, 0.39, 0.22, 0.22], "one texel left of the box, so one on every side");
+        assert!((qw - qh).abs() < 1e-3, "a square box stays a square quad: {qw}x{qh}");
+        let (_, uv) = fit_ink(LogoRung::Channel, 100.0, 100.0, Some(InkBox { x: 0, y: 0, w: 100, h: 100 }), w);
+        assert_eq!(uv, plx_gfx::gfx::UV_FULL, "an opaque picture has no margin to take");
+    }
+
+    /// **No texel is magnified past `INK_UPSCALE`**: a 1 x 1 box used to fill the 84 x 84 slot with one smeared
+    /// texel. It shrinks to two pixels a texel; a mark with texels to spare is untouched.
+    #[test]
+    fn a_tiny_ink_box_is_not_blown_up_to_the_slot() {
+        let w = theme::logo::CHANNEL_W_MAX;
+        let (before, _) = (fit(LogoRung::Channel, 1.0, 1.0, w), ());
+        assert_eq!(before, (84.0, 84.0), "the old rule's answer for a 1 x 1 box");
+        let ((qw, qh), _) = fit_ink(LogoRung::Channel, 100.0, 100.0, Some(InkBox { x: 50, y: 50, w: 1, h: 1 }), w);
+        let up = theme::logo::INK_UPSCALE;
+        assert!((qw - 5.0 * up).abs() < 1e-3 && (qh - 5.0 * up).abs() < 1e-3, "1 texel + 2 margin a side, at {up} px a texel: {qw}x{qh}");
+        let ((fw, fh), _) = fit_ink(LogoRung::Channel, 10.0, 10.0, None, w);
+        assert!((fw - 10.0 * up).abs() < 1e-3 && (fh - 10.0 * up).abs() < 1e-3, "a tiny texture with no box is capped the same: {fw}x{fh}");
+        // a mark with texels to spare: 200 x 50 at 1 px a texel is under the cap, so the same as ever
+        let ((qw, _), _) = fit_ink(LogoRung::Channel, 400.0, 400.0, Some(InkBox { x: 100, y: 175, w: 200, h: 50 }), w);
+        assert!((qw - 204.0).abs() < 0.01);
     }
 
     /// A picture with no box (a fully opaque one asked with the box is the whole picture; one that
