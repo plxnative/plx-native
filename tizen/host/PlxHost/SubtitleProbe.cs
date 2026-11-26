@@ -68,8 +68,7 @@ namespace PlxHost
             catch (Exception) { return null; }
             if (text == null) return null;
             var d = new Dictionary<string, string>();
-            foreach (string raw in text.Split('
-'))
+            foreach (string raw in text.Split('\n'))
             {
                 string line = raw.Trim();
                 int eq = line.IndexOf('=');
