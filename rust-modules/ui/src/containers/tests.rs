@@ -3303,3 +3303,27 @@ fn a_ret_without_focus_lands_only_where_it_was_captured() {
     let _ = d.nav.request(NavOp::Present(FixtureArg::Modal), ReturnState::default(), Some(home));
     assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "Present arm: not captured on the surface");
 }
+
+/// **The capturing entry travels with the `ret`** (`ReturnState::captured`, stamped by
+/// `Dispatcher::return_state`): a `ret` captured on the page, handed back through `request_with_return`
+/// after a surface took input, lands nowhere on that surface, and one with no capture (`default()`)
+/// lands nowhere at all. The owner at call time is not a stand-in, and neither is the `ret`'s focus.
+#[test]
+fn request_with_return_lands_a_ret_where_it_was_captured_not_where_the_owner_is_now() {
+    use crate::screen::ReturnState;
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let page_ret = d.return_state();
+    assert_eq!(page_ret.captured, Some(home), "return_state stamps the owner that held input");
+    let surface = open_modal(&mut d, &mut rig, Style::Opaque { snapshot: true }, 16);
+    let spot = FocusKey { entry: surface, elem: 3 };
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+
+    // captured on the page, no capture at all: neither may overwrite the surface's return state
+    d.request_with_return(MachineId::Nav, NavOp::Push(FixtureArg::Page(30)), page_ret);
+    d.request_with_return(MachineId::Nav, NavOp::Push(FixtureArg::Page(31)), ReturnState::default());
+    for ms in (32..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "neither landed on the surface");
+}

@@ -1140,9 +1140,9 @@ where
     }
 
     pub fn request_with_return(&mut self, from: MachineId, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) {
-        // A `ret` handed in from outside was captured by an earlier `return_state()`; its focus names that
-        // owner, and only when it has none is the owner now the best answer left.
-        let captured = ret.focus.map(|f| f.entry).or_else(|| self.owner_entry());
+        // A `ret` handed in from outside was captured by an earlier `return_state()`, which stamped the
+        // entry that held input then; the owner now is not a stand-in for it.
+        let captured = ret.captured;
         self.parked.push((Stamped {
             from,
             fx: Fx::Nav(op),
@@ -1152,7 +1152,7 @@ where
     fn park(&mut self, item: Stamped<H>) {
         let ret = self.return_state();
         // The capturing owner travels with the op: where the `ret` lands is decided at commit, by it.
-        let captured = self.owner_entry();
+        let captured = ret.captured;
         self.parked.push((item, ret, captured));
     }
 
@@ -1388,6 +1388,7 @@ where
             scroll: 0.0,
             memory: self.owner_entry().and_then(|e| self.nav.entry(e))
                 .and_then(|e| e.inst.as_ref()).map(|i| i.screen.memory_at(self.focus())).unwrap_or_default(),
+            captured: self.owner_entry(),
         }
     }
 

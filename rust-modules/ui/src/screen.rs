@@ -389,6 +389,12 @@ pub struct ReturnState<K, M = ()> {
     /// raised — tier 2's answer to "where was this page standing" for whatever a screen's `focus`
     /// and `scroll` alone cannot say (spec §6.1; e.g. Detail's season/column/sub-row `Spot`).
     pub memory: M,
+    /// **Routing, not state**: the entry that held input when this was captured
+    /// (`Dispatcher::return_state`'s `owner_entry()`), carried with the value wherever it goes (the
+    /// app's command and back into `request_with_return`) so the one rule "a `ret` lands where it
+    /// was captured" (`Navigation::captured_on`) never has to guess from `focus`. Not part of
+    /// [`RETURN_STATE_SHAPE`]: it is never recorded or hashed. `None` lands nowhere.
+    pub captured: Option<EntryId>,
 }
 
 pub const RETURN_STATE_SHAPE: &str = "ReturnState{focus:Option<(EntryId,H::Elem)>,remembered:[(GroupId,H::Elem)],scroll:f32,memory:H::Memory}";
@@ -400,6 +406,7 @@ impl<K, M: Default> Default for ReturnState<K, M> {
             remembered: Vec::new(),
             scroll: 0.0,
             memory: M::default(),
+            captured: None,
         }
     }
 }

@@ -350,8 +350,9 @@ impl<H: Host> Navigation<H> {
                 if self.tabs.stack.depth() <= 1 {
                     (BackAnswer::AtRoot, Vec::new())
                 } else {
-                    self.tabs.stack.request(NavOp::Pop, ret);
-                    (BackAnswer::Popped, Vec::new())
+                    // the one rule: `ret` lands on the page only when it was captured there
+                    let life = self.request(NavOp::Pop, ret, captured);
+                    (BackAnswer::Popped, life)
                 }
             }
         }
