@@ -1,4 +1,4 @@
-{"updated":"2026-11-26T17:36:56Z",
+{"updated":"2026-11-26T17:37:25Z",
 "ci":[
 {"id":33181037225,"at":"2026-08-28T14:36:41Z","sha":"3d06fbe09","title":"lab: add remote command bridge for cloud TVs","jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"pr":null,"conclusion":"success","attempt":1},
 {"id":33192163307,"at":"2026-08-28T16:54:18Z","sha":"d56cf1a71","title":"docs: what a rented webOS 10.3.1 set said, and the bug it found","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6007,7 +6007,8 @@
 {"id":45851055215,"at":"2026-11-26T15:38:10Z","sha":"ff21a45da","title":"Channels plates: the docs that named the Channels shelf a poster row","pr":1570,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":325,"Windows launcher syntax":25,"macOS tests against bundled FFmpeg and ASS":227,"Linux simulator build + launch":327}},
 {"id":45855325950,"at":"2026-11-26T16:20:34Z","sha":"e8bc2e34e","title":"Live TV: the chrome handoff reads the first row's pitch, not the poster pitch","pr":1570,"event":"pull_request","conclusion":"success","attempt":2,"jobs":{"macOS simulator build + launch":278,"Linux simulator build + launch":403,"macOS tests against bundled FFmpeg and ASS":125,"Windows launcher syntax":19},"wall":1234},
 {"id":45857965007,"at":"2026-11-26T16:21:15Z","sha":"bf2684f50","title":"Merge origin/main into feat/hero-menu-morph","pr":1571,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":18,"Linux simulator build + launch":412,"macOS tests against bundled FFmpeg and ASS":239,"macOS simulator build + launch":294}},
-{"id":45858658867,"at":"2026-11-26T16:25:39Z","sha":"986332559","title":"Live TV: the Channels shelf draws channel plates, not posters","pr":1570,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":265,"macOS simulator build + launch":160,"Linux simulator build + launch":365,"Windows launcher syntax":21}}
+{"id":45858658867,"at":"2026-11-26T16:25:39Z","sha":"986332559","title":"Live TV: the Channels shelf draws channel plates, not posters","pr":1570,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":265,"macOS simulator build + launch":160,"Linux simulator build + launch":365,"Windows launcher syntax":21}},
+{"id":45868288144,"at":"2026-11-26T17:30:22Z","sha":"5ed57561b","title":"Reach the pick effects through the registry, not a sibling screen","pr":1571,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":232,"Windows launcher syntax":20,"Linux simulator build + launch":407,"macOS simulator build + launch":288}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
