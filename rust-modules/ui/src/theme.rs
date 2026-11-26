@@ -282,10 +282,10 @@ pub mod shade {
     /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::EdgeShade`):
     /// it holds [`DETAIL_SIDE_A`] inside these semi-axes (x along the bottom, y up the left edge)...
     /// Detail needs legibility farther into the art for its wider title and synopsis.
-    pub const DETAIL_SIDE_HOLD: [f32; 2] = [1200.0, 760.0];
+    pub const DETAIL_SIDE_HOLD: [f32; 2] = [1450.0, 900.0];
     /// ...and has fallen to nothing at these. Both are curves, so the shade has no straight top or
     /// right edge for the eye to read as a plate (discussion #1460).
-    pub const DETAIL_SIDE_REACH: [f32; 2] = [1700.0, 960.0];
+    pub const DETAIL_SIDE_REACH: [f32; 2] = [1900.0, 1020.0];
     /// Grow the side shade upward as the preview logo travels into the corner.
     pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
