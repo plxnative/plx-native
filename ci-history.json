@@ -1,4 +1,4 @@
-{"updated":"2026-11-26T18:52:39Z",
+{"updated":"2026-11-26T18:57:16Z",
 "ci":[
 {"id":33181037225,"at":"2026-08-28T14:36:41Z","sha":"3d06fbe09","title":"lab: add remote command bridge for cloud TVs","jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"pr":null,"conclusion":"success","attempt":1},
 {"id":33192163307,"at":"2026-08-28T16:54:18Z","sha":"d56cf1a71","title":"docs: what a rented webOS 10.3.1 set said, and the bug it found","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6023,7 +6023,8 @@
 {"id":45876372600,"at":"2026-11-26T18:29:47Z","sha":"f73932bc7","title":"The remux codec guess also follows the session profile's DTS bound","pr":1547,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":393,"macOS tests against bundled FFmpeg and ASS":163,"Windows launcher syntax":23,"macOS simulator build + launch":310}},
 {"id":45877441718,"at":"2026-11-26T18:37:41Z","sha":"4f37eda0e","title":"Close the logical id only when the stop took a different encoder","pr":1562,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":280,"Windows launcher syntax":21,"Linux simulator build + launch":373,"macOS simulator build + launch":320}},
 {"id":45878214075,"at":"2026-11-26T18:43:42Z","sha":"d230b37f5","title":"One size class per glass: pages pushed into a menu take the menu's compact class","pr":1571,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":163,"macOS tests against bundled FFmpeg and ASS":256,"Windows launcher syntax":19,"Linux simulator build + launch":378}},
-{"id":45878390481,"at":"2026-11-26T18:45:05Z","sha":"91c523a7c","title":"Auto plays a 7.1 DTS-HD MA as its 5.1 core on a DTS-capable set","pr":1547,"conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":22,"Linux simulator build + launch":320,"macOS tests against bundled FFmpeg and ASS":200,"macOS simulator build + launch":380}}
+{"id":45878390481,"at":"2026-11-26T18:45:05Z","sha":"91c523a7c","title":"Auto plays a 7.1 DTS-HD MA as its 5.1 core on a DTS-capable set","pr":1547,"conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":22,"Linux simulator build + launch":320,"macOS tests against bundled FFmpeg and ASS":200,"macOS simulator build + launch":380}},
+{"id":45879043413,"at":"2026-11-26T18:50:09Z","sha":"012c2cabb","title":"Live TV number entry: the ChannelEntry argument doc names its digits","pr":1572,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":413,"Linux simulator build + launch":320,"Windows launcher syntax":16,"macOS tests against bundled FFmpeg and ASS":264}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
