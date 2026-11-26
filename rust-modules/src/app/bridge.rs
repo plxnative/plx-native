@@ -3025,11 +3025,14 @@ impl Bridge<'_> {
         self.retained.chrome.set_clock(wall, &self.retained.measure)
     }
 
-    /// The width of the bar's clock as it is drawn, `None` while the bar shows none: what a dev
-    /// instrument that shares the bar's right end steps aside for (`run::fps_counter_right_x`).
-    #[cfg(feature = "devtools")]
-    pub(crate) fn top_bar_clock_w(&self) -> Option<f32> {
-        self.retained.chrome.clock_read().map(|clock| clock.w)
+    /// **The clock the bar shows this frame, or `None`: the ONE answer.** The top page wears the bar,
+    /// the bar is on screen ([`plx_ui::dispatch::Dispatcher::bar_presented`], the chrome pass's own
+    /// test, so a detail page, the player, a faded or tucked bar all answer `None`) and a wall time is
+    /// published. What the minute edge owes a frame (`run::publish_product_frame`) and what a dev
+    /// instrument on the bar's right end steps aside for (`run::fps_counter_right_x`) both ask this.
+    pub(crate) fn bar_clock(&self, pages: &plx_ui::dispatch::Dispatcher<AppHost>) -> Option<plx_ui::widgets::ClockRead<'_>> {
+        pages.bar_presented(Rig::navigation_presentation(self, &pages.nav))?;
+        self.retained.chrome.clock_read()
     }
 
     /// The wall time of the clock reading last published ([`Self::publish_clock`]; `None` without a

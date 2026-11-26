@@ -1,6 +1,6 @@
 //! **The bar's clock** (Live TV handoff SPEC-1 item 2: "right edge on --margin-x (96), centred on the
 //! top bar. BODY 28 regular, --text-secondary, tabular figures, soft text shadow. Never focusable"):
-//! where its box stands, what the draw paints, and when the strip leaves it no room.
+//! where its box stands, what the draw paints, and how the strip yields to it.
 
 use super::*;
 use crate::draw_census::capture_runs;
@@ -60,19 +60,24 @@ fn the_right_edge_does_not_depend_on_the_faces_width() {
     }
 }
 
-/// The room rule, the mirror of `chip_name_budget`: the clock fits when it stands `BAND_AIR` beyond
-/// the centred track's right edge. A track grown to `TAB_VIEW_MAX` ends at 1732, 92 px short of the
-/// margin: a 24-hour face fits there with air to spare, a 12-hour one does not, and the bar leaves it
-/// out rather than eliding it or overlapping the track.
+/// **The strip yields to the clock, never the clock to the strip.** The track is centred, so the widest
+/// face the clock can wear (`TOP_BAR_CLOCK_MAX_W`, measured 146 px for Spanish and Catalan "12:00 p. m."
+/// with the shipped font; English 12 h is 129, Portuguese 141, any 24 h face 80) is folded into the
+/// clearance behind `TAB_VIEW_MAX`: the widest track ends `BAND_AIR` short of the widest clock's left
+/// edge, so there is always room for the face and no room rule that could hide it.
 #[test]
-fn the_clock_fits_beside_the_track_or_is_left_out() {
+fn the_strip_yields_to_the_widest_face_the_clock_can_wear() {
+    assert_eq!(TOP_BAR_CLOCK_MAX_W, 146.0, "the measured width of the widest shipped 12-hour face");
+    assert_eq!(TAB_CLOCK_CLEAR, 96.0 + 146.0 + BAND_AIR, "margin + widest face + air");
+    assert!(TAB_CHIP_CLEAR < TAB_CLOCK_CLEAR, "the clock's end is the wider one, so it sets the symmetric clearance");
+    assert_eq!(TAB_SIDE_CLEAR, TAB_CLOCK_CLEAR);
     let widest_track = TAB_VIEW_MAX + 2.0 * TAB_TRACK_PAD;
-    assert_eq!((crate::consts::SCR_W + widest_track) * 0.5, 1732.0, "the widest track's right edge");
-    assert!(top_bar_clock_fits(widest_track, 70.0), "a 24-hour face clears even the widest track");
-    assert!(!top_bar_clock_fits(widest_track, 125.0), "a 12-hour face does not");
-    assert!(top_bar_clock_fits(700.0, 125.0), "an ordinary strip leaves a 12-hour face room");
-    // exactly BAND_AIR of air is enough; a pixel less is not
-    let w = TOP_BAR_CLOCK_RIGHT - (crate::consts::SCR_W + 700.0) * 0.5 - BAND_AIR;
-    assert!(top_bar_clock_fits(700.0, w));
-    assert!(!top_bar_clock_fits(700.0, w + 1.0));
+    let track_right = (crate::consts::SCR_W + widest_track) * 0.5;
+    assert_eq!(track_right, 1662.0, "the widest track's right edge");
+    assert_eq!(top_bar_clock_frame(TOP_BAR_CLOCK_MAX_W).x - track_right, BAND_AIR, "exactly one rung of air to the widest face");
+    for face_w in [80.0, 129.0, 141.0, 146.0] {
+        assert!(track_right + BAND_AIR <= top_bar_clock_frame(face_w).x, "a {face_w} px face clears the widest track");
+    }
+    // the strip is what gave way: it scrolls past a viewport 140 px narrower than before the clock
+    assert_eq!(widest_track, 1404.0);
 }

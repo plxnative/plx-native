@@ -820,10 +820,17 @@ fn publish_product_frame(app: &mut App, was_player: bool) {
     if app.runtime.bridge(&mut app.bridge).publish_player_presentation(&app.player.session) {
         app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
     }
+    let clock_was_shown = app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some();
     if publish_frame(&mut app.runtime.bridge(&mut app.bridge), &app.player.session, was_player,
-        app.adapters.player.backend_viewer_paused()) {
-        // The bar's clock reached a new minute: one frame to show it, however still the screen is.
-        app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
+        app.adapters.player.backend_viewer_paused())
+        && (clock_was_shown || app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some())
+    {
+        // The bar's clock reached a new minute (or lost its zone) while the bar shows one: one frame
+        // to show it, however still the screen is, in the scope that owns input (a menu over the page
+        // does not retake the page's frozen snapshot for it). A page that shows no bar owes nothing.
+        let scope = app.pages.input_scope();
+        app.pages.present.note_in_scope(scope,
+            plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Lifecycle));
     }
     publish_player_model(app);
 }
@@ -3476,7 +3483,7 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                             };
                             plx_gfx::gfx::draw_number(
                                 *fps_shown,
-                                fps_counter_right_x(bridge.top_bar_clock_w()),
+                                fps_counter_right_x(bridge.bar_clock(pages).map(|clock| clock.w)),
                                 64.0,
                                 46.0,
                                 fps_col.as_ptr(),
@@ -3498,7 +3505,7 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
 /// a release build draws none) has always stood in the bar's band with its right digit on the right
 /// margin, which is where the bar's clock now ends. So it steps LEFT of the clock: by the clock's own
 /// width and one [`plx_ui::theme::space::SM`] of air, the rung the bar keeps between its own parts, and
-/// stays where it was when the bar has no clock to show (no zone, or no room beside the strip).
+/// stays where it was when the bar shows no clock this frame ([`super::bridge::Bridge::bar_clock`]).
 #[cfg(feature = "devtools")]
 fn fps_counter_right_x(clock_w: Option<f32>) -> f32 {
     plx_base::surface::LOGICAL_W - 70.0 - clock_w.map_or(0.0, |w| w + plx_ui::theme::space::SM)
@@ -6047,17 +6054,21 @@ pub(in crate::app) mod lifecycle_regression_tests {
         assert!(unsafe { ingress_token(&mut app, &mut fr, "hang-raw:1") });
     }
 
-    /// **A settled screen owes the bar's clock one frame a minute, and no more.** The loop's
+    /// **A settled screen that shows the bar owes its clock one frame a minute, and no more.** The loop's
     /// publication phase turns a new minute's face into present damage (the way a player-presentation
     /// change does), and a frame published again within the minute adds none: the idle gate keeps its
     /// whole saving, with no polling and no per-frame invalidation.
     #[test]
-    fn a_new_minute_owes_the_settled_screen_one_frame_and_the_same_minute_none() {
+    fn a_new_minute_owes_the_settled_bar_one_frame_and_the_same_minute_none() {
         const AT: i64 = 1_795_649_400;
         let _serial = plx_base::testlock::serial();
         let mut app = app();
         clock::pin_for_test(AT * 1_000, 3_600);
+        super::super::bridge::nav_root(&mut app.pages, AppArg::Home);
+        for i in 0..40 { frame(&mut app, i * 16); }
         publish_product_frame(&mut app, false);
+        assert!(app.route() == AppArg::Home, "premise: Home is on top");
+        assert!(app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_some(), "premise: Home shows the bar and its clock");
         let first = app.pages.present.damage_epoch();
         for ms in [0, 17, 1_000, 59_999] {
             clock::pin_for_test(AT * 1_000 + ms, 3_600);
@@ -6070,6 +6081,24 @@ pub(in crate::app) mod lifecycle_regression_tests {
         assert!(next > first, "the minute edge: one frame owed");
         publish_product_frame(&mut app, false);
         assert_eq!(app.pages.present.damage_epoch(), next, "and published again within the minute, none");
+        clock::unpin_for_test();
+    }
+
+    /// **No bar, no frame owed**: while no page shows the bar (nothing mounted here; a detail page, the
+    /// player, a tucked bar answer the same, `chrome_clock_route_tests`), a new minute raises no damage,
+    /// so it can never force a frozen snapshot's retake for a clock nobody can see.
+    #[test]
+    fn a_new_minute_owes_no_frame_while_no_page_shows_the_bar() {
+        const AT: i64 = 1_795_649_400;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        clock::pin_for_test(AT * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        let first = app.pages.present.damage_epoch();
+        assert!(app.runtime.bridge(&mut app.bridge).bar_clock(&app.pages).is_none(), "premise: no bar");
+        clock::pin_for_test((AT + 60) * 1_000, 3_600);
+        publish_product_frame(&mut app, false);
+        assert_eq!(app.pages.present.damage_epoch(), first, "the minute edge with no bar on screen: no damage");
         clock::unpin_for_test();
     }
 

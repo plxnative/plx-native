@@ -119,14 +119,78 @@ fn the_clock_follows_the_bars_tuck() {
     assert_eq!(clock_runs(&mut w, &face()).len(), 1, "the clock returns with the bar");
 }
 
-/// The player wears no bar, so it draws no clock; every page that does wear it is on the list.
+/// Search and Live TV wear the bar, so they carry the clock where Home does: drawn runs, not a list.
 #[test]
-fn the_player_draws_no_clock_and_every_bar_page_does() {
-    for (name, arg) in [("Home", AppArg::Home), ("Search", AppArg::Search), ("Watchlist", AppArg::Watchlist),
-        ("Live TV", AppArg::LiveTv), ("Library Recommended", AppArg::LibraryRecommended { section: 0 })] {
-        assert!(Bridge::draws_chrome_for(&arg), "{name} wears the bar, so it carries the clock");
+fn search_draws_it_too() {
+    let mut w = World::search_results("clock-search", |_| Vec::new());
+    publish(&mut w, AT, Some(MOSCOW));
+    assert_on_the_bar(&mut w, "Search");
+}
+
+#[test]
+fn and_so_does_live_tv() {
+    let mut w = World::new("clock-livetv");
+    super::show_page(&mut w.d, AppArg::LiveTv);
+    w.frames(60);
+    assert!(w.on(&AppArg::LiveTv), "premise: Live TV is on top");
+    publish(&mut w, AT, Some(MOSCOW));
+    assert_on_the_bar(&mut w, "Live TV");
+}
+
+/// **A page that wears no bar draws no clock**, and the ONE answer to "does the bar show a clock this
+/// frame" says so: the detail page's drawn runs hold no face and `Bridge::bar_clock` is `None` for it,
+/// where it is `Some` on Home. (It is that answer that the minute's damage and the dev fps counter's
+/// step ask, so neither fires for a clock nobody can see.)
+#[test]
+fn a_page_without_the_bar_draws_no_clock_and_the_one_answer_says_none() {
+    let mut home = World::home_with_disc("clock-answer-home", [7; 12]);
+    publish(&mut home, AT, Some(MOSCOW));
+    home.frames(2);
+    let shown = home.bridge.bridge().bar_clock(&home.d).map(|clock| clock.w);
+    assert!(shown.is_some_and(|w| w > 0.0), "Home: the bar shows a clock ({shown:?})");
+    drop(home);
+
+    let mut detail = World::detail_with_disc("clock-answer-detail", [7; 12]);
+    publish(&mut detail, AT, Some(MOSCOW));
+    detail.frames(2);
+    assert!(detail.d.top_arg().is_some_and(|arg| !Bridge::draws_chrome_for(arg)), "premise: a page without the bar is on top");
+    assert!(clock_runs(&mut detail, &face()).is_empty(), "the detail page draws no clock");
+    assert!(detail.bridge.bridge().bar_clock(&detail.d).is_none(), "and the one answer is none");
+}
+
+/// A tucked bar (the Library's grid has lifted and faded it) shows no clock, in the one answer as in
+/// the drawn runs; it answers again when the bar returns.
+#[test]
+fn a_tucked_bar_shows_no_clock_in_the_one_answer() {
+    let mut w = World::movies_library("clock-answer-tuck", true);
+    publish(&mut w, AT, Some(MOSCOW));
+    w.frames(2);
+    assert!(w.bridge.bridge().bar_clock(&w.d).is_some(), "premise: the bar is shown on arrival");
+    w.climb_into_header();
+    for _ in 0..3 { w.press(Key::Down); }
+    w.frames(60);
+    assert!(w.tuck() > 0.99, "premise: the grid's rows have tucked the chrome (tuck {})", w.tuck());
+    assert!(w.bridge.bridge().bar_clock(&w.d).is_none(), "tucked: none");
+    for _ in 0..4 { w.press(Key::Up); }
+    w.frames(60);
+    assert!(w.bridge.bridge().bar_clock(&w.d).is_some(), "and back with the bar");
+}
+
+/// The player wears no bar at all (its argument's registry answer), the other half of the same rule.
+#[test]
+fn the_player_wears_no_bar_and_so_carries_no_clock() {
+    use plx_ui::screen::ScreenArg;
+    assert_ne!(AppArg::Player.chrome(), plx_machine::machine::Chrome::TabBar);
+    let mut w = World::new("clock-player");
+    super::show_page(&mut w.d, AppArg::Player);
+    w.frames(30);
+    assert!(w.on(&AppArg::Player), "premise: the player is on top");
+    publish(&mut w, AT, Some(MOSCOW));
+    assert!(clock_runs(&mut w, &face()).is_empty(), "the player draws no clock");
+    assert!(w.bridge.bridge().bar_clock(&w.d).is_none(), "and the one answer is none");
+    for arg in [AppArg::Home, AppArg::Search, AppArg::Watchlist, AppArg::LiveTv, AppArg::LibraryRecommended { section: 0 }] {
+        assert_eq!(arg.chrome(), plx_machine::machine::Chrome::TabBar, "a bar page");
     }
-    assert!(!Bridge::draws_chrome_for(&AppArg::Player), "the player wears no bar and so draws no clock");
 }
 
 /// No wall time (the zone cannot be read, a replay) is no clock: a face is never guessed.
