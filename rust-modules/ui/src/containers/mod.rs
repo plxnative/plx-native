@@ -264,8 +264,15 @@ impl<H: Host> Navigation<H> {
         match op {
             NavOp::Present(arg) => {
                 let host = self.top_page().map(|e| e.id);
+                // The opener's `ret` lands on the owner only when it was captured THERE, the rule
+                // the page ops above follow. A panel the hero's `…` menu opens is requested while
+                // that menu still holds input (its `Dismiss` commits in the same breath), so the
+                // `ret` names the menu's row: stored on the page, the page would be restored onto a
+                // dead entry when the panel closes (a pick or BACK) and hold no focus at all.
                 if let Some(InputOwner::Entry(owner)) = self.input_owner() {
-                    if let Some(e) = self.entry_mut(owner) { e.ret = ret; }
+                    if ret.focus.map_or(true, |f| f.entry == owner) {
+                        if let Some(e) = self.entry_mut(owner) { e.ret = ret; }
+                    }
                 }
                 let (_, mut out) = self.modals.present(&mut self.ids, arg, self.next_style);
                 if let Some(h) = host {

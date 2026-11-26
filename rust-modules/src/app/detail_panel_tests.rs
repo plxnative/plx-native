@@ -495,3 +495,122 @@ fn a_page_under_a_picker_that_stays_open_is_still_refused() {
         "the page asked, and a covered page is refused: {}", tap.account());
     assert_eq!(s.d.nav.modals.surfaces.len(), 1, "the picker is still up, and nothing was presented over it");
 }
+
+/// A part-watched movie with two versions and two audio and two subtitle tracks, the page the hero's `…`
+/// holds Select Version and Audio & Subtitles on. `discs` instead puts one of them on the hero's own row: a
+/// movie with no resume point has no Play from Start, so Watchlist, Watched and the one action asked for
+/// (`Some(true)`: versions only, `Some(false)`: tracks only) fill the row without a `…`.
+fn hero_world(name: &str, discs: Option<bool>) -> World {
+    // the DV diagnostics latch on first read, which must not be inside a machine step
+    plx_data::metadata::prewarm_dv_latches();
+    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+    let mut detail = plx_data::metadata::Detail {
+        sid: plx_plex::plex::ServerId::UNSET,
+        rk: "movie".into(),
+        kind: "movie".into(),
+        title: "Movie".into(),
+        part: "/library/parts/7/movie.mkv".into(),
+        resume_ms: 600_000,
+        dur_ms: 6_000_000,
+        versions: plx_appkit::version_list::sample(),
+        audio: vec![stream(11), stream(12)],
+        subs: vec![stream(21), stream(22)],
+        ..Default::default()
+    };
+    if let Some(versions) = discs {
+        detail.resume_ms = 0;
+        if versions { detail.audio.clear(); detail.subs.clear(); } else { detail.versions.clear(); }
+    }
+    World::detail_page(name, detail)
+}
+
+/// Focus walked along the hero row to `ctl`.
+fn walk_to(w: &mut World, ctl: plx_screens::detail::HeroCtl) {
+    for _ in 0..8 {
+        if w.elem() == Some(ctl.elem()) { return; }
+        w.press(Key::Right);
+    }
+    panic!("the hero row never reached {ctl:?}: focus {:?}", w.focus());
+}
+
+/// **A Detail page on top always holds focus** (the invariant these tests pin): a pick or BACK that closes
+/// the last surface leaves the ring on `ctl`, never on nothing and never on a closed surface's entry.
+fn assert_focus_on_hero(w: &World, ctl: plx_screens::detail::HeroCtl, what: &str) {
+    let page = w.d.nav.top_page().expect("a page is on top").id;
+    assert!(w.d.nav.modals.surfaces.is_empty(), "{what}: premise: the surface closed");
+    assert_eq!(w.focus(), Some(FocusKey { entry: page, elem: ctl.elem() }), "{what}: focus is back on the opener");
+}
+
+/// BACK until the surfaces are gone (the Audio & Subtitles panel pops a page before it dismisses).
+fn back_out(w: &mut World) {
+    for _ in 0..4 {
+        if w.d.nav.modals.surfaces.is_empty() { return; }
+        w.press(Key::Back);
+    }
+}
+
+/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`** (the menu row
+/// hands its panel to the page, so the panel is presented while the closing menu still owns the ring).
+/// The page used to keep the menu's row as its return spot and was restored onto a dead entry: no ring,
+/// Left and Right dead, Down on the cast. The same close as BACK without a pick.
+#[test]
+fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("version-pick-more", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
+    w.press(Key::Ok); // its first row: Select Version
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel replaced the menu");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_focus_on_hero(&w, HeroCtl::More, "a version pick");
+
+    // control: BACK without a pick
+    w.press(Key::Ok);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the panel is up again");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the panel");
+}
+
+/// **A pick in Audio & Subtitles, opened from the hero's `…` menu, returns focus to the `…`**, the panel
+/// being left after the pick (it stays up with the check moved).
+#[test]
+fn an_audio_subtitles_pick_from_the_more_menu_returns_focus_to_the_more_button() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("tracks-pick-more", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    w.press(Key::Down); // Select Version, then Audio & Subtitles
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Audio & Subtitles panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok); // a pick: the check moves, the panel stays
+    back_out(&mut w);
+    assert_focus_on_hero(&w, HeroCtl::More, "an Audio & Subtitles pick");
+}
+
+/// **The same from the hero's own discs**: Select Version and Audio & Subtitles opened from their discs
+/// return focus to that disc.
+#[test]
+fn a_pick_from_a_hero_disc_returns_focus_to_that_disc() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("version-pick-disc", Some(true));
+    walk_to(&mut w, HeroCtl::Version);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_focus_on_hero(&w, HeroCtl::Version, "a version pick from its disc");
+    drop(w);
+
+    let mut w = hero_world("tracks-pick-disc", Some(false));
+    walk_to(&mut w, HeroCtl::AudioSubtitles);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Audio & Subtitles panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    back_out(&mut w);
+    assert_focus_on_hero(&w, HeroCtl::AudioSubtitles, "an Audio & Subtitles pick from its disc");
+}

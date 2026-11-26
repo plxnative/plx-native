@@ -3225,3 +3225,53 @@ fn a_push_parked_behind_a_surfaces_dismiss_keeps_the_hosts_return_spot() {
     assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(card),
         "the closing menu's row did not replace the host's return spot");
 }
+
+/// **A panel parked behind a menu's `Dismiss` keeps the host's return spot** (the hero's `…` menu's
+/// *Select Version* and *Audio & Subtitles* rows). The panel's `Present` is captured on the closing
+/// menu's row, like the page op above; stored on the page it made the panel's close (a pick, or BACK)
+/// restore focus onto the dead menu entry, and the page held none. The page keeps the spot it had when
+/// the MENU opened (the `…` it hangs off), and the panel's close restores it.
+#[test]
+fn a_panel_parked_behind_a_surfaces_dismiss_keeps_the_hosts_return_spot() {
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let opener = FocusKey { entry: home, elem: 1 };
+    d.set_focus(Some(opener));
+    let menu = open_modal(&mut d, &mut rig, Style::Compact, 16);
+    d.set_focus(Some(FocusKey { entry: menu, elem: 5 }));
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener), "captured at the menu's Present");
+    d.request(MachineId::Nav, NavOp::Dismiss(menu));
+    d.nav.next_style = Style::Compact;
+    d.request(MachineId::Nav, NavOp::Present(FixtureArg::Modal));
+    d.frame(&mut rig, tick(32), vec![], vec![], &mut NoTap);
+    let panel = d.nav.modals.top().expect("the panel is up").entry.id;
+    assert_ne!(panel, menu, "premise: the panel is another surface than the menu");
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener),
+        "the closing menu's row did not replace the host's return spot");
+
+    d.request(MachineId::Nav, NavOp::Dismiss(panel));
+    for ms in (48..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(home)), "the page holds input again");
+    assert_eq!(d.focus(), Some(opener), "and focus is back on what the menu hung off, never none");
+}
+
+/// **A panel a page's own control opens returns to that control** (the hero's disc, the failure
+/// screen's *Audio & Subtitles* action): captured on the page, so it is the page's spot, and the
+/// panel's close restores it.
+#[test]
+fn a_panel_a_pages_control_opens_returns_to_that_control() {
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let opener = FocusKey { entry: home, elem: 1 };
+    d.set_focus(Some(opener));
+    let panel = open_modal(&mut d, &mut rig, Style::Compact, 16);
+    d.set_focus(Some(FocusKey { entry: panel, elem: 5 }));
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener), "captured at the Present");
+    d.request(MachineId::Nav, NavOp::Dismiss(panel));
+    for ms in (32..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.focus(), Some(opener), "the control that opened the panel holds focus again");
+}
