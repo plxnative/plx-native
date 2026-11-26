@@ -5705,7 +5705,8 @@ fn versioned(kind: &str, versions: usize) -> Detail {
         rk: "leaf".into(),
         kind: kind.into(),
         title: "Leaf".into(),
-        part: "/library/parts/leaf".into(),
+        // a numeric part id, as a real PMS key has: the picker and the pick refuse a part that names no file
+        part: "/library/parts/1/leaf.mkv".into(),
         resume_ms: 600_000,
         dur_ms: 6_000_000,
         versions: plx_appkit::version_list::sample().into_iter().take(versions).collect(),
@@ -5804,7 +5805,7 @@ fn the_audio_and_subtitles_disc_follows_the_pages_tracks_and_opens_the_picker() 
     drop(_guard);
 
     // A show page with an on-deck episode offers THAT episode's tracks (the page's backfilled streams).
-    let on_deck = plx_data::metadata::Episode { resume_ms: 30_000, part: "/library/parts/e2".into(), ..episode("e2", 2) };
+    let on_deck = plx_data::metadata::Episode { resume_ms: 30_000, part: "/library/parts/2/e2.mkv".into(), ..episode("e2", 2) };
     let mut d = detail(ServerId::UNSET, "show");
     d.episodes = vec![episode("e1", 1), on_deck.clone()].into();
     d.on_deck = Some(on_deck);
