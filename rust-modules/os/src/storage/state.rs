@@ -176,7 +176,8 @@ pub struct AuthContext {
 /// install-wide top-level keys of the same names stay (they are the fallback every profile reads
 /// until it picks its own).
 ///
-/// The next four are each profile's own browsing and playback memory, which sign-out forgets with
+/// `version_choices` is the file a profile selected (or played) for one item, naming a
+/// `machineIdentifier` and a ratingKey. The next four are each profile's own browsing and playback memory, which sign-out forgets with
 /// the account whose profile it was: `subtitle_offsets` (the timing correction a profile tuned for
 /// one item, naming a `machineIdentifier` and a ratingKey), `library_sorts` (how each library was
 /// last browsed), `last_library` (the library each top tab opened in) and `library_order` (the order
@@ -191,6 +192,7 @@ pub const ACCOUNT_BOUND_PREFERENCES: &[&str] = &[
     "recent_channels",
     "profile_prefs",
     "subtitle_offsets",
+    "version_choices",
     "library_sorts",
     "last_library",
     "library_order",
