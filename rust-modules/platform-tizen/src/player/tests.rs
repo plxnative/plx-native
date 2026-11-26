@@ -871,29 +871,28 @@ fn a_dts_or_non_direct_play_source_is_refused_with_its_typed_reason_and_no_conve
     }
 }
 
-/// The host player has no track verb, so a play that selects any audio stream but the first is declined instead
-/// of started on the wrong track, and a play whose position is unknown is too.
+/// **A source with several audio streams is certified for the one the play selects** (discussion #1460: every multi-audio
+/// title was refused on the first retail set). The offer's track map names that stream at its position among the Part's
+/// audio streams (`audio_ordinal`), which is the index the driver asks the host player to select. A play that selects a
+/// stream whose position is unknown is still declined: there would be no index to ask for.
 #[test]
-fn a_play_that_selects_another_audio_stream_is_declined() {
-    for ordinal in [Some(1), Some(3), None] {
-        let verdict = resolver().qualify(&off(), request(plays(), 31343, ordinal));
-        assert!(matches!(verdict, Verdict::Unknown(UriDecline::NotCertified)), "ordinal {ordinal:?}");
+fn a_source_with_several_audio_streams_is_certified_for_the_selected_stream() {
+    for (sid, ordinal) in [(31342, 0), (31343, 1), (31345, 3)] {
+        let mut req = request(plays(), sid, Some(ordinal));
+        req.has_multiple_audio_tracks = true;
+        let Verdict::Known(known) = resolver().qualify(&off(), req) else { panic!("audio {sid} at {ordinal} is certified") };
+        assert_eq!(known.requirements.audio_track, TrackChoice::Selected(sid as u64));
+        let (_, tracks) = known.source.into_parts();
+        assert_eq!(tracks, [NativeTrackIndex { selection: TrackSelection { kind: TrackKind::Audio, id: sid as u64 }, index: ordinal }]);
+    }
+    for multiple in [false, true] {
+        let mut unknown = request(plays(), 31343, None);
+        unknown.has_multiple_audio_tracks = multiple;
+        assert!(matches!(resolver().qualify(&off(), unknown), Verdict::Unknown(UriDecline::NotCertified)),
+            "a selected stream with no position (multiple {multiple})");
     }
     // No selected stream at all (a silent file) needs no track.
     assert!(matches!(resolver().qualify(&off(), request(plays(), 0, None)), Verdict::Known(_)));
-}
-
-/// Which stream the retail player starts on when a source has several is unmeasured, so a source with more than one
-/// audio stream is not certified, whichever stream is selected (the webOS precedent `ManyAudioTracksExported`).
-#[test]
-fn a_source_with_several_audio_streams_is_not_certified() {
-    for (sid, ordinal) in [(31342, Some(0)), (31343, Some(1)), (0, None)] {
-        let mut req = request(plays(), sid, ordinal);
-        req.has_multiple_audio_tracks = true;
-        let verdict = resolver().qualify(&off(), req);
-        assert!(matches!(verdict, Verdict::Unknown(UriDecline::NotCertified)), "audio {sid}");
-    }
-    assert!(matches!(resolver().qualify(&off(), request(plays(), 31342, Some(0))), Verdict::Known(_)), "one stream is");
 }
 
 /// The emulator has no audio device, so its runs serve VIDEO-ONLY media (the mock's `--extra-media-video-only`). The planner
