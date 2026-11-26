@@ -28,7 +28,7 @@
 //! rides in [`crate::tex::Decoded::backdrop`], is uploaded with the image and lives and dies in the
 //! same cache entry ([`crate::tex::TexCache`]); drawing a tile is two textured quads and no render
 //! pass. The GPU upscales it bilinearly, which is the rest of the blur. It costs
-//! [`BACKDROP_SHORT_SIDE`] x up to [`BACKDROP_LONG_SIDE_MAX`] x 4 bytes (1 KiB for a square, 1.75 KiB
+//! [`BACKDROP_SHORT_SIDE`] x up to [`BACKDROP_PANORAMA_SIDE`] x 4 bytes (1 KiB for a square, 1.75 KiB
 //! for 16:9, 4 KiB at the most) beside the picture's own ~375 KB.
 use crate::tex::Decoded;
 use crate::{Crop, Rect};
@@ -54,7 +54,7 @@ const POSTER_ASPECT: f32 = 2.0 / 3.0;
 const BACKDROP_SHORT_SIDE: usize = 16;
 
 /// Texels on the long side, at the most: a panorama is not given a wider copy than it can use.
-const BACKDROP_LONG_SIDE_MAX: usize = 64;
+const BACKDROP_PANORAMA_SIDE: usize = 64;
 
 /// The most taps [`backdrop_of`] takes per output texel along one axis. A 667 x 375 picture reduced
 /// to 28 x 16 spans ~24 source texels per output texel; sampling 4 x 4 of them on an even grid is
@@ -108,11 +108,11 @@ pub fn place(fit: ArtFit, crop: Crop, tw: f32, th: f32, r: Rect, has_backdrop: b
 }
 
 /// The size of the blurred copy of a `w` x `h` picture: [`BACKDROP_SHORT_SIDE`] on the short side,
-/// the same aspect on the long one (at most [`BACKDROP_LONG_SIDE_MAX`]).
+/// the same aspect on the long one (at most [`BACKDROP_PANORAMA_SIDE`]).
 fn backdrop_size(w: usize, h: usize) -> (usize, usize) {
     let short = BACKDROP_SHORT_SIDE;
     let long = ((short * w.max(h)) as f32 / w.min(h) as f32).round() as usize;
-    let long = long.clamp(short, BACKDROP_LONG_SIDE_MAX);
+    let long = long.clamp(short, BACKDROP_PANORAMA_SIDE);
     if w >= h { (long, short) } else { (short, long) }
 }
 
