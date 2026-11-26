@@ -1345,9 +1345,8 @@ fn retiring_a_trailer_preview_retires_the_session_its_decision_reserved() {
     pump_play(&mut ps, &mut meta).expect("accepted PMS output start");
     mark_preview_for_test(&mut ps);
     let logical = sess(&ps);
-    install_active_encoder_for_test(&format!("{logical}-abr-1"));
     scrobble_stop(&mut ps, Some(("rk-v".into(), 30_000, 60_000)), None);
-    let stop = format!("session={logical}");
+    let stop = format!("session={logical}&");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut stopped = false;
     while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {

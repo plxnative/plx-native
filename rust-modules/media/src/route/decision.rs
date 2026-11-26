@@ -8919,10 +8919,13 @@ pub fn scrobble_stop(
     // the rest is still read after teardown returns — see `reset_session`'s doc for the reader that
     // would break.
     let live = ps.cur_live.take();
-    // The id the decision reserved its Streaming Resource under, when the stop would not already
-    // close it: a live route's tune is ended by the timeline's `stopped`, and an encoder under the
-    // same id is closed by its own stop.
-    let logical_session = if live.is_some() || logical_session == tsession { String::new() } else { logical_session };
+    // The id the decision reserved its Streaming Resource under, closed only when the playback had
+    // moved onto a DIFFERENT encoder id that this stop takes: an encoder under the same id (a direct
+    // play installs the logical id itself) is closed by its own stop, no encoder taken means an
+    // earlier stop or retirement already owned the close, and a live route's tune is ended by the
+    // timeline's `stopped`.
+    let logical_session =
+        if live.is_some() || tsession.is_empty() || logical_session == tsession { String::new() } else { logical_session };
     { let s = &mut *ps; {
         s.tsession.clear();
         s.cur_contract.remux = false;

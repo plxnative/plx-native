@@ -628,7 +628,7 @@ fn a_stop_that_finished_the_item_scrobbles_it_after_the_stopped_report() {
     assert!(!ps.finished, "the stop took the flag, so it cannot mark the next item");
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 3, "the stopped report, the scrobble and the logical close: {lines:?}");
+        assert_eq!(lines.len(), 2, "the stopped report and the scrobble, nothing else: {lines:?}");
         assert!(lines[0].contains("state=stopped"), "`stopped` goes first: {}", lines[0]);
         assert!(lines[1].contains("/:/scrobble?key=7"), "then the scrobble: {}", lines[1]);
     }
@@ -645,8 +645,8 @@ fn a_stop_that_finished_the_item_scrobbles_it_after_the_stopped_report() {
     drain_scrobble();
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 5, "only the `stopped` report and the logical close: {lines:?}");
-        assert!(lines[3].contains("state=stopped"), "{}", lines[3]);
+        assert_eq!(lines.len(), 3, "only the `stopped` report: {lines:?}");
+        assert!(lines[2].contains("state=stopped"), "{}", lines[2]);
     }
     let stops = take_landed_stops();
     assert_eq!((stops[0].pos_ms, stops[0].dur_ms), (30_000, 60_000));
@@ -691,7 +691,7 @@ fn a_finishing_stop_past_the_servers_threshold_posts_stopped_alone() {
     assert!(!ps.finished, "the stop took the flag even though it did not scrobble");
     {
         let lines = server.lines();
-        assert_eq!(lines.len(), 2, "the `stopped` report and the logical close, no second view: {lines:?}");
+        assert_eq!(lines.len(), 1, "only the `stopped` report, no second view: {lines:?}");
         assert!(lines[0].contains("state=stopped"), "{}", lines[0]);
     }
     let stops = take_landed_stops();
