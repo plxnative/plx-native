@@ -2892,7 +2892,8 @@ mod tests {
         // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape and the
         // lift and glide springs to `TableView::MOTION_SHAPE` (only the screen half moves): previously
         // 0xd80b_045a_c4aa_fc9b.
-        assert_eq!(state_fp(), 0xd80b_045a_c4aa_fc9b, "current V13 producer census");
+        assert_eq!(state_fp(), 0xcb36_5b40_2b40_643f, "current V13 producer census");
+        assert_ne!(state_fp(), 0xd80b_045a_c4aa_fc9b, "the census before the Library order page and the table's lift and glide springs");
         assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");
         assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
         assert_ne!(state_fp(), 0xc0b2_71bb_16d2_d02f, "the hero row's census before the Live TV pages joined it");

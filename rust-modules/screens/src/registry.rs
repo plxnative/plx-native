@@ -3180,7 +3180,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Library order adds `SettingsPage::LibraryOrder` (ScreenId 122) to the Settings family's arg shape, and
 // `TableView::MOTION_SHAPE` gains the lift and glide springs (`library::menu::SHAPE[1]` and
 // `alt_sources::SHAPE[1]` carry it). Previous pin: 0xa2bc_fa1b_e96e_0118.
-const SCREEN_SHAPES_PIN: u64 = 0xa2bc_fa1b_e96e_0118;
+const SCREEN_SHAPES_PIN: u64 = 0x86ab_da53_b2fd_6524;
 
 #[cfg(test)]
 mod arg_tests {
