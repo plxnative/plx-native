@@ -10,9 +10,9 @@
 //! reorders** (the store keeps it, newest first) and is hidden while it is empty. **Every channel stays
 //! reachable**: a third shelf, the page's earlier "Channels" shelf (the same channel plates as Recent, which
 //! may run past five and scroll like On now), holds the lineup channels with no programme on that are not in
-//! Recent, under the other rows, and is hidden while that set is empty. It is the interim path for a channel
-//! without guide data (the Pluto channels of a server that has none) until the Guide and Browse pages replace
-//! it; with nothing recent and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
+//! Recent, under the other rows, and is hidden while that set is empty. It is the What's on path for a channel
+//! without guide data (the Pluto channels of a server that has none; on the Guide such a channel is one cell
+//! across the window, and a Browse page is still to come); with nothing recent and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
 //! Which rows the page shows is decided once, by [`Mode`] in `Page::sync`, and matched everywhere after.
 //! The page reads the frame's wall time ([`LiveTvLike::wall`]) for its captions and progress bars, and asks
 //! for a frame when the words of any airing change.
