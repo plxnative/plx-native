@@ -394,7 +394,19 @@ pub struct ReturnState<K, M = ()> {
     /// app's command and back into `request_with_return`) so the one rule "a `ret` lands where it
     /// was captured" (`Navigation::captured_on`) never has to guess from `focus`. Not part of
     /// [`RETURN_STATE_SHAPE`]: it is never recorded or hashed. `None` lands nowhere.
+    ///
+    /// **The one carrier.** `Navigation::request`/`back` read it from here (the parked op carries only
+    /// the `ret`), and it is a property of a `ret` IN FLIGHT: a `ret` stored on an `Entry` has been
+    /// through [`Self::stored`], which clears it, so `Entry.ret` never carries a stale stamp.
     pub captured: Option<EntryId>,
+}
+
+impl<K, M> ReturnState<K, M> {
+    /// This `ret` as an `Entry` stores it: the routing stamp is spent once the `ret` has landed.
+    pub fn stored(mut self) -> Self {
+        self.captured = None;
+        self
+    }
 }
 
 pub const RETURN_STATE_SHAPE: &str = "ReturnState{focus:Option<(EntryId,H::Elem)>,remembered:[(GroupId,H::Elem)],scroll:f32,memory:H::Memory}";

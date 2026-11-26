@@ -186,7 +186,7 @@ impl<H: Host> NavStack<H> {
         let from = self.top().map(|e| e.id);
         let continuous = self.continuous_for(&op);
         if let Some(top) = self.top_mut() {
-            top.ret = ret;
+            top.ret = ret.stored();
         }
         self.pending = Some(Pending { op, from, staged: None });
         self.transition.request(continuous);
