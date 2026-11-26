@@ -2992,15 +2992,22 @@ mod failed_pick_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let mut retried = false;
         commit_failed_pick(
             &mut session,
             &pick(),
-            |s| crate::app::playback::retry_failed_playback(
-                s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::UserRetry),
+            |s| {
+                retried = crate::app::playback::retry_failed_playback(
+                    s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::UserRetry);
+                retried
+            },
             || {},
         );
+        assert!(retried, "the retry was taken: it stopped and started a resolve");
         assert_eq!(plx_media::route::failed_pick(&session), Some(pick()),
             "the retry stopped and resolved again with the viewer's pick, which the failure screen still reads");
+        // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
+        plx_media::route::cancel_play(&mut session);
     }
 
     /// **The `content_command` arm itself**, not only the helper it calls: a pick committed on the failure
@@ -3042,5 +3049,7 @@ mod failed_pick_tests {
         );
         assert_eq!(outcome, plx_machine::machine::AppCommandOutcome::Completed);
         assert_eq!(plx_media::route::failed_pick(resources.session()), Some(pick()), "the arm held the pick on the session");
+        // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
+        plx_media::route::cancel_play(resources.session_mut());
     }
 }
