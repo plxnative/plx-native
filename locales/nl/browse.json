@@ -249,6 +249,7 @@
   "browse.library.no_collections": "Geen collecties in {library}",
   "browse.livetv.whats_on": "Wat is er op",
   "browse.livetv.recent": "Recente zenders",
+  "browse.livetv.channels": "Zenders",
   "browse.livetv.on_now": "Nu op tv",
   "browse.livetv.channel": "Zender {number} · {name}",
   "browse.livetv.recent_on_now": "Nu: {programme}",

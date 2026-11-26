@@ -261,6 +261,7 @@
   "browse.library.no_collections": "No hi ha col·leccions a {library}",
   "browse.livetv.whats_on": "Què hi ha",
   "browse.livetv.recent": "Canals recents",
+  "browse.livetv.channels": "Canals",
   "browse.livetv.on_now": "Ara en emissió",
   "browse.livetv.channel": "Canal {number} · {name}",
   "browse.livetv.recent_on_now": "Ara: {programme}",

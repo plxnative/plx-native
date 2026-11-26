@@ -92,7 +92,7 @@ impl Harness {
 }
 impl CardHarness for Harness {
     fn cards(&self) -> Vec<u32> {
-        let (n, odd) = match self.row { Row::Now => (self.n, 1), Row::Recent => (self.n.min(MAX_RECENT), 0) };
+        let (n, odd) = match self.row { Row::Now => (self.n, 1), Row::Recent => (self.n.min(MAX_RECENT), 0), Row::Lineup => (self.n, 0) };
         (0..n).map(|i| FIRST_CARD_ELEM + i as u32 * 2 + odd).collect()
     }
     fn focused(&self) -> Option<u32> { self.focus.map(|k| k.elem) }

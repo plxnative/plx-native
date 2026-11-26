@@ -291,6 +291,7 @@
   "browse.home.live_tv": "TV uživo",
   "browse.livetv.whats_on": "Što je na programu",
   "browse.livetv.recent": "Nedavni kanali",
+  "browse.livetv.channels": "Kanali",
   "browse.livetv.on_now": "Trenutačno na programu",
   "browse.livetv.channel": "Kanal {number} · {name}",
   "browse.livetv.recent_on_now": "Sada: {programme}",

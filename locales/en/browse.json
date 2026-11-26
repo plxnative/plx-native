@@ -2167,6 +2167,10 @@
     "value": "Recent channels",
     "description": "Live TV section heading for the channels the profile tuned most recently"
   },
+  "browse.livetv.channels": {
+    "value": "Channels",
+    "description": "Live TV section heading for the complete channel lineup"
+  },
   "browse.livetv.on_now": {
     "value": "On now",
     "description": "Live TV section heading for programmes currently airing"

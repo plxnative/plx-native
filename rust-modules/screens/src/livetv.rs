@@ -3,8 +3,10 @@
 //! lineup. A Recent tile and a programme poster both ask the content owner to play their channel.
 //!
 //! **On now has one fixed order**: the most recent start first, a tie in lineup order. **Recent never
-//! reorders** (the store keeps it, newest first) and is hidden while it is empty. A page with neither a
-//! Recent channel nor a programme reads out the store's empty state (plan D5). The page reads the frame's wall time ([`LiveTvLike::wall`]) for its
+//! reorders** (the store keeps it, newest first) and is hidden while it is empty. A lineup with neither a
+//! Recent channel nor a programme (no guide data, nothing tuned yet) keeps the page's earlier shelf, the
+//! whole lineup under "Channels", in the first row's place; a lineup with no channel at all is the
+//! store's empty read-out. The page reads the frame's wall time ([`LiveTvLike::wall`]) for its
 //! captions and progress bars, and asks for a frame when the words of any airing change.
 use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView};
 use plx_data::stores::{StoreCmd, StoreId};
@@ -84,9 +86,14 @@ impl Page {
         self.airings = on_now_order(view.channels);
         // An empty Recent is a row to hide, whatever else the page holds.
         self.recent = view.recent.iter().filter_map(|r| lineup_index(view.channels, r)).collect();
-        // Nothing to show in either row (a lineup with no guide data and no channel tuned) is the page's
-        // existing empty read-out (plan D5); no row stands in for it.
-        self.status = if view.status == LiveTvStatus::Ready && self.recent.is_empty() && self.airings.is_empty() { LiveTvStatus::Empty } else { view.status };
+        self.status = view.status;
+    }
+
+    /// Nothing recent and nothing on, but a lineup: the page shows that lineup as its earlier "Channels"
+    /// shelf (plan D5) in the first row's place, so a lineup without guide data still reaches its channels.
+    /// A lineup with no channel at all is the store's `Empty` status instead.
+    fn lineup_only(&self) -> bool {
+        self.status == LiveTvStatus::Ready && !self.channels.is_empty() && self.recent.is_empty() && self.airings.is_empty()
     }
 
     /// One number that moves exactly when the words or the bar of any airing the page shows does
@@ -105,7 +112,7 @@ impl Page {
                 (false, false) => &[RECENT_GROUP, NOW_GROUP],
                 (false, true) => &[RECENT_GROUP],
                 (true, false) => &[NOW_GROUP],
-                (true, true) => &[],
+                (true, true) => &[RECENT_GROUP],
             }
         } else if self.status == LiveTvStatus::Failed { &[STATUS_GROUP] } else { &[] },
             rail: None, back_walks_header: false, arrival: Arrival::Content, pending: None }
@@ -148,12 +155,21 @@ fn lineup_index(channels: &[Channel], of: &Channel) -> Option<usize> {
 
 /// Which shelf a [`Cards`] serves: it decides the cards' art, words and element ids.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Row { Recent, Now }
+enum Row {
+    Recent,
+    Now,
+    /// The whole lineup as the page's earlier "Channels" shelf, shown when nothing is recent or on.
+    Lineup,
+}
 
 struct Cards<'a> { view: LiveTvView<'a>, order: &'a [usize], row: Row, wall: Option<Wall> }
 impl Cards<'_> {
+    /// The lineup index of card `i`: the shelf's own order, or every channel for [`Row::Lineup`].
+    fn index(&self, i: usize) -> Option<usize> {
+        if self.row == Row::Lineup { (i < self.view.channels.len()).then_some(i) } else { self.order.get(i).copied() }
+    }
     fn channel(&self, i: usize) -> Option<(usize, &Channel)> {
-        let index = *self.order.get(i)?;
+        let index = self.index(i)?;
         Some((index, self.view.channels.get(index)?))
     }
     /// The amber bar: how much of the programme has aired. `Resume`'s own rule (present exactly while
@@ -169,16 +185,17 @@ impl Cards<'_> {
     fn parity(&self) -> u32 { u32::from(self.row == Row::Now) }
 }
 impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
-    fn len(&self) -> usize { self.order.len() }
-    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.order.get(i).copied().unwrap_or(0) as u32 * 2 + self.parity() }
+    fn len(&self) -> usize { if self.row == Row::Lineup { self.view.channels.len() } else { self.order.len() } }
+    fn elem(&self, i: usize) -> u32 { FIRST_CARD_ELEM + self.index(i).unwrap_or(0) as u32 * 2 + self.parity() }
     fn index_of(&self, e: &u32) -> Option<usize> {
         let offset = e.checked_sub(FIRST_CARD_ELEM)?;
         if offset % 2 != self.parity() { return None; }
         let i = offset as usize / 2;
-        self.order.iter().position(|&n| n == i)
+        if self.row == Row::Lineup { (i < self.view.channels.len()).then_some(i) } else { self.order.iter().position(|&n| n == i) }
     }
     fn art(&self, i: usize) -> Art<'_> {
         let Some((index, channel)) = self.channel(i) else { return Art::Poster(None) };
+        if self.row == Row::Lineup { return Art::Poster(self.view.tiles.get(index).map(|tile| tile_facts::of(tile))); }
         if self.row == Row::Recent {
             return Art::Channel { sid: channel.sid.raw(), logo: &channel.thumb, number: &channel.vcn, name: &channel.name };
         }
@@ -196,13 +213,17 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
     }
     /// The poster's bar; a channel tile has none.
     fn progress(&self, i: usize) -> Option<f32> {
-        if self.row == Row::Recent { return None; }
+        if self.row != Row::Now { return None; }
         self.channel(i).and_then(|(_, c)| self.resume(c)).map(|r| r.frac)
     }
     fn label(&self, i: usize) -> TileLabel {
         let Some((_, channel)) = self.channel(i) else { return TileLabel::default() };
         use plx_os::i18n::msg;
         match self.row {
+            Row::Lineup => match self.view.tiles.get(self.channel(i).map_or(usize::MAX, |(index, _)| index)) {
+                Some(item) => captions::shelf_label(&captions::live_tv_policy(), item, false),
+                None => TileLabel::default(),
+            },
             // "On now: <programme>" over when it started and how long is left; a channel with no
             // programme is its name alone.
             Row::Recent if channel.now.is_empty() => captions::live_label(channel.name.clone(), None),
@@ -240,9 +261,14 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn sections(&self, cx: &Cx<'_, H>, out: &mut Vec<SectionSpec<Sec>>) {
         out.push(SectionSpec::new(Sec::Head, Kind::Custom { height: HEAD_H, focusable: false }, HEAD_GROUP));
         // The head of the content is seated by its own rule (`CONTENT_HEAD_SEAT`): the first row there is.
-        let recent = SectionSpec::new(Sec::Recent, Kind::Shelf { style: &RECENT_STYLE, heading: SHELF_HEADING }, RECENT_GROUP).named("recent");
+        let lineup = self.lineup_only();
+        let recent = if lineup {
+            SectionSpec::new(Sec::Recent, Kind::Shelf { style: &NOW_STYLE, heading: SHELF_HEADING }, RECENT_GROUP).named("channels")
+        } else {
+            SectionSpec::new(Sec::Recent, Kind::Shelf { style: &RECENT_STYLE, heading: SHELF_HEADING }, RECENT_GROUP).named("recent")
+        };
         let now = SectionSpec::new(Sec::Now, Kind::Shelf { style: &NOW_STYLE, heading: SHELF_HEADING }, NOW_GROUP).named("on_now");
-        let head_is_recent = !self.recent.is_empty();
+        let head_is_recent = lineup || !self.recent.is_empty();
         out.push(if head_is_recent { recent.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) } else { recent });
         out.push(if head_is_recent { now } else { now.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) });
         let retry = (self.status == LiveTvStatus::Failed).then(|| self.status_overlay(cx.tick.ms).action_frame_measured(cx.measure)).flatten();
@@ -255,7 +281,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Recent, Sec::Now, Sec::Status, Sec::Head]); }
     fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
         let view = H::livetv(cx);
-        let (order, row) = match k { Sec::Recent => (&self.recent, Row::Recent), Sec::Now => (&self.airings, Row::Now), _ => return None };
+        let (order, row) = match k { Sec::Recent if self.lineup_only() => (&self.recent, Row::Lineup), Sec::Recent => (&self.recent, Row::Recent), Sec::Now => (&self.airings, Row::Now), _ => return None };
         (view.status == LiveTvStatus::Ready).then_some(Cards { view, order, row, wall: H::wall(cx) })
     }
     fn card_has_menu(&self, _cx: &Cx<'_, H>, _k: Sec, _elem: &u32) -> bool { false }
@@ -269,7 +295,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
             edge: [EdgeRule::Geometric, EdgeRule::Geometric, EdgeRule::Stop, EdgeRule::Stop], extent, len: 1, elem: ElemKind::Bare }
     }
     fn draw_heading(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, lift: f32) {
-        let title = match k { Sec::Recent => plx_os::i18n::msg::browse_livetv_recent_c(), Sec::Now => plx_os::i18n::msg::browse_livetv_on_now_c(), _ => return };
+        let title = match k { Sec::Recent if self.lineup_only() => plx_os::i18n::msg::browse_livetv_channels_c(), Sec::Recent => plx_os::i18n::msg::browse_livetv_recent_c(), Sec::Now => plx_os::i18n::msg::browse_livetv_on_now_c(), _ => return };
         plx_ui::cards::draw_heading_c(f.painter.alpha(f.page_alpha).translate(0.0, r.y), title, c"", c"", MARGIN_X, -lift, 1.0, f.measure);
     }
     fn custom_draw(&self, k: Sec, f: &mut DrawFrame<'_, '_, H>, r: Rect, _scroll: f32) {

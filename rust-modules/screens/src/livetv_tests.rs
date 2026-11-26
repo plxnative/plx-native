@@ -180,8 +180,7 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty(), "Recent is empty while there are programmes to show");
     assert_eq!(screen.page.regions().content, &[NOW_GROUP]);
-    // nothing recent and nothing on: still no Recent row, no row stands in, and the page reads out its
-    // existing empty state
+    // nothing recent and nothing on: still no Recent row; the lineup is the page's earlier Channels shelf
     let mut dark = channel("101", "Family Channel");
     dark.now.clear();
     let mut dark2 = channel("102", "Cartoons");
@@ -189,31 +188,62 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     store.install_for_test(vec![dark, dark2]);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty() && screen.page.airings.is_empty());
-    assert!(screen.page.regions().content.is_empty());
-    assert_eq!(screen.page.status, LiveTvStatus::Empty);
+    assert!(screen.page.lineup_only());
+    assert_eq!(screen.page.regions().content, &[RECENT_GROUP]);
 }
 
-/// An empty Recent means no Recent shelf: with programmes on now the page is On now alone, and with
-/// nothing on either it is the empty read-out, never a Recent row of lineup channels.
+/// An empty Recent means no Recent shelf, and never a "Recent channels" heading over other channels:
+/// with programmes on now the page is On now alone; with a lineup but nothing on it is the page's earlier
+/// Channels shelf (the whole lineup, the existing "Channels" heading); with no lineup it is the store's
+/// empty read-out.
 #[test]
-fn an_empty_recent_is_no_recent_shelf_with_programmes_on_or_with_none() {
+fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_with_none() {
     let _policy = captions::PolicyPin::default_setting();
-    for programmes in [true, false] {
+    let _language = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
+    // (programmes on, channels in the lineup)
+    for (programmes, channels) in [(true, 2), (false, 2), (false, 0)] {
         let (mut store, mut screen) = seeded();
         let mut lineup = vec![channel("101", "Family Channel"), channel("102", "Cartoons")];
+        lineup.truncate(channels);
         if !programmes { for c in &mut lineup { c.now.clear(); } }
         store.install_for_test(lineup);
         step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+        let case = format!("programmes {programmes}, channels {channels}");
+        assert!(screen.page.recent.is_empty(), "{case}");
         let context = cx(store.view(), None);
         let mut specs = Vec::new();
         StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
-        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Status], "the section list is fixed; a shelf without cards is nothing");
-        let recent = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent);
-        assert_eq!(recent.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c)), 0, "programmes on: {programmes}");
+        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Recent, Sec::Now, Sec::Status], "{case}");
+        let first = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent);
+        let first_len = first.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c));
         let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now);
-        assert_eq!(now.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c)), if programmes { 2 } else { 0 });
-        assert_eq!(screen.page.regions().content.to_vec(), if programmes { vec![NOW_GROUP] } else { Vec::new() }, "no group for a Recent row");
-        assert_eq!(screen.page.status, if programmes { LiveTvStatus::Ready } else { LiveTvStatus::Empty });
+        let now_len = now.as_ref().map_or(0, |c| CardSource::<TestHost>::len(c));
+        match (programmes, channels) {
+            (true, _) => {
+                assert_eq!((first_len, now_len), (0, 2), "{case}: no Recent shelf");
+                assert_eq!(screen.page.regions().content, &[NOW_GROUP], "{case}");
+                assert!(!screen.page.lineup_only(), "{case}");
+                assert_eq!(screen.page.status, LiveTvStatus::Ready, "{case}");
+            }
+            (false, 2) => {
+                assert_eq!((first_len, now_len), (2, 0), "{case}: the lineup shelf");
+                assert_eq!(screen.page.regions().content, &[RECENT_GROUP], "{case}");
+                assert!(screen.page.lineup_only(), "{case}");
+                assert!(matches!(specs[1].kind, Kind::Shelf { style, .. } if *style == NOW_STYLE), "{case}: the earlier shelf's own row style");
+                let cards = first.as_ref().expect("lineup cards");
+                assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Poster(Some(_))), "{case}: a poster tile, not a plate");
+                assert!(CardSource::<TestHost>::progress(cards, 0).is_none(), "{case}");
+                assert_eq!(CardSource::<TestHost>::elem(cards, 1), FIRST_CARD_ELEM + 2, "{case}");
+                assert_eq!(CardSource::<TestHost>::index_of(cards, &(FIRST_CARD_ELEM + 2)), Some(1), "{case}");
+            }
+            _ => {
+                assert_eq!((first_len, now_len), (0, 0), "{case}: no shelf at all");
+                assert!(screen.page.regions().content.is_empty(), "{case}");
+                assert!(!screen.page.lineup_only(), "{case}");
+                assert_eq!(screen.page.status, LiveTvStatus::Empty, "{case}: the store's empty read-out");
+                assert_eq!(screen.page.status_overlay(0).caption, plx_os::i18n::msg::browse_livetv_empty_c());
+            }
+        }
     }
 }
 
@@ -330,7 +360,7 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
     step(&mut screen, store.view(), None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
     assert!(screen.page.airings.is_empty(), "the store revision is read on Tick");
     assert!(screen.page.recent.is_empty(), "a page with nothing on has no Recent row of lineup channels");
-    assert_eq!(screen.page.status, LiveTvStatus::Empty, "and reads out the empty state");
+    assert!(screen.page.lineup_only(), "it shows the lineup as its Channels shelf");
     for status in [LiveTvStatus::Loading, LiveTvStatus::Empty, LiveTvStatus::Failed] {
         let view = LiveTvView::for_test(status, &[], &[], 100 + status as u32);
         step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
