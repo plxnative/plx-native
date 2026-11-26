@@ -2269,7 +2269,8 @@ pub enum AppArg {
     PreplayPanel(crate::preplay_panel::PreplayArg),
     /// **Number entry** (`screens::channel_entry_panel`, Live TV PR5): the channel-number panel a typed digit opens, over
     /// the What's on page (`Style::Compact`) or over the live player (`Style::PlayerPanel`). It carries the host
-    /// instance the pick is reported to, the digit that opened it and the channel already on screen.
+    /// instance the pick is reported to, the digits that opened it (one key, or several that arrived in the same frame
+    /// and were folded in by `AppArg::absorb`) and the channel already on screen.
     ChannelEntry(crate::channel_entry_panel::ChannelEntryArg),
     /// The Detail page's *Track information* sheet (§6.2's page-owned panels). It carries only the
     /// 1-based PAGE the sheet opens at — a boot address like `Settings`'s root, not an identity —
