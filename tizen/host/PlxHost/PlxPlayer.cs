@@ -75,6 +75,8 @@ namespace PlxHost
             // An audio track asked for before PREPARED (the native call needs a prepared player): applied in OnPrepared before PREPARED is
             // posted. The newest index wins and the older command ids are folded into it; every one gets its PLAYER_TRACK.
             internal Track TrackLater;
+            // The audio tracks as read at PREPARED (ReadTracks); null before it. Video thread only.
+            internal AudioTracks Tracks;
             // Held by anything that calls into the native player on this handle off the video thread (position reads, the display bind). The
             // video thread takes it, with a bound, before it destroys the handle.
             internal readonly object HandleGate = new object();
@@ -459,41 +461,41 @@ namespace PlxHost
         }
 
         // Select the held track and answer its command ids with the index now selected, or TrackRefused. A refusal is not a PLAYER_ERROR: the
-        // player keeps the track it had.
+        // player keeps the track it had. It reads nothing of its own: the count and the current index are the PREPARED-time snapshot (ReadTracks),
+        // kept current by the selections made here.
         private static void ApplyHeldTrack(Session s)
         {
             if (!s.Prepared || s.TrackLater == null) return;
             Track track = s.TrackLater;
             s.TrackLater = null;
             long answer = TrackRefused;
-            int count, current;
-            int rcCount = ReadTrackCount(s, out count);
-            int rcCurrent = ReadCurrentTrack(s, out current);
+            AudioTracks tracks = s.Tracks ?? new AudioTracks();
             if (track.Index < 0)
             {
                 PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is no index");
             }
-            else if (rcCurrent == 0 && current == track.Index)
+            else if (tracks.RcCount == 0 && tracks.Count == 0)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " asked of a source with no audio track");
+            }
+            else if (tracks.RcCurrent == 0 && tracks.Current == track.Index)
             {
                 answer = track.Index; // already the current track: nothing to call
             }
-            else if (track.Index == 0 && (rcCount != 0 || count <= 1))
+            else if (track.Index == 0 && tracks.RcCount == 0 && tracks.Count == 1)
             {
-                // The first and only track, or a player that cannot count its tracks: the one the player plays. Answered as selected, as it was
-                // before the verb existed, so a single-track title never fails on a count or a current index the player will not give.
-                PlxApp.Log("player: epoch " + s.Epoch + ": audio track 0 taken as selected (count rc " + rcCount + ", current rc " + rcCurrent + ")");
-                answer = 0;
+                answer = 0; // the only track is the one the player plays, whatever it says of the current index
             }
-            else if (rcCount == 0 && track.Index >= count)
+            else if (tracks.RcCount == 0 && track.Index >= tracks.Count)
             {
-                PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is not one of the " + count + " tracks");
+                PlxApp.Log("player: epoch " + s.Epoch + ": audio track " + track.Index + " is not one of the " + tracks.Count + " tracks");
             }
             else
             {
                 try
                 {
                     int rc = MediaPlayerNative.player_select_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, track.Index);
-                    if (rc == 0) answer = track.Index;
+                    if (rc == 0) { answer = track.Index; tracks.Current = track.Index; tracks.RcCurrent = 0; }
                     else PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track(audio, " + track.Index + ") returned " + rc);
                 }
                 catch (Exception e)
@@ -506,60 +508,79 @@ namespace PlxHost
             foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
         }
 
-        // The two reads the track logic needs. A throw (an entry point missing on some firmware) reads as a failed call (NativeThrew), so the
-        // single-track path still answers and the play is not failed by a diagnostic read.
+        // A native call that threw (an entry point missing on some firmware) reads as a failed call, so a play is never failed by a read.
         private const int NativeThrew = int.MinValue;
 
-        private static int ReadTrackCount(Session s, out int count)
+        // The most native audio tracks whose languages are read and reported (plx_host.h, PLAYER_AUDIO_LANGUAGE).
+        private const int LanguageReports = 32;
+
+        // The player's audio tracks as read ONCE at PREPARED: the count, the current index and each track's language code in the player's own
+        // order (null = none given). The language reads are what the library's track choice needs; the log line is built from the same read.
+        private sealed class AudioTracks
         {
-            count = 0;
-            try { return MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out count); }
-            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count threw " + e.GetType().Name); return NativeThrew; }
+            internal int RcCount = NativeThrew, Count;
+            internal int RcCurrent = NativeThrew, Current = -1;
+            internal readonly List<string> Languages = new List<string>();
+            internal readonly List<string> Notes = new List<string>(); // for the log line: why a language is missing
         }
 
-        private static int ReadCurrentTrack(Session s, out int current)
+        private static AudioTracks ReadTracks(Session s)
         {
-            current = -1;
-            try { return MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out current); }
-            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_current_track threw " + e.GetType().Name); return NativeThrew; }
-        }
-
-        // Answers a held track's command ids with TrackRefused and forgets it: the epoch is ending or never prepared.
-        private static void AnswerTracks(Session s)
-        {
-            Track held = s.TrackLater;
-            s.TrackLater = null;
-            if (held == null) return;
-            foreach (long command in held.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, TrackRefused);
-        }
-
-        // One line at PREPARED with the native audio tracks in the player's own order (count, current, each one's language), so a retail log
-        // can be compared with the title's audio list in Plex. A failed read is logged with its code and changes nothing.
-        private static void LogTracks(Session s)
-        {
-            int count, current;
-            int rc = ReadTrackCount(s, out count);
-            if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count(audio) returned " + rc); return; }
-            int rcCurrent = ReadCurrentTrack(s, out current);
-            var languages = new StringBuilder();
-            for (int i = 0; i < count && i < 32; i++)
+            var tracks = new AudioTracks();
+            try { tracks.RcCount = MediaPlayerNative.player_get_track_count(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out tracks.Count); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count threw " + e.GetType().Name); }
+            if (tracks.RcCount != 0) tracks.Count = 0;
+            try { tracks.RcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, out tracks.Current); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_current_track threw " + e.GetType().Name); }
+            for (int i = 0; i < tracks.Count && i < LanguageReports; i++)
             {
                 // The string is the library's (malloc'd) only when the call returned 0: only then is it read and freed.
                 IntPtr code = IntPtr.Zero;
-                string lang = "?";
+                string lang = null, note = null;
                 int rcLang;
                 try { rcLang = MediaPlayerNative.player_get_track_language_code(s.Handle, MediaPlayerNative.STREAM_TYPE_AUDIO, i, out code); }
-                catch (Exception e) { rcLang = NativeThrew; lang = "threw " + e.GetType().Name; }
+                catch (Exception e) { rcLang = NativeThrew; note = "threw " + e.GetType().Name; }
                 if (rcLang == 0 && code != IntPtr.Zero)
                 {
                     try { lang = ReadUtf8(code); } finally { Marshal.FreeHGlobal(code); }
                 }
-                else if (rcLang != NativeThrew) lang = "rc " + rcLang;
-                if (i > 0) languages.Append(',');
-                languages.Append(i).Append('=').Append(lang);
+                else if (rcLang != NativeThrew) note = "rc " + rcLang;
+                tracks.Languages.Add(lang);
+                tracks.Notes.Add(note);
             }
-            PlxApp.Log("player: epoch " + s.Epoch + ": audio tracks count=" + count + " current=" + (rcCurrent == 0 ? current.ToString() : "rc " + rcCurrent)
-                + " [" + languages + "]");
+            return tracks;
+        }
+
+        // A language code as PLAYER_AUDIO_LANGUAGE carries it: the primary subtag's two or three ASCII letters, the first in the lowest byte; 0
+        // for anything else, which the library reads as unknown.
+        private static long LanguageWord(string code)
+        {
+            if (code == null) return 0;
+            string primary = code.Trim().Split('-', '_')[0];
+            if (primary.Length < 2 || primary.Length > 3) return 0;
+            long word = 0;
+            for (int i = 0; i < primary.Length; i++)
+            {
+                char c = primary[i];
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return 0;
+                word |= (long)c << (8 * i);
+            }
+            return word;
+        }
+
+        // One line with the native audio tracks in the player's own order (count, current, each one's language), so a retail log can be compared
+        // with the title's audio list in Plex. Built from the PREPARED-time read; it reads nothing.
+        private static void LogTracks(Session s, AudioTracks tracks)
+        {
+            if (tracks.RcCount != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count(audio) returned " + tracks.RcCount); return; }
+            var languages = new StringBuilder();
+            for (int i = 0; i < tracks.Languages.Count; i++)
+            {
+                if (i > 0) languages.Append(',');
+                languages.Append(i).Append('=').Append(tracks.Languages[i] ?? tracks.Notes[i] ?? "?");
+            }
+            PlxApp.Log("player: epoch " + s.Epoch + ": audio tracks count=" + tracks.Count + " current="
+                + (tracks.RcCurrent == 0 ? tracks.Current.ToString() : "rc " + tracks.RcCurrent) + " [" + languages + "]");
         }
 
         private void DoPlay(Session s)
@@ -661,11 +682,18 @@ namespace PlxHost
         private void OnPrepared(Session s)
         {
             s.Prepared = true;
-            LogTracks(s);
+            // ONE read of the audio tracks: each one's language goes to the library before PREPARED (its track choice needs them), and the same
+            // read answers a held track and makes the log line.
+            s.Tracks = ReadTracks(s);
+            for (int i = 0; i < s.Tracks.Languages.Count; i++)
+            {
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE, s.Epoch, i, LanguageWord(s.Tracks.Languages[i]));
+            }
             ApplyHeldTrack(s); // a track asked for before PREPARED is selected before the library hears PREPARED
             int duration;
             int rc = MediaPlayerNative.player_get_duration(s.Handle, out duration);
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PREPARED, s.Epoch, rc == 0 ? duration : 0, 0);
+            LogTracks(s, s.Tracks); // after PREPARED: a diagnostic, off the start path
             int width, height;
             if (MediaPlayerNative.player_get_video_size(s.Handle, out width, out height) == 0 && width > 0 && height > 0)
             {

@@ -62,6 +62,20 @@ pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
 /// `PLX_HOST_EVENT_PLAYER_TRACK`: the answer to a `VERB_AUDIO_TRACK` (a = command id, b = the native index selected, or -1).
 pub const EVENT_PLAYER_TRACK: u32 = 28;
+/// `PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE`: one native audio track's language, posted before PREPARED (a = the native index,
+/// b = the code's ASCII bytes, first character in the lowest byte, 0 when the player has none; [`language_of_word`]).
+pub const EVENT_PLAYER_AUDIO_LANGUAGE: u32 = 29;
+
+/// The language code a `PLAYER_AUDIO_LANGUAGE` word carries: two or three ASCII letters, first character in the lowest
+/// byte and zero-padded. Anything else (no code, a tag with a region, a byte that is not a letter) is `None`, which the
+/// driver treats as a track whose language is unknown.
+pub fn language_of_word(word: i64) -> Option<String> {
+    let bytes = word.to_le_bytes();
+    let len = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    let (code, pad) = bytes.split_at(len);
+    (code.len() >= 2 && code.len() <= 3 && code.iter().all(u8::is_ascii_alphabetic) && pad.iter().all(|b| *b == 0))
+        .then(|| code.iter().map(|b| char::from(*b)).collect())
+}
 
 /// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
 #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) reads it
@@ -257,6 +271,7 @@ pub enum PlayerKind {
     Closed,
     Stall,
     Track,
+    AudioLanguage,
 }
 
 impl PlayerKind {
@@ -275,6 +290,7 @@ impl PlayerKind {
             EVENT_PLAYER_CLOSED => PlayerKind::Closed,
             EVENT_PLAYER_STALL => PlayerKind::Stall,
             EVENT_PLAYER_TRACK => PlayerKind::Track,
+            EVENT_PLAYER_AUDIO_LANGUAGE => PlayerKind::AudioLanguage,
             _ => return None,
         })
     }
@@ -412,6 +428,7 @@ mod tests {
             ("PLX_HOST_EVENT_PLAYER_CLOSED", i64::from(EVENT_PLAYER_CLOSED)),
             ("PLX_HOST_EVENT_PLAYER_STALL", i64::from(EVENT_PLAYER_STALL)),
             ("PLX_HOST_EVENT_PLAYER_TRACK", i64::from(EVENT_PLAYER_TRACK)),
+            ("PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE", i64::from(EVENT_PLAYER_AUDIO_LANGUAGE)),
             ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
             ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
             ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),

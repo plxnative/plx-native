@@ -9,7 +9,7 @@
 - **Two builds.** `TIZEN_ARCH=x86_64` targets the Tizen TV 10.0 emulator. `TIZEN_ARCH=armv7` builds the
   retail SUPER ALPHA package for 2021+ Samsung TVs (Tizen 6.0+). Both use the `tizen80` managed target.
   A retail TV still needs to run it (H1, H2 and H6 in `docs/platform-ports.md`).
-- **Playback is the `uri` feature's. The driver has run on the Windows emulator against the mock server, and has NOT been run on a retail set (H6 stays OPEN).** The first emulator run (at `126d1f04c`) found faults A-E ("Findings of the first emulator run", below); runs at `fc5d28594` and `b62e1276e` passed those fixes and round 4's and found what review round 5 fixes. Every fix since a run is "fixed in code, emulator re-run pending" until a run passes it. A build with the platform crate's `uri` feature (the makefile's default; `TIZEN_URI=0` builds without it) composes the Tizen URI driver over the host's native player (below): for a title the planner can offer it, the library asks the host to play a progressive URI source. **Which titles those are is a narrow set, and nothing here says one plays**: the planner refuses most real titles before the Tizen qualifier is asked ("The refusal set", below), and a source with several audio streams is certified for its selected stream only since the audio track verb ("The audio track is selected", below), whose track order is unmeasured on a retail set. A build without `uri`, or a host with no player group in its table, composes no backend (`compose: backends=none`): on a detail page Resume is then dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`); on Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below). What a `uri` build has NOT shown: a picture through this driver (the window's alpha and the straighten pass are part B2's, below; the library emits no `Presented` for it), and Home with a player open. H6 (below) is open.
+- **Playback is the `uri` feature's. The driver has run on the Windows emulator against the mock server, and has NOT been run on a retail set (H6 stays OPEN).** The first emulator run (at `126d1f04c`) found faults A-E ("Findings of the first emulator run", below); runs at `fc5d28594` and `b62e1276e` passed those fixes and round 4's and found what review round 5 fixes. Every fix since a run is "fixed in code, emulator re-run pending" until a run passes it. A build with the platform crate's `uri` feature (the makefile's default; `TIZEN_URI=0` builds without it) composes the Tizen URI driver over the host's native player (below): for a title the planner can offer it, the library asks the host to play a progressive URI source. **Which titles those are is a narrow set, and nothing here says one plays**: the planner refuses most real titles before the Tizen qualifier is asked ("The refusal set", below), and a source with several audio streams is certified for its selected stream only since the audio track verb ("The audio track is selected", below), which chooses the native track by its language because the player's track order is unmeasured on a retail set. A build without `uri`, or a host with no player group in its table, composes no backend (`compose: backends=none`): on a detail page Resume is then dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`); on Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below). What a `uri` build has NOT shown: a picture through this driver (the window's alpha and the straighten pass are part B2's, below; the library emits no `Presented` for it), and Home with a player open. H6 (below) is open.
 - **No frame-rate or latency claim.** The emulator's GL runs on llvmpipe through the emulator's GL forwarding; a number taken there
   says nothing about a television, and none is quoted.
 - **Sign-in.** Published packages start at the Plex sign-in screen. Sign-in is held in memory
@@ -206,8 +206,9 @@ starts no worker and reads no global, its requests go out as `Hosted::player_ope
 through `drain_player`. Every request and event carries the epoch, and an event of any other epoch (a completion after a stop) is dropped and counted.
 The driver states `progressive_uri`, `pause`, `seek`, `audio_track` and `subtitle_off`, and no HLS, packet feed, subtitle track or audio-off. `subtitle_off` holds by construction: the host never gives the player a subtitle (no `player_set_subtitle_path`, no text-track selection, no subtitle callback), and a `SelectTrack(Subtitle, Off)` is settled without a host call; "Subtitles off" (below) is the emulator run behind it. `audio_track` is a
 host call: the planner issues a `SelectTrack` for any title whose server-selected audio stream is stated, and the driver asks the host for the stream at its native
-index from the source's track map (`PLX_HOST_PLAYER_VERB_AUDIO_TRACK`, `player_select_track`) and settles it on the host's `PLAYER_TRACK` answer ("The audio track is
-selected", below). A stream the map does not name is refused `Unsupported` and tears nothing down; a refused or unanswered request is the command's refusal. Stop sends the CLOSE verb and waits for the host's `CLOSED`; past a deadline it reports a
+index it chooses by the stream's language (the host reports each native track's before PREPARED), never by position alone (`PLX_HOST_PLAYER_VERB_AUDIO_TRACK`,
+`player_select_track`), and settles it on the host's `PLAYER_TRACK` answer ("The audio track is selected", below). A stream the map does not name, or whose native
+track cannot be told by its language, is refused `Unsupported`, which fails a start (the start plan's track selection is mandatory); a refused or unanswered request is the command's refusal. Stop sends the CLOSE verb and waits for the host's `CLOSED`; past a deadline it reports a
 quarantined release and the process-exit disposition stays Preserve. The platform's own `TizenQualifier` certifies a source only where Standard would
 direct-play it (so DTS and TrueHD, and every container Standard hands to the server, are refused with the planner's typed reason) and never a converted PMS
 output (`qualify_pms` is Unknown); the codec table behind Standard is still `Caps::assumed()`, the 49SM9000PLA row, not a Tizen measurement. The composition
@@ -411,25 +412,45 @@ stream only, because the host had no track call and nobody had measured which tr
 stream wherever it sits, and the driver selects it:
 
 - The offer's track map names the selected stream at its position among the Part's audio streams in PMS's order (`audio_ordinal`). A selected
-  stream with no known position is still declined (`NotCertified`).
-- Once the player is prepared, the start plan's `SelectTrack` becomes `PLX_HOST_PLAYER_VERB_AUDIO_TRACK` (arg0 = that index, arg1 = the command id).
-  The host calls `player_select_track(player, PLAYER_STREAM_TYPE_AUDIO, index)` (TizenFX API8 `Interop.Player.cs`; valid in READY, PLAYING or
-  PAUSED, so a request before PREPARED is held and applied before PREPARED is posted) and answers `PLAYER_TRACK` (a = the command id, b = the
-  index now selected, or -1). An index that is already the current track is answered without a call. Index 0 is also answered as selected when
-  the player reports at most one audio track or cannot count them, as before the verb existed, so a single-track title cannot fail on it.
+  stream with no known position is still declined (`NotCertified`). The offer also states the stream's identity check (`NativeTrackCheck`):
+  `Sole` for a Part with one audio stream, otherwise the stream's language as PMS states it (`languageCode`, e.g. `ger`).
+- At PREPARED the host reads the native audio tracks ONCE (`player_get_track_count`, `player_get_current_track` and, for each of at most 32
+  tracks, `player_get_track_language_code`) and posts one `PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE` per track before `PREPARED` (a = the native
+  index, b = the code's two or three ASCII letters, first in the lowest byte; 0 when the player gives none or a code that is not one). That one
+  read also answers a held request and makes the log line; nothing on the start path reads the player again.
+- The driver chooses the native index by that evidence, never by position alone: a `Sole` stream is its ordinal; otherwise the ordinal when its
+  native track reports the stream's language, else the ONE native track that does. Both sides are folded by the shared language table
+  (`plx_data::metadata::lang_matches`, re-exported by `plx_media::route::uri_preflight`), so `ger`, `deu` and `de` are one language, as are
+  `fre`/`fra`/`fr`, `cze`/`ces`/`cs` and `dut`/`nld`/`nl` (pinned in `every_spelling_of_one_language_is_one_language`). Several matching tracks
+  with the ordinal not among them, no matching track, a native track with no code, or no language on PMS's side (empty, `und`, `mul`, `mis`,
+  `zxx`) is a refusal: `Unsupported`, with a `tizen-uri: audio stream S at ordinal O refused: ...` line naming why, and nothing asked of the host.
+  An index other than the ordinal is logged too (`... is native track I, not its ordinal O, by its language`).
+- Once the player is prepared, the start plan's `SelectTrack` becomes `PLX_HOST_PLAYER_VERB_AUDIO_TRACK` (arg0 = the chosen index, arg1 = the
+  command id). The host calls `player_select_track(player, PLAYER_STREAM_TYPE_AUDIO, index)` (TizenFX API8 `Interop.Player.cs`; valid in READY,
+  PLAYING or PAUSED, so a request before PREPARED is held and applied before PREPARED is posted) and answers `PLAYER_TRACK` (a = the command id,
+  b = the index now selected, or -1). An index that is already the current track is answered without a call, and so is index 0 of a player
+  that counts exactly one audio track. A player that counts none refuses every index; one that cannot count or say its current track is asked
+  (`player_select_track`), and a failed or missing call is a refusal.
 - The driver settles the request only on that answer, with the index it asked for; -1, another index, no answer by the control deadline, or a
   refused verb is the command's refusal. A refusal is not a player error: the player keeps the track it had.
-- At PREPARED the host logs the native audio tracks in the player's own order:
+- **What a refusal does to the play.** The start plan's `SelectTrack` is mandatory (`is_mandatory_refusal` in
+  `rust-modules/media/src/player/backend_startup.rs`, stage `WaitAudio`): a refused one halts the start plan, so the play FAILS with the
+  start's typed failure rather than playing a track nobody picked. A title whose native tracks cannot be told apart by language therefore does
+  not play through this driver: that is the price of never settling a wrong track as the viewer's pick, and the refusal line says which case it was.
+- After `PREPARED` is posted the host logs the native audio tracks in the player's own order, from the same read:
   `player: epoch N: audio tracks count=C current=I [0=eng,1=ger,...]`, then `player: epoch N: audio track I -> R` for each request.
 - A pick of another track mid-play is still refused by the session (`carries_source_track_change` stays false): that one flag also gates the
   Quality ladder, and no converted output is certified here.
 - No change to the table or event layout, so `PLX_HOST_ABI_VERSION` stays 2. The host and the library ship in one package, and a host without
   the verb answers it with `PLX_HOST_PLAYER_E_ARGS`, which the library takes as a refusal.
 
-**Not measured:** whether the player's native audio index is the stream's position in PMS's order on a retail set. On LG the exported window's
-service listed a four-track file as AAC, Vorbis, AAC, Vorbis while Plex listed AAC, AAC, Vorbis, Vorbis, so index 1 selected the wrong track
-(`docs/uri-mode.md`, webOS 5.6.2). The PREPARED line is how a retail log answers it: its languages, in order, against the title's audio list in
-Plex. The emulator has no audio device, so its runs serve video-only files and no audio track is selected there.
+**Not measured, and only a retail tester's log can measure them:** (1) whether the player's native audio order is PMS's order on a retail set
+(on LG the exported window's service listed a four-track file as AAC, Vorbis, AAC, Vorbis while Plex listed AAC, AAC, Vorbis, Vorbis, so index 1
+selected the wrong track: `docs/uri-mode.md`, webOS 5.6.2), which the language match makes safe but not right when two tracks share a
+language; (2) which language codes the retail player reports, and whether it reports any for an HTTP progressive source; (3) whether
+`player_select_track` succeeds in READY for an HTTP progressive source on retail. The PREPARED line and the `audio track I -> R` and
+`tizen-uri: audio stream` lines answer all three against the title's audio list in Plex. The emulator has no audio device, so its runs serve
+video-only files and no audio track is selected there.
 
 ## The media keys are grabbed (retail report and emulator runs, 2026-11-26)
 

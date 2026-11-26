@@ -32,8 +32,9 @@
 //! do, not a codec verdict ([`CAPS`]); which streams the platform player decodes is the qualifier's concern
 //! ([`super::qualifier`]).
 use super::port::{Refusal, Verb, FULL_WINDOW};
-use crate::host_abi::{PlayerEvent, PlayerKind, PLAYER_FAIL_BASE};
-use plx_playback_contract::uri::{native_index, NativeTrackIndex, UriSource};
+use crate::host_abi::{language_of_word, PlayerEvent, PlayerKind, PLAYER_FAIL_BASE};
+use plx_media::route::uri_preflight::lang_matches;
+use plx_playback_contract::uri::{native_index, NativeTrackCheck, NativeTrackIndex, UriSource};
 use plx_playback_contract::{AttemptId, Capabilities, CommandId, ContentTime, DispatchResult, DriverEvent,
     EvidenceSource, ExitDisposition, Failure, Observation, Observed, Operation, Playback, ReleaseStatus, Requirements,
     SourceKey, SourceKind, StopReason, TrackChoice, TrackKind, TrackSelection};
@@ -45,15 +46,16 @@ use std::collections::VecDeque;
 ///
 /// `audio_track` is `true`: the contract makes a play whose PMS-selected audio stream has an id a `Selected` track
 /// requirement, and the start plan settles it with one `SelectTrack` once the player is prepared. The machine asks the
-/// host for it ([`Verb::AudioTrack`], `player_select_track` on the host's video thread) at the stream's native index from
-/// the source's track map, and settles it only when the host's `PLAYER_TRACK` echoes the command with that index: the
-/// player's own answer, not a settle by construction. A refusal (`b = -1`), an unanswered request and a refused verb are
-/// the command's typed refusal; a stream the map does not name is refused with `Unsupported` and asks nothing.
+/// host for it ([`Verb::AudioTrack`], `player_select_track` on the host's video thread) at a native index it chooses by
+/// evidence, never by position alone ([`choose_native_audio`]): the source's track map gives the stream's position among
+/// the Part's audio streams in PMS's order, and its [`NativeTrackCheck`] the stream's language, which the native track
+/// must report too (the host posts each native track's language before PREPARED). It settles the request only when the
+/// host's `PLAYER_TRACK` echoes the command with that index: the player's own answer, not a settle by construction. A
+/// refusal (`b = -1`), an unanswered request and a refused verb are the command's typed refusal; a stream the map does not
+/// name, or whose native track cannot be told by its language, is refused with `Unsupported`, logged, and asks nothing.
 ///
-/// UNMEASURED on a retail set: that the native index the player numbers its audio tracks by is the stream's position
-/// among the Part's audio streams in PMS's order (`audio_ordinal`), which is what the track map carries. The host logs
-/// the native count, the current index and each track's language at PREPARED so a retail log can be compared with Plex's
-/// list (`docs/tizen.md`, "The audio track is selected").
+/// UNMEASURED on a retail set: the native order, and whether the call succeeds in READY for an HTTP progressive source.
+/// Only a retail tester's log says either (`docs/tizen.md`, "The audio track is selected").
 ///
 /// `subtitle_off` is `true` by construction too: the host player is given no subtitle (no `player_set_subtitle_path`,
 /// no text-track selection, no subtitle callback), and `docs/tizen.md` ("Subtitles off") records the emulator run in
@@ -135,6 +137,50 @@ struct Pending {
     command: CommandId,
     operation: Operation,
     deadline_ms: u64,
+    /// The native index an audio request asked for, which its `PLAYER_TRACK` must echo; `None` for every other control.
+    native: Option<i64>,
+}
+
+/// How many native audio tracks' languages the machine keeps: the host reports at most this many (`plx_host.h`,
+/// PLAYER_AUDIO_LANGUAGE), and a report past it is dropped, so that track's language reads as unknown.
+const LANGUAGE_REPORTS: usize = 32;
+
+/// ISO 639-2's codes that name no language: a track tagged with one cannot be told apart by its language.
+const NO_LANGUAGE: [&str; 4] = ["und", "mul", "mis", "zxx"];
+
+fn names_language(code: &str) -> bool {
+    let code = code.trim();
+    !code.is_empty() && !NO_LANGUAGE.iter().any(|none| code.eq_ignore_ascii_case(none))
+}
+
+/// **The native audio index of a stream, or why there is none.** `ordinal` is the stream's position among the Part's
+/// audio streams in PMS's order (the track map), `check` the identity evidence the source states for it, `native` each
+/// native track's language in the player's order (`None` = the player gave none). A sole stream is its ordinal. A stream
+/// with siblings is matched by language ([`lang_matches`], which folds ISO 639-1, 639-2/B and 639-2/T): the ordinal when
+/// its native track has the stream's language, else the ONE native track that does. Several such tracks with the ordinal
+/// not among them, none, or no language known on the server's side is a refusal: a wrong track must never settle as the
+/// viewer's pick.
+pub(super) fn choose_native_audio(ordinal: i64, check: Option<&NativeTrackCheck>, native: &[Option<String>])
+    -> Result<i64, String> {
+    let language = match check {
+        Some(NativeTrackCheck::Sole) => return Ok(ordinal),
+        Some(NativeTrackCheck::Language(language)) => language,
+        None => return Err("the source states no identity for the stream".to_owned()),
+    };
+    if !names_language(language) {
+        return Err(format!("PMS states no language for the stream ({language:?}), so its native track cannot be told"));
+    }
+    let matching: Vec<i64> = native.iter().enumerate()
+        .filter(|(_, code)| code.as_deref().is_some_and(|code| names_language(code) && lang_matches(language, code)))
+        .filter_map(|(index, _)| i64::try_from(index).ok())
+        .collect();
+    match matching.as_slice() {
+        _ if matching.contains(&ordinal) => Ok(ordinal),
+        [only] => Ok(*only),
+        [] => Err(format!("no native audio track reports {language:?} (the player reported {native:?})")),
+        _ => Err(format!("native audio tracks {matching:?} all report {language:?} and the ordinal {ordinal} is not one \
+            of them (the player reported {native:?})")),
+    }
 }
 
 struct Active {
@@ -142,6 +188,10 @@ struct Active {
     epoch: u32,
     phase: Phase,
     tracks: Vec<NativeTrackIndex>,
+    /// The identity evidence the source stated for its tracks ([`UriSource::checks`]).
+    checks: Vec<(TrackSelection, NativeTrackCheck)>,
+    /// Each native audio track's language as the host reported it before PREPARED, in the player's order.
+    native_audio: Vec<Option<String>>,
     start_deadline_ms: u64,
     prepared: bool,
     started_once: bool,
@@ -273,10 +323,11 @@ impl Machine {
             return self.refuse_before_open(attempt, Failure::Unavailable);
         }
         let epoch = self.mint_epoch();
+        let checks = staged.source.checks().to_vec();
         let (url, tracks) = staged.source.into_parts();
         // The attempt id is spent by a Start the host then refuses: the planner mints a new one for its next try.
         self.last_started = Some(attempt);
-        self.active = Some(Active { attempt, epoch, phase: Phase::Opening, tracks,
+        self.active = Some(Active { attempt, epoch, phase: Phase::Opening, tracks, checks, native_audio: Vec::new(),
             start_deadline_ms: now_ms.saturating_add(self.timing.startup_timeout_ms), prepared: false, started_once: false,
             paused: false, ended: false, rebuffering: false, stalled_since: None, last_position: None, frozen: false,
             controls: Vec::new() });
@@ -355,13 +406,15 @@ impl Machine {
             }
             _ => return DispatchResult::Refused(Failure::Unsupported),
         };
-        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms) });
+        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
+            native: None });
         fx.push(Fx::Verb { epoch: active.epoch, verb });
         DispatchResult::Queued
     }
 
-    /// An audio request: the stream the source's track map names, asked of the host at its native index and settled
-    /// when the host's `PLAYER_TRACK` answers (see [`CAPS`]). A stream the map does not name is `Unsupported`.
+    /// An audio request: the stream the source's track map names, asked of the host at the native index its evidence
+    /// picks ([`choose_native_audio`]) and settled when the host's `PLAYER_TRACK` answers (see [`CAPS`]). A stream the
+    /// map does not name, or whose native track cannot be told, is `Unsupported` and logged.
     pub fn select_audio(&mut self, now_ms: u64, attempt: AttemptId, command: CommandId, choice: TrackChoice,
         fx: &mut Vec<Fx>) -> DispatchResult {
         let Some(active) = self.active.as_mut().filter(|a| a.attempt == attempt) else {
@@ -372,10 +425,22 @@ impl Machine {
         if active.phase != Phase::Open || !active.prepared {
             return DispatchResult::Refused(Failure::Busy);
         }
-        let Some(index) = native_index(&active.tracks, track) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let Some(ordinal) = native_index(&active.tracks, track) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let check = active.checks.iter().find(|(stated, _)| *stated == track).map(|(_, check)| check);
+        let index = match choose_native_audio(ordinal, check, &active.native_audio) {
+            Ok(index) => index,
+            Err(why) => {
+                fx.push(Fx::Log(format!("tizen-uri: audio stream {id} at ordinal {ordinal} refused: {why}")));
+                return DispatchResult::Refused(Failure::Unsupported);
+            }
+        };
+        if index != ordinal {
+            fx.push(Fx::Log(format!("tizen-uri: audio stream {id} is native track {index}, not its ordinal {ordinal}, by its language")));
+        }
         let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
         let operation = Operation::SelectTrack { kind: TrackKind::Audio, choice };
-        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms) });
+        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
+            native: Some(index) });
         fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::AudioTrack { index, command: command_word } });
         DispatchResult::Queued
     }
@@ -484,6 +549,15 @@ impl Machine {
                     });
                 }
             }
+            // The host reports these before PREPARED, one per native audio track; a report after it changes nothing.
+            PlayerKind::AudioLanguage if live && !active.prepared => {
+                if let Some(index) = usize::try_from(event.a).ok().filter(|index| *index < LANGUAGE_REPORTS) {
+                    if active.native_audio.len() <= index {
+                        active.native_audio.resize(index + 1, None);
+                    }
+                    active.native_audio[index] = language_of_word(event.b);
+                }
+            }
             PlayerKind::Track => {
                 let at = active.controls.iter().position(|c| matches!(c.operation, Operation::SelectTrack { .. })
                     && i64::try_from(c.command.get()) == Ok(event.a));
@@ -493,7 +567,7 @@ impl Machine {
                     let selected = match choice {
                         TrackChoice::Selected(id) => Some(TrackSelection { kind, id }),
                         _ => None,
-                    }.filter(|track| live && event.b >= 0 && native_index(&active.tracks, *track) == Some(event.b));
+                    }.filter(|_| live && event.b >= 0 && control.native == Some(event.b));
                     match selected {
                         Some(track) => {
                             note(out, attempt, Observation::TrackSelected(observed(track)));
