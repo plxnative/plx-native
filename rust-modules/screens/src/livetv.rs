@@ -72,6 +72,15 @@ impl Sec {
             Sec::Status => STATUS_GROUP,
         }
     }
+
+    /// The tile style of a shelf section; `None` for the sections that are not shelves.
+    const fn style(self) -> Option<&'static RowStyle> {
+        match self {
+            Sec::Recent | Sec::Channels => Some(&PLATE_STYLE),
+            Sec::Now => Some(&NOW_STYLE),
+            Sec::Head | Sec::Status => None,
+        }
+    }
 }
 
 /// **Which rows the page shows**, decided once per store revision ([`Page::sync`], the one place the store's
@@ -209,6 +218,13 @@ impl Page {
             .fold(0xcbf2_9ce4_8422_2325_u64, |acc, c| {
                 (acc ^ fmt::phase(c.begins_at, c.ends_at, wall.unix_s()).stamp()).wrapping_mul(0x0100_0000_01b3)
             })
+    }
+
+    /// The first row's pitch: the scroll at which what stands under the top chrome at rest has gone (a plate
+    /// row's is shorter than a poster row's, so the chrome tucks sooner). `0` with no row, which the handoff
+    /// floors.
+    fn first_row_pitch(&self) -> f32 {
+        self.mode.head().and_then(Sec::style).map_or(0.0, RowStyle::pitch_fixed)
     }
 
     fn regions(&self) -> PageRegions<'_> {
@@ -359,7 +375,8 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         // Each row is its own section, with its own style: a shelf keeps its style from the body it was made
         // with, so a key never stands for two row styles. The head of the content is seated by its own rule
         // (`CONTENT_HEAD_SEAT`): the first row there is.
-        for (k, style, name) in [(Sec::Recent, &PLATE_STYLE, "recent"), (Sec::Now, &NOW_STYLE, "on_now"), (Sec::Channels, &PLATE_STYLE, "channels")] {
+        for (k, name) in [(Sec::Recent, "recent"), (Sec::Now, "on_now"), (Sec::Channels, "channels")] {
+            let style = k.style().expect("a shelf has a style");
             let spec = SectionSpec::new(k, Kind::Shelf { style, heading }, k.group()).named(name);
             out.push(if self.mode.head() == Some(k) { spec.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) } else { spec });
         }
@@ -472,7 +489,7 @@ impl LiveTvScreen {
 
     fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         self.page.header_row(cx.measure).step(self.page.entry, cx.focus.current, &mut self.page.header_capsules, &mut self.page.header_pop, t.dt());
-        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), NOW_STYLE.pitch_fixed(), false);
+        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), self.page.first_row_pitch(), false);
         // The page's own haze, fixed: it does not follow the focused tile.
         let haze = AmbientWash::target(theme::WASH_LIVE_TV, [theme::WASH_LIVE_TV_W; 4]);
         if self.ground_seeded {

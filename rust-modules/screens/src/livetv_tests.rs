@@ -695,3 +695,27 @@ fn a_restore_with_no_left_channel_seats_nothing() {
     step(&mut screen, view, None, &left("C999"));
     assert!(seated_elems(&step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored))).is_empty());
 }
+
+/// **The top chrome tucks when the first row has scrolled up under it, whatever that row is.** The handoff's
+/// `gone_at` is the first row's pitch: Recent's plates are 140 tall, not a poster's 375, so with the page
+/// resting 227 down (a Channels plate focused) the plates stand at 73..213 under the top bar and the chrome
+/// has to be gone; at scroll 0 it stands shown. (With the poster pitch, 457, it tucked from a target of 397.)
+#[test]
+fn the_chrome_tucks_at_the_channels_rest_under_a_plate_first_page_and_stands_at_the_top() {
+    use plx_ui::screen::Screen;
+    let (mut store, mut screen) = seeded();
+    let recent = [store.view().channels[0].clone()];
+    store.install_for_test(store.view().channels.to_vec());
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::RecentNowChannels);
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!((scroll, Screen::<TestHost>::chrome_tuck(&screen)), (0.0, 0.0), "at the top: the chrome shown");
+    rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 4);
+    assert!((scroll - 227.0).abs() < 0.1, "the Channels rest: {scroll}");
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "the plates are under the top bar: the chrome is gone");
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    assert!((scroll - 219.0).abs() < 0.1, "back on On now: {scroll}");
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "still tucked (it returns below 102)");
+}
