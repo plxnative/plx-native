@@ -176,6 +176,8 @@ const EP_RETRY_MS: u32 = 1000;
 pub struct DetailScreen {
     /// Derived frame input, shared by shelf captions and live/target section geometry.
     caption_policy: plx_ui::caption_policy::CaptionPolicy,
+    /// Derived frame input: the captured profile and server allow deletion.
+    delete_allowed: bool,
     entry: EntryId,
     sid: ServerId,
     rk: String,
@@ -563,6 +565,7 @@ impl DetailScreen {
         }
         Self {
             caption_policy: crate::registry::caption_policy_of(plx_plex::plex::session::UnderPosters::DEFAULT),
+            delete_allowed: false,
             entry,
             sid,
             rk,
@@ -864,7 +867,9 @@ impl DetailScreen {
 
     /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
     /// episode on a show page, via [`Detail::play_rk`]) and one row per action the round buttons had no
-    /// room for ([`hero::overflow_ctls`]), in the row's order. `None` unless focus is on the … button.
+    /// room for ([`hero::overflow_ctls`]), in the row's order, then Delete when the page offers it
+    /// ([`hero::HeroSet::delete`]): Delete addresses this PAGE's item (the show, not its next-up
+    /// episode), captured here as the menu opens. `None` unless focus is on the … button.
     /// A new hero action is one more arm in the `match` below.
     pub fn hero_overflow(
         &self,
@@ -877,7 +882,8 @@ impl DetailScreen {
             return None;
         }
         let d = self.detail(meta)?;
-        let (moved, n) = hero::overflow_ctls(self.hero_set(meta));
+        let set = self.hero_set(meta);
+        let (moved, n) = hero::overflow_ctls(set);
         let rows: Vec<_> = moved[..n]
             .iter()
             .filter(|ctl| match ctl {
@@ -889,9 +895,10 @@ impl DetailScreen {
             })
             .copied()
             .collect();
+        let delete = if set.delete { hero_delete_subject(d) } else { None };
         Some((d.play_rk().to_string(), rows))
-            .filter(|(_, rows)| !rows.is_empty())
-            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener }))
+            .filter(|(_, rows)| !rows.is_empty() || delete.is_some())
+            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener, delete }))
     }
 
     pub fn focused_episode(
@@ -2278,7 +2285,11 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
         // Extras (landscape stills) and Cast (headshots) are not posters and keep the legacy block.
         // Settings changes the setting while it covers the page, and a returning page raises no
         // damage of its own: the first event after it is where the page learns, and repaints.
-        if crate::registry::moved(&mut self.caption_policy, crate::registry::captions::policy_for(H::screen_inputs(cx))) {
+        let inputs = H::screen_inputs(cx);
+        let captions_changed = crate::registry::moved(&mut self.caption_policy, crate::registry::captions::policy_for(inputs));
+        let deletion_changed = crate::registry::moved(&mut self.delete_allowed,
+            inputs.deletable.iter().any(|(sid, _)| *sid == self.sid));
+        if captions_changed || deletion_changed {
             fx.invalidate(Provenance::Nav);
         }
         let policy = Some(self.caption_policy);
@@ -4643,6 +4654,7 @@ impl DetailScreen {
         // `!hero_set().trailer` and then drive `ELEM_TRAILER` directly to prove `activate_hero`'s
         // handling stays correct even though the disc itself is never shown.)
         hero::HeroSet {
+            delete: self.delete_allowed && self.detail(meta).and_then(hero_delete_subject).is_some(),
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
             tracks: self.detail(meta).is_some_and(|d| meta.has_preplay_tracks(d.sid, d.play_rk(), taken_version(d))),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
@@ -4882,7 +4894,12 @@ impl DetailScreen {
                     }
                 }
             }
-            hero::HeroCtl::More => self.content(fx, ContentReq::ItemMenu),
+            hero::HeroCtl::More => {
+                // only while the row has a … to press (the permission behind Delete can be withdrawn)
+                if hero::index_of(self.hero_set(meta), hero::HeroCtl::More).is_some() {
+                    self.content(fx, ContentReq::ItemMenu);
+                }
+            }
             hero::HeroCtl::MarkWatched | hero::HeroCtl::MarkUnwatched => {
                 if let Some(d) = self.detail(meta) {
                     fx.push(Fx::App(AppFx::Store(
@@ -5077,6 +5094,29 @@ pub(crate) fn hero_control_subject<'a>(
         HeroCtl::Watchlist | HeroCtl::Trailer => Some(d.rk.as_str()),
         HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::AudioSubtitles | HeroCtl::More => None,
     }
+}
+
+/// **What the … menu's Delete row addresses**: this page's own item (a show page's show, never the
+/// episode its hero plays next), with the kind and title the confirmation names. `None` for an item
+/// deletion is not offered for (a collection, or one with no key or title yet).
+pub(crate) fn hero_delete_subject(d: &Detail) -> Option<crate::registry::HeroDelete> {
+    let kind = match d.kind.as_str() {
+        "movie" => 0,
+        "show" => 1,
+        "season" => 2,
+        "episode" => 3,
+        _ => return None,
+    };
+    if d.rk.is_empty() || d.title.is_empty() {
+        return None;
+    }
+    let title = if kind == 3 {
+        format!("{} · S{} E{} · {}", d.show_title, d.season, d.index, d.title)
+    } else {
+        d.title.clone()
+    };
+    let show_rk = if kind == 2 { d.parent_rk.clone() } else { d.show_rk.clone() };
+    Some(crate::registry::HeroDelete { rk: d.rk.clone(), kind, title, show_rk })
 }
 
 /// The versions the hero's Play chooses among, for its Play Version disc and panel: the page's

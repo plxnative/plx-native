@@ -89,11 +89,12 @@ fn a_home_card_is_not_answered_by_the_library_search_or_content_builders() {
     let _guard = plx_base::testlock::serial();
     let (mut d, mut owner) = home_rig();
     let mut rig = owner.bridge();
+    for i in 1..20 { frame(&mut d, &mut rig, AppArg::Home, tick(i), vec![]); }
     let entry = d.nav.top_page().unwrap().id;
     let instance = d.nav.instance_of(entry).unwrap();
     d.emit(MachineId::Nav, Fx::Deliver(MachineId::Instance(instance),
         Delivery::Screen(ScreenEvent::App(AppMsg::Home(HomeCmd::FocusGrid { row: 1, col: 1 })))));
-    for i in 1..80 { frame(&mut d, &mut rig, AppArg::Home, tick(i), vec![]); }
+    for i in 20..100 { frame(&mut d, &mut rig, AppArg::Home, tick(i), vec![]); }
     assert!(rig.home_grid_focused(&d));
     let focus = d.focus();
     // `focused_card` yields a PmsMovie with actions on this page; the route is what says no.
@@ -181,6 +182,10 @@ fn a_detail_related_card_opens_its_menu_at_the_drawn_rect_and_other_shelves_open
     let interned = 1u32 << 31;
     for elem in (0..4096u32 + 2048).chain(interned..interned + 256) {
         let Some(arg) = answers(&d, &rig, elem) else { continue };
+        if matches!(arg.kind, ItemMenuKind::HeroOverflow { .. }) {
+            assert_eq!(arg.rk, "movie");
+            continue;
+        }
         assert!(matches!(arg.kind, ItemMenuKind::Card { from_deck: false, .. }) && !arg.from_home);
         cards.push((arg.rk, elem));
     }
@@ -246,6 +251,58 @@ fn pdf_proposal_more_opens_the_on_deck_episode_even_outside_the_loaded_season() 
         matches!(&arg.kind, ItemMenuKind::HeroOverflow { rows, .. }
             if rows[..] == [plx_screens::registry::HeroCtl::Version, plx_screens::registry::HeroCtl::AudioSubtitles]),
         "the … holds what the round buttons had no room for",
+    );
+    assert!(!arg.loaded_episode, "the on-deck item uses the addressed fetch path, independent of the season window");
+    plx_plex::plex::reset_servers_for_test();
+}
+
+#[test]
+fn detail_more_ends_with_delete_for_the_pages_show_beside_the_overflow_rows() {
+    let _guard = plx_base::testlock::serial();
+    plx_plex::plex::reset_servers_for_test();
+    // Production latches the Dolby Vision diagnostics before the first frame; the page's per-frame
+    // version rule (`taken_version`) reads them.
+    plx_data::metadata::prewarm_dv_latches();
+    let sid = plx_plex::plex::register_for_test("hero-more", "127.0.0.1", 9, "synthetic", "fixture");
+    let mut d = Dispatcher::<AppHost>::new();
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut rig = owner.bridge();
+    // The owned server allows deletion under this profile: the … menu also ends with Delete, which
+    // addresses the SHOW the page is about, while its overflow rows still act on the on-deck episode.
+    rig.retained.screen_inputs.deletable = std::sync::Arc::new(vec![(sid,
+        plx_plex::plex::ClientKey { instance: 1, token: 2, grant: 3 })]);
+    // The hero's actions: the watch toggle, Play from Start (the episode is underway), and the two a
+    // show page offers for its on-deck episode, Select Version and Audio & Subtitles. Four are more
+    // than the round buttons hold (`hero::split_actions`), so the … opens a menu with the last two.
+    let version = |id: i64| plx_data::pms::MediaVersion { id: plx_plex::plex::MediaId(id), ..Default::default() };
+    plx_data::metadata::set_current_for_test(rig.stores.metadata.state_mut(), Some(plx_data::metadata::Detail {
+        sid, rk: "show".into(), title: "Disposable show".into(), kind: "show".into(), is_show: true,
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "on-deck".into(), resume_ms: 60_000, dur_ms: 120_000,
+            part: "/library/parts/1/1/file.mkv".into(), versions: vec![version(1), version(2)], ..Default::default()
+        }),
+        audio: vec![plx_data::metadata::Stream { id: 11, ..Default::default() }],
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("on-deck".into()),
+        ..Default::default()
+    }));
+    d.request(MachineId::Nav, NavOp::Root(AppArg::Content(ContentArg::Detail { sid, rk: "show".into() })));
+    for now in 0..6 { d.frame_with(&mut rig, tick(now), Vec::new(), Vec::new(), &mut NoTap, false); }
+    // The screen owns its element IDs (Go to Show and More are independent controls).
+    let entry = d.nav.top_page().unwrap().id;
+    let arg = (0..4096u32).find_map(|elem| {
+        let ret = ReturnState { focus: Some(FocusKey { entry, elem }), ..Default::default() };
+        rig.content_menu_arg(&d, entry, &ret).filter(|arg| arg.rk == "on-deck")
+    }).expect("More opens the on-deck episode's menu");
+    assert_eq!(arg.rk, "on-deck");
+    assert!(
+        matches!(&arg.kind, ItemMenuKind::HeroOverflow { rows, .. }
+            if rows[..] == [plx_screens::registry::HeroCtl::Version, plx_screens::registry::HeroCtl::AudioSubtitles]),
+        "the … holds what the round buttons had no room for",
+    );
+    assert!(
+        matches!(&arg.kind, ItemMenuKind::HeroOverflow { delete: Some(subject), .. }
+            if subject.rk == "show" && subject.kind == 1 && subject.title == "Disposable show"),
+        "Delete names the page's show, independently of its next-up episode",
     );
     assert!(!arg.loaded_episode, "the on-deck item uses the addressed fetch path, independent of the season window");
     plx_plex::plex::reset_servers_for_test();

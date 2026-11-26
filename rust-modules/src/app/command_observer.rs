@@ -39,7 +39,8 @@ impl Observation {
                 Ok(ExternalAppFx::Content(request)) => Record::Label(super::super::content::content_command_label(request).into()),
                 Ok(ExternalAppFx::Library(request)) => Record::Library(command.from, request.clone(), command.return_state.clone()),
                 Ok(ExternalAppFx::Home(request)) => Record::Home(command.from, request.clone(), command.return_state.clone()),
-                Ok(ExternalAppFx::SessionEffect(_) | ExternalAppFx::Preferences(_) | ExternalAppFx::Catalog(_)) | Err(_) => Record::None,
+                Ok(ExternalAppFx::SessionEffect(_) | ExternalAppFx::Preferences(_) | ExternalAppFx::Catalog(_)
+                    | ExternalAppFx::MediaDelete(_)) | Err(_) => Record::None,
             };
             Self { record }
         }

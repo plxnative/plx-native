@@ -12,3 +12,5 @@ pub(crate) mod session;
 #[cfg(feature = "sim")]
 pub(crate) mod sim_present;
 pub(crate) mod stores;
+
+pub(crate) mod media_delete;

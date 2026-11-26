@@ -80,6 +80,8 @@ pub enum AppFx {
     Player(PlayerReq),
     /// The item context menu's committed row (phase 10) — see [`ItemMenuReq`].
     ItemMenu(ItemMenuReq),
+    /// Confirmed deletion; the resource runner answers this exact surface.
+    MediaDelete(MediaDeleteRequest),
     /// The player-HUD page's commands on the package store, executed by the Bridge (PR10).
     Huds(HudCmd),
 }
@@ -127,6 +129,7 @@ pub enum ExternalAppFx {
     Catalog(crate::catalog::CatalogOut),
     Player(PlayerReq),
     ItemMenu(ItemMenuReq),
+    MediaDelete(MediaDeleteRequest),
 }
 
 impl plx_machine::machine::AppEffect for AppFx {
@@ -152,6 +155,7 @@ impl plx_machine::machine::AppEffect for AppFx {
             Self::Catalog(v) => External(ExternalAppFx::Catalog(v)),
             Self::Player(v) => External(ExternalAppFx::Player(v)),
             Self::ItemMenu(v) => External(ExternalAppFx::ItemMenu(v)),
+            Self::MediaDelete(v) => External(ExternalAppFx::MediaDelete(v)),
         }
     }
 }
@@ -178,8 +182,18 @@ pub type AppCommand = plx_machine::machine::AppCommand<ExternalAppFx, ReturnStat
 /// The package-store view delivered through the HUD command channels.
 pub use crate::hud_settings::HudList;
 
-/// What the Player HUD settings page asks of the package store (`plx_data::hudpacks::HudStore`). The
-/// answers come back as the page's own data, the list the Bridge sends down the channel `Open` carries.
+/// A confirmed item on one server, bound to the owner profile and server credential at open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaDeleteRequest {
+    pub sid: plx_plex::plex::ServerId,
+    pub rk: String,
+    pub kind: i32,
+    pub show_rk: String,
+    pub profile: u32,
+    pub key: plx_plex::plex::ClientKey,
+}
+
+/// What the Player HUD settings page asks of the package store. Answers return on Open's channel.
 #[derive(Clone)]
 pub enum HudCmd {
     /// The page opened: read every candidate directory again, and publish the list (now and whenever it
@@ -636,7 +650,20 @@ pub enum ItemMenuKind {
     /// page's instance: a row is the round button it replaces, so the menu hands that [`HeroCtl`] back to
     /// the page (`AppMsg::HeroCtl`), whose `activate_hero` is the one path a hero action takes. The row's
     /// icon and label are the button's, from the one table ([`hero_face`]).
-    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId },
+    /// `delete` is the page's own item when the page offers deletion (`detail::hero::HeroSet::delete`):
+    /// the menu's last row is then Delete, which confirms inside the menu (`item_menu::media_delete`).
+    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId, delete: Option<HeroDelete> },
+}
+
+/// The Detail page's own item as the hero's … menu's Delete row addresses it, captured by the page
+/// when the menu opened (`detail::hero_delete_subject`): a show page's show, never the episode its
+/// hero plays next. `kind` is 0 movie, 1 show, 2 season, 3 episode ([`MediaDeleteRequest::kind`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeroDelete {
+    pub rk: String,
+    pub kind: i32,
+    pub title: String,
+    pub show_rk: String,
 }
 
 pub use crate::detail::{hero_face, HeroCtl};
@@ -653,7 +680,7 @@ impl PartialEq for ItemMenuKind {
             (Self::Card { row: a, from_deck: da }, Self::Card { row: b, from_deck: db }) =>
                 da == db && a.sid == b.sid && a.rk == b.rk && a.kind == b.kind,
             (Self::Episode { mark: a, .. }, Self::Episode { mark: b, .. }) => a == b,
-            (Self::HeroOverflow { rows: a, .. }, Self::HeroOverflow { rows: b, .. }) => a == b,
+            (Self::HeroOverflow { rows: a, delete: da, .. }, Self::HeroOverflow { rows: b, delete: db, .. }) => a == b && da == db,
             (Self::Season { mark: a, show_rk: sa, index: ia }, Self::Season { mark: b, show_rk: sb, index: ib }) =>
                 a == b && sa == sb && ia == ib,
             (Self::Catalog { state: a }, Self::Catalog { state: b }) => a == b,
@@ -682,7 +709,10 @@ impl plx_machine::machine::LogicalState for ItemMenuArg {
             ItemMenuKind::Episode { mark, .. } => { c.u32(1).u32(*mark as u32); }
             ItemMenuKind::Season { mark, show_rk, index } => { c.u32(2).u32(*mark as u32).str(show_rk).u64(*index as u64); }
             ItemMenuKind::Catalog { state } => { c.u32(3).u32(*state as u32); }
-            ItemMenuKind::HeroOverflow { rows, .. } => { c.u32(6).seq(rows.len()); }
+            ItemMenuKind::HeroOverflow { rows, delete, .. } => {
+                c.u32(6).seq(rows.len());
+                c.option(delete.as_ref(), |c, d| { c.u32(d.kind as u32).str(&d.rk).str(&d.title).str(&d.show_rk); });
+            }
         }
         c.u32(self.host.0);
         c.option(self.focus, |c, key| { c.u32(key.entry.0).u32(key.elem); });
@@ -1714,6 +1744,8 @@ pub(crate) fn run_person_fixture(store: &mut plx_data::stores::person::PersonSto
 
 /// The application's messages (spec §3.1).
 pub enum AppMsg {
+    /// None acknowledges admission; Some is the one terminal result.
+    MediaDelete(Option<plx_plex::plex::DeleteResult>),
     /// Pure observation of the actual visible Watch opportunity after a successful final swap.
     /// Frame/entry/instance addressing and one-shot admission belong to Dispatcher.
     PlayerPresented { watch: Option<plx_appkit::skip_policy::OfferId>, paired: bool },
@@ -2371,7 +2403,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryC
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
-     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
+     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len,delete:Option<{kind:u32,rk:str,title:str,show_rk:str}>}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
      WatchlistMenu{host:u32,options:{type:u32,sort:u32,descending:bool,show:u32},anchor:[u32;4]}}";
 
@@ -3200,7 +3232,10 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `alt_sources::SHAPE[1]` carry it). Previous pin: 0xa2bc_fa1b_e96e_0118.
 // The live player's banner, zap and art phases join the Player and Live TV screens' canon (Live TV PR4: `zap`, `art`,
 // `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0xeb60_634f_6b5f_c9ac;
+// Media deletion (#1407): the item menu's canon gains the confirmation's `deletion` state (`Action::Delete`,
+// canon tag 15), and the hero overflow's argument carries the page's item for its Delete row
+// (`HeroOverflow{rows:len,delete:Option<…>}`). Previous pin: 0xeb60_634f_6b5f_c9ac. Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0xf998_6df1_4cb0_bf75;
 
 #[cfg(test)]
 mod arg_tests {

@@ -109,6 +109,7 @@ fn more_is_never_a_single_item_and_always_ends_the_round_buttons() {
     for bits in 0..128u32 {
         for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
             let s = HeroSet {
+                delete: false,
                 watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
                 trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark,
             };
@@ -164,4 +165,39 @@ fn audio_and_subtitles_is_the_last_movable_action_and_the_rule_places_it() {
     assert_eq!(HeroCtl::of_elem(AudioSubtitles.elem()), Some(AudioSubtitles));
     assert!(AudioSubtitles.elem() < HERO_ELEM_RANGE_END);
     assert!(disc_slot(AudioSubtitles).is_some_and(|slot| slot < DISCS));
+}
+
+/// **Delete brings the … on its own** (`HeroSet::delete`): Delete is a row of the menu, never a round
+/// button, so with it offered the … exists whatever the action count and takes the last slot at once —
+/// up to two actions stay round and the rest move under it, ahead of Delete.
+#[test]
+fn delete_brings_the_more_button_and_keeps_at_most_two_round_actions() {
+    let with_delete = |s: HeroSet| HeroSet { delete: true, ..s };
+
+    let unwatched = with_delete(set(true, PosterMark::None, false, false, false));
+    assert_eq!(row(unwatched), [Play, Watchlist, MarkWatched, More]);
+    assert!(under_more(unwatched).is_empty(), "the … holds only Delete");
+
+    let bare = with_delete(set(false, PosterMark::None, false, false, false));
+    assert_eq!(row(bare), [Play, MarkWatched, More]);
+
+    let three = with_delete(set(true, PosterMark::InProgress, false, true, false));
+    assert_eq!(row(three), [Play, Watchlist, MarkWatched, More]);
+    assert_eq!(under_more(three), [Restart], "the third action moves rather than crowd the …");
+
+    let four = with_delete(set(true, PosterMark::InProgress, false, true, true));
+    assert_eq!(row(four), [Play, Watchlist, MarkWatched, More]);
+    assert_eq!(under_more(four), [Restart, Version], "the moved actions are unchanged by Delete");
+
+    for bits in 0..128u32 {
+        let s = HeroSet {
+            delete: true,
+            watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
+            trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark: PosterMark::None,
+        };
+        let r = row(s);
+        assert!(r.contains(&More), "{s:?}: Delete offered, so the … is there");
+        let round = r.iter().filter(|c| !matches!(c, Play | Trailer | Alt | More)).count();
+        assert!(round < ROUND_SLOTS, "{s:?}: the … takes the last slot");
+    }
 }

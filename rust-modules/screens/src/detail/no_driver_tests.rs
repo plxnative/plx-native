@@ -84,6 +84,7 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
     for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
         for bits in 0..128u32 {
             let set = hero::HeroSet {
+                delete: false,
                 watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
                 trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark,
             };

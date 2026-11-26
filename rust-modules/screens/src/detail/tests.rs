@@ -33,8 +33,8 @@ impl ScreenArg for TestArg {
 pub(super) struct TestHost;
 
 impl crate::registry::ScreenInputsLike for TestHost {
-    fn screen_inputs<'a>(_: &Cx<'a, Self>) -> &'a crate::registry::ScreenInputs {
-        if NO_DRIVER.with(|flag| flag.get()) { crate::registry::no_driver_fixture() } else { crate::registry::caption_fixture() }
+    fn screen_inputs<'a>(cx: &Cx<'a, Self>) -> &'a crate::registry::ScreenInputs {
+        if NO_DRIVER.with(|flag| flag.get()) { crate::registry::no_driver_fixture() } else { cx.views }
     }
 }
 
@@ -55,7 +55,7 @@ impl Host for TestHost {
     type Fx = AppFx;
     type Msg = AppMsg;
     type Elem = u32;
-    type Views<'a> = ();
+    type Views<'a> = &'a crate::registry::ScreenInputs;
     // `super::super::` (detail -> screens -> family) rather than the absolute spelling: `family`
     // is the Settings family's shared vocabulary, not a sibling screen — see `screens::family`'s
     // own module doc, and `screens::legal`/`screens::settings`'s identical `super::family::` use.
@@ -94,7 +94,7 @@ impl crate::registry::MetadataLike for TestHost {
 
 fn cx<'a>(measure: &'a dyn plx_machine::machine::Measure, elem: Option<u32>) -> Cx<'a, TestHost> {
     Cx {
-        views: (),
+        views: crate::registry::caption_fixture(),
         tick: Default::default(),
         measure,
         press: PressRead::default(),
@@ -157,6 +157,7 @@ fn bare(_guard: &plx_base::testlock::Serial, sid: ServerId, rk: &str) -> DetailS
 pub(super) fn bare_held(sid: ServerId, rk: &str) -> DetailScreen {
     let mut screen = DetailScreen {
         caption_policy: crate::registry::captions::policy(),
+        delete_allowed: false,
         entry: EntryId(7),
         sid,
         rk: rk.into(),
@@ -307,6 +308,15 @@ fn step(
     event: &ScreenEvent<TestHost>,
     focus: Option<u32>,
 ) -> (Handled, Vec<plx_machine::machine::Stamped<TestHost>>) {
+    step_with_inputs(screen, event, focus, crate::registry::caption_fixture())
+}
+
+fn step_with_inputs(
+    screen: &mut DetailScreen,
+    event: &ScreenEvent<TestHost>,
+    focus: Option<u32>,
+    inputs: &crate::registry::ScreenInputs,
+) -> (Handled, Vec<plx_machine::machine::Stamped<TestHost>>) {
     screen.sync_keys(test_store().view());
     let focus = focus.and_then(|key| screen.engine_key(key).or(Some(key)));
     let translated;
@@ -323,7 +333,8 @@ fn step(
         _ => event,
     };
     let measure = plx_ui::fixture::FixtureMeasure;
-    let context = cx(&measure, focus);
+    let mut context = cx(&measure, focus);
+    context.views = inputs;
     let mut effects = Vec::new();
     let mut present = plx_machine::present::Present::new();
     let handled = {
@@ -1409,6 +1420,7 @@ fn hero_focus_follows_its_control_when_the_set_grows_under_it() {
 #[test]
 fn hero_focus_stays_in_place_when_also_available_lands() {
     let before = hero::HeroSet {
+        delete: false,
         watchlist: true,
         go_show: false,
         version: false,
@@ -1579,6 +1591,7 @@ fn a_landed_view_state_refresh_puts_the_browsed_season_back_and_never_steers_ano
 fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
     let y = 812.0;
     let set = hero::HeroSet {
+        delete: false,
         watchlist: true,
         go_show: false,
         version: false,
@@ -6096,6 +6109,7 @@ fn an_episode_gets_a_go_to_show_disc_that_presses_the_item_menus_navigation() {
     let set = screen.hero_set(test_store().view());
     assert!(set.go_show);
     assert_eq!(hero::overflow_ctls(set).1, 0, "an episode page with this few actions has no …");
+    assert!(!set.delete, "this profile has no deletion permission");
     assert!(!set.watchlist, "no plex guid: the bookmark disc is not in this row");
     assert_eq!(hero::index_of(set, hero::HeroCtl::GoToShow), Some(2));
     let (_, fx) = step(
@@ -6180,7 +6194,7 @@ pub(crate) fn detail_conforms() -> plx_ui::a11y::Namespaces {
     screen.season_metrics.update(test_store().view().current().expect("the page's detail is mounted"), &plx_ui::fixture::FixtureMeasure);
     static MEASURE: plx_ui::fixture::FixtureMeasure = plx_ui::fixture::FixtureMeasure;
     let cx = Cx {
-        views: (),
+        views: crate::registry::caption_fixture(),
         tick: plx_machine::machine::Tick { ms: 0, dt_us: 16_667 },
         measure: &MEASURE,
         modal: Default::default(), page_image: Default::default(), hold_hint: Default::default(),
@@ -6230,6 +6244,55 @@ pub(crate) fn detail_conforms() -> plx_ui::a11y::Namespaces {
 
 #[path = "hero_shade_tests.rs"]
 mod hero_shade;
+
+/// Without the server's delete permission the row has no Delete, and so no … of its own.
+#[test]
+fn the_detail_more_disc_is_absent_without_delete_permission() {
+    let _guard = install(Detail { sid: ServerId::UNSET, rk: "movie".into(),
+        title: "Disposable movie".into(), kind: "movie".into(), ..Default::default() });
+    let screen = bare(&_guard, ServerId::UNSET, "movie");
+    let set = screen.hero_set(test_store().view());
+    assert!(!set.delete);
+    assert_eq!(hero::index_of(set, hero::HeroCtl::More), None, "a movie this bare has nothing to move under …");
+    clear();
+}
+
+/// **Delete lives under the hero's …** (#1407 on top of the hero row, #1553): with the captured
+/// server's permission the page offers it for its own item, which brings the … even when no action
+/// overflowed, and the … menu it opens ends with Delete for that item; withdrawn, both go, and a
+/// press on the stale … opens nothing.
+#[test]
+fn the_detail_more_disc_tracks_the_captured_server_delete_permission() {
+    let opener = plx_machine::machine::InstanceId(4);
+    for (kind, want) in [("movie", 0), ("show", 1), ("season", 2), ("episode", 3)] {
+        let _guard = install(Detail { sid: ServerId::UNSET, rk: "42".into(),
+            title: "Disposable item".into(), kind: kind.into(), ..Default::default() });
+        let mut screen = bare(&_guard, ServerId::UNSET, "42");
+        let key = plx_plex::plex::ClientKey { instance: 1, token: 2, grant: 3 };
+        let mut inputs = crate::registry::ScreenInputs::default();
+        inputs.deletable = std::sync::Arc::new(vec![(ServerId::from_raw(3), key)]);
+        step_with_inputs(&mut screen, &ScreenEvent::Tick(Default::default()), None, &inputs);
+        assert!(!screen.hero_set(test_store().view()).delete, "another server's permission is insufficient");
+        inputs.deletable = std::sync::Arc::new(vec![(ServerId::UNSET, key)]);
+        step_with_inputs(&mut screen, &ScreenEvent::Tick(Default::default()), None, &inputs);
+        let set = screen.hero_set(test_store().view());
+        assert!(set.delete, "{kind}");
+        assert!(hero::index_of(set, hero::HeroCtl::More).is_some(), "{kind}: Delete brings the …");
+        let focus = Some(FocusKey { entry: EntryId(7), elem: hero::ELEM_MORE });
+        let (_, menu) = screen.hero_overflow(focus, test_store().view(), opener).expect("the … opens a menu");
+        let crate::registry::ItemMenuKind::HeroOverflow { delete: Some(subject), .. } = menu else {
+            panic!("{kind}: the … menu offers Delete");
+        };
+        assert_eq!((subject.rk.as_str(), subject.kind), ("42", want), "{kind}: the page's own item");
+        inputs.deletable = Default::default();
+        let (_, fx) = step_with_inputs(&mut screen, &ScreenEvent::Activate(hero::ELEM_MORE),
+            Some(hero::ELEM_MORE), &inputs);
+        assert!(!screen.hero_set(test_store().view()).delete);
+        assert!(screen.hero_overflow(focus, test_store().view(), opener).is_none());
+        assert!(!fx.iter().any(|effect| matches!(&effect.fx, Fx::App(AppFx::Content(ContentReq::ItemMenu)))));
+        clear();
+    }
+}
 
 #[path = "no_driver_tests.rs"]
 mod no_driver;

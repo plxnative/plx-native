@@ -253,9 +253,14 @@ impl HeroCtl {
 /// Which of the conditional controls the row is showing: the independent bits (bookmark, Go to
 /// Show, Play Version, restart, trailer, Also available), plus the item's watch state, which
 /// decides which FACE the watched toggle wears. Whether the row carries a More (…) button is NOT a
-/// bit: it follows from how many actions the page has ([`actions`], [`split_actions`]).
+/// bit: it follows from how many actions the page has ([`actions`], [`split_actions`]) and from
+/// [`HeroSet::delete`] ([`split_set`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct HeroSet {
+    /// deletion is offered for this page's item (an owned server that allows media deletion, under
+    /// the owner profile): Delete is a row of the … menu only, never a round button, so the … exists
+    /// then whatever the action count ([`split_set`]), and its last row is Delete
+    pub delete: bool,
     /// the item carries a `plex://movie|show` guid the Watchlist takes — the bookmark disc exists only then
     pub watchlist: bool,
     /// this is an EPISODE's own page and it names its show — the Go to Show disc exists only then
@@ -303,7 +308,8 @@ pub fn actions(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
 /// **The overflow rule**: up to [`ROUND_SLOTS`] actions are all round buttons; more than that shows
 /// the first `ROUND_SLOTS - 1` and moves the rest under …, which takes the last slot. So … exists
 /// only when at least two actions move into it (4 actions move 2, 5 move 3) and never holds a single
-/// one. Generic over the element so the rule is pinned independent of which actions exist.
+/// one. Generic over the element so the rule is pinned independent of which actions exist. Delete, a
+/// menu-only row, is the one thing that brings the … on its own ([`split_set`], [`HeroSet::delete`]).
 pub fn split_actions<T>(all: &[T]) -> (&[T], &[T]) {
     if all.len() <= ROUND_SLOTS {
         return (all, &[]);
@@ -313,10 +319,22 @@ pub fn split_actions<T>(all: &[T]) -> (&[T], &[T]) {
     (round, moved)
 }
 
-/// The actions that live under … for this set, in menu order (empty when the row has no …).
+/// [`split_actions`] for one set. With Delete offered ([`HeroSet::delete`]) the … exists whatever the
+/// count, so it takes the last round slot at once: up to `ROUND_SLOTS - 1` actions stay round and the
+/// rest move under it, ahead of Delete. Without it, the plain overflow rule.
+pub fn split_set(set: HeroSet, all: &[HeroCtl]) -> (&[HeroCtl], &[HeroCtl]) {
+    if set.delete {
+        all.split_at(all.len().min(ROUND_SLOTS - 1))
+    } else {
+        split_actions(all)
+    }
+}
+
+/// The actions that live under … for this set, in menu order (empty when the row has no …, and
+/// possibly empty when it holds only Delete, [`HeroSet::delete`]).
 pub fn overflow_ctls(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
     let (all, n) = actions(set);
-    let (_, moved) = split_actions(&all[..n]);
+    let (_, moved) = split_set(set, &all[..n]);
     let mut v = [HeroCtl::Play; MAX_ACTIONS];
     v[..moved.len()].copy_from_slice(moved);
     (v, moved.len())
@@ -332,7 +350,7 @@ pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; MAX_CTLS], usize) {
     let mut v = [HeroCtl::Play; MAX_CTLS];
     let mut n = 1;
     let (all, count) = actions(set);
-    let (round, moved) = split_actions(&all[..count]);
+    let (round, moved) = split_set(set, &all[..count]);
     for &c in round {
         v[n] = c;
         n += 1;
@@ -341,7 +359,7 @@ pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; MAX_CTLS], usize) {
         v[n] = HeroCtl::Trailer;
         n += 1;
     }
-    if !moved.is_empty() {
+    if !moved.is_empty() || set.delete {
         v[n] = HeroCtl::More;
         n += 1;
     }
@@ -1196,6 +1214,7 @@ mod tests {
 
     fn set_full(restart: bool, alt: bool, mark: PosterMark, trailer: bool) -> HeroSet {
         HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1681,6 +1700,7 @@ mod tests {
     #[test]
     fn restart_and_the_watch_tail_are_independent() {
         let set = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1700,6 +1720,7 @@ mod tests {
     #[test]
     fn the_actions_row_grows_an_also_available_control_only_for_a_second_source() {
         let without = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1726,6 +1747,7 @@ mod tests {
         for alt in [false, true] {
             for trailer in [false, true] {
                 let set = HeroSet {
+                    delete: false,
                     watchlist: true,
                     go_show: false,
                     version: false,
@@ -1862,6 +1884,7 @@ mod tests {
     #[test]
     fn hero_indices_mean_different_actions_in_the_two_control_sets() {
         let compact = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1872,6 +1895,7 @@ mod tests {
             mark: PosterMark::None,
         };
         let wide = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1892,6 +1916,7 @@ mod tests {
     #[test]
     fn the_actions_row_accumulates_around_a_variable_width_control() {
         let set = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -1969,21 +1994,22 @@ mod tests {
         assert!(opened, "the sweep must exercise a real open capsule");
     }
 
-    /// **The widest row with all five discs** (bookmark, Go to Show, Play Version, Restart, Alt,
-    /// the watch toggle, Trailer drawn as well): every real verb, measured, either unfurls inside
+    /// **The widest shipped row** (bookmark, Go to Show, Play Version, Restart, Alt,
+    /// the watch toggle and More): every real verb, measured, either unfurls inside
     /// the People column or the row stays circles. Never across.
     #[test]
-    fn five_discs_never_cross_the_people_column_in_any_language() {
+    fn the_widest_shipped_row_never_crosses_the_people_column_in_any_language() {
         use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
         let measure = plx_base::fontcov::advances::ShippedMeasure;
         // Go to Show belongs to an episode page; the on-deck More disc is absent there.
         let wide = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: true,
             version: true,
             tracks: true,
             restart: true,
-            trailer: true,
+            trailer: false, // previews replaced the Trailer disc
             alt: true,
             mark: PosterMark::InProgress,
         };
@@ -2011,6 +2037,7 @@ mod tests {
     fn the_real_verbs_all_fit_the_widest_row() {
         let measure = plx_ui::fixture::FixtureMeasure;
         let wide = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -2038,6 +2065,7 @@ mod tests {
         );
 
         let roomy = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -2068,6 +2096,7 @@ mod tests {
     #[test]
     fn a_verb_that_does_not_fit_is_dropped_whole() {
         let set = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -2111,6 +2140,7 @@ mod tests {
     #[test]
     fn the_widest_action_row_clears_the_people_column() {
         let set = HeroSet {
+            delete: false,
             watchlist: true,
             go_show: false,
             version: false,
@@ -2418,7 +2448,7 @@ mod tests {
             for version in [false, true] {
               for tracks in [false, true] {
                 for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-                    let set = HeroSet { watchlist: false, version, tracks, restart, trailer: false, alt: false, mark, go_show: true };
+                    let set = HeroSet { delete: false, watchlist: false, version, tracks, restart, trailer: false, alt: false, mark, go_show: true };
                     for language in SHIPPED {
                         let _guard = language_on_this_thread_for_test(language);
                         let mut unfurl = [0.0; DISCS];
@@ -2447,7 +2477,7 @@ mod tests {
                 if restart && version {
                     continue;
                 }
-                let set = HeroSet { watchlist: false, version, tracks: true, restart, trailer: false, alt: false, mark: PosterMark::None, go_show: false };
+                let set = HeroSet { delete: false, watchlist: false, version, tracks: true, restart, trailer: false, alt: false, mark: PosterMark::None, go_show: false };
                 for language in SHIPPED {
                     let _guard = language_on_this_thread_for_test(language);
                     let mut unfurl = [0.0; DISCS];

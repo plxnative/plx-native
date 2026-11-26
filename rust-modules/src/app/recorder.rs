@@ -2894,7 +2894,11 @@ mod tests {
         // 0xd80b_045a_c4aa_fc9b.
         // The live player's banner, zap and art phases join the Player and Live TV screens' canon (only the screen
         // half moves): previously 0xcb36_5b40_2b40_643f.
-        assert_eq!(state_fp(), 0x4dc9_4255_d0b1_4f65, "current V13 producer census");
+        // Media deletion (#1407) adds the item menu's confirmation state and the hero overflow's Delete
+        // subject (only the screen half moves): previously 0x4dc9_4255_d0b1_4f65.
+        assert_eq!(state_fp(), 0x8555_3504_70b3_7aa4, "current V13 producer census");
+        assert_ne!(state_fp(), 0x4dc9_4255_d0b1_4f65, "the census before media deletion");
+        assert_ne!(state_fp(), 0x47e3_273e_629d_e65d, "media deletion's census before the hero row and Live TV joined it");
         assert_ne!(state_fp(), 0xcb36_5b40_2b40_643f, "the census before the live player's zap, art and banner phases");
         assert_ne!(state_fp(), 0xd80b_045a_c4aa_fc9b, "the census before the Library order page and the table's lift and glide springs");
         assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");

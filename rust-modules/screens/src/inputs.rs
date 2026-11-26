@@ -46,6 +46,8 @@ pub struct ScreenInputs {
     pub current_server: ServerId,
     /// Stable machine-to-slot identities captured from the host's S4 client keys.
     pub servers: Arc<Vec<(String, ServerId)>>,
+    /// Server and credential pairs permitted to delete under the captured owner profile.
+    pub deletable: Arc<Vec<(ServerId, plx_plex::plex::ClientKey)>>,
     pub grants: Arc<GrantInputs>,
     /// A host-local semantic revision, independent of server-roster changes.
     pub grant_generation: u64,
@@ -59,7 +61,7 @@ impl Default for ScreenInputs {
     fn default() -> Self {
         Self { session: Arc::new(Session::default()), settled: false, visible_generation: 0, revision: 0,
             profile: Arc::new(CurrentProfile { user: None, generation: 0, stamp: String::new() }),
-            current_server: ServerId::UNSET, servers: Default::default(), grants: Arc::new(GrantInputs::default()),
+            current_server: ServerId::UNSET, servers: Default::default(), deletable: Default::default(), grants: Arc::new(GrantInputs::default()),
             grant_generation: 0, resolution_offered: false, backends: plx_media::route::BackendSet::FEED, runtime_policy: RuntimePolicy::default(), preferences: None,
             install_language: Default::default(), running_language: Default::default(), player_presentation: Default::default() }
     }
@@ -99,6 +101,7 @@ impl ScreenInputs {
             && self.session.ui_resolution() == other.session.ui_resolution()
             && self.current_server == other.current_server
             && self.servers == other.servers
+            && self.deletable == other.deletable
             && self.resolution_offered == other.resolution_offered
             && self.backends == other.backends
             && self.grant_generation == other.grant_generation
@@ -139,7 +142,7 @@ pub(crate) fn capture_fixture() -> ScreenInputs {
         visible_generation: session::visible_generation(),
         revision: { let (cache, profile) = session::screen_input_revision(); cache.wrapping_add(profile) },
         profile: session::current_snapshot(),
-        current_server: plx_plex::plex::current_server(), servers: Arc::new(servers), grant_generation: grant::revision(),
+        current_server: plx_plex::plex::current_server(), servers: Arc::new(servers), deletable: Default::default(), grant_generation: grant::revision(),
         resolution_offered: plx_os::tv::device::ui_resolution_offered(), runtime_policy: RuntimePolicy::default(),
         install_language: plx_os::i18n::saved_preference(), running_language: plx_os::i18n::current().preference(), player_presentation: Default::default(),
         backends: plx_media::route::BackendSet::FEED,

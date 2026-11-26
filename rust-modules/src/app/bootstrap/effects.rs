@@ -265,6 +265,7 @@ pub(crate) fn external(effect: &plx_screens::registry::ExternalAppFx) -> Result<
         ExternalAppFx::Content(req) => Ok(json!({"content":content_request(req)?})),
         ExternalAppFx::Home(plx_screens::registry::HomeReq::FoldToHero) => Ok(json!({"home":"fold"})),
         ExternalAppFx::Preferences(_) => Err("unsupported controlled preferences effect"),
+        ExternalAppFx::MediaDelete(_) => Err("unsupported controlled media deletion"),
         ExternalAppFx::Loop(_) | ExternalAppFx::Player(_) | ExternalAppFx::Catalog(_)
         | ExternalAppFx::Home(_) | ExternalAppFx::Library(_) | ExternalAppFx::Search(_)
         | ExternalAppFx::Watchlist(_) | ExternalAppFx::ItemMenu(_) => Err("unsupported Home application effect"),
