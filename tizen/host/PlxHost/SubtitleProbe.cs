@@ -1,7 +1,7 @@
 // PROBE ONLY (branch claude/tizen-subtitle-probe; never shipped): does the device's player hand the app subtitle cue text, and from which
 // source (an embedded text track chosen with player_select_track(TEXT), or a sidecar file given to player_set_subtitle_path)? Inert unless
 // http://10.0.2.2:8765/subprobe.txt answers; it is read once per open, `key=value` per line:
-//   cb=1            register player_set_subtitle_updated_cb before prepare
+//   cb=1            register player_set_subtitle_updated_cb before prepare (cb=prepared: at PREPARED instead)
 //   path=<p>        call player_set_subtitle_path(p) before prepare (a local path or an http URL)
 //   select=<n>      at PREPARED, player_select_track(TEXT, n); -1 (the default) selects nothing
 //   switch=<n>      at the 6th callback, player_select_track(TEXT, n) mid-play
@@ -49,6 +49,7 @@ namespace PlxHost
         private static bool offsetSent;
         private static int select = -1;
         private static int switchTo = -1;
+        private static bool cbAtPrepared;
         private static bool switchSent;
 
         // The config comes over HTTP from the emulator host's loopback (sdb refuses a push into the app's data directory); no answer = off.
@@ -115,6 +116,7 @@ namespace PlxHost
                 int rc = player_set_subtitle_path(player, v);
                 PlxApp.Log("subprobe: player_set_subtitle_path(" + v + ") returned " + rc);
             }
+            cbAtPrepared = cfg.TryGetValue("cb", out v) && v == "prepared";
             if (cfg.TryGetValue("cb", out v) && v == "1")
             {
                 int rc = player_set_subtitle_updated_cb(player, Cb, IntPtr.Zero);
@@ -141,6 +143,11 @@ namespace PlxHost
             }
             PlxApp.Log("subprobe: at PREPARED +" + Clock.ElapsedMilliseconds + " ms: text track count rc=" + rc + " count=" + count
                 + " current rc=" + rcCur + " idx=" + cur + " [" + string.Join(", ", langs) + "]");
+            if (cbAtPrepared)
+            {
+                int rcc = player_set_subtitle_updated_cb(player, Cb, IntPtr.Zero);
+                PlxApp.Log("subprobe: player_set_subtitle_updated_cb at PREPARED returned " + rcc);
+            }
             if (select >= 0)
             {
                 int rcs = MediaPlayerNative.player_select_track(player, STREAM_TYPE_TEXT, select);
