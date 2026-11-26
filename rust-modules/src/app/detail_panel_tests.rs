@@ -326,11 +326,12 @@ fn a_picked_version_is_selected_and_nothing_plays_though_its_panel_is_still_clos
         ..Default::default()
     });
     let host = page_instance(&w.d);
+    let page = w.d.nav.top_page().map(|e| e.id).expect("the page mounted");
     open_content_panel(
         &mut w.d,
         host,
         Some((plx_plex::plex::ServerId::UNSET, "movie")),
-        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (plx_machine::machine::EntryId(0), plx_screens::registry::HeroCtl::More.elem()) },
+        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (page, plx_screens::registry::HeroCtl::More.elem()) },
     );
     w.frames(40);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
@@ -367,11 +368,12 @@ fn a_version_pick_asks_for_no_play_when_the_platform_composed_no_driver() {
     });
     w.bridge.bridge().retained.screen_inputs.backends = plx_media::route::BackendSet::NONE;
     let host = page_instance(&w.d);
+    let page = w.d.nav.top_page().map(|e| e.id).expect("the page mounted");
     open_content_panel(
         &mut w.d,
         host,
         Some((plx_plex::plex::ServerId::UNSET, "movie")),
-        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (plx_machine::machine::EntryId(0), plx_screens::registry::HeroCtl::More.elem()) },
+        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (page, plx_screens::registry::HeroCtl::More.elem()) },
     );
     w.frames(40);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
