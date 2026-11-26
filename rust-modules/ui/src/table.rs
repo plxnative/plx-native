@@ -2299,13 +2299,8 @@ impl TableView {
             };
             // PLACE 2 — the label over its optional sub-line. Compact tables read their single-line
             // labels at BODY regular.
-            let (lsz, lbold) = if self.lineup {
-                (theme::size::CAPTION, 0)
-            } else if self.compact {
-                (theme::size::BODY, 0)
-            } else {
-                (theme::size::HEADLINE, 1)
-            };
+            let (lsz, bold) = self.label_style();
+            let lbold = i32::from(bold);
             // the lineup face reads its station a step behind the number: secondary off the pill
             let label_ink = if self.lineup { on_pill(theme::TEXT_SECONDARY, ink) } else { base };
             let text_w = self.label_width(row, frame.w, measure);

@@ -144,14 +144,19 @@ impl ChannelEntryScreen {
         entry::matches(&self.cands, &self.typed).collect()
     }
 
+    /// How many channels match the digits typed so far.
+    fn shown_len(&self) -> usize {
+        entry::matches(&self.cands, &self.typed).count()
+    }
+
     /// How many matches the window of [`LIST_ROWS`] rows leaves under it: the "+N more" count.
     pub fn more(&self) -> usize {
-        self.shown().len().saturating_sub(LIST_ROWS)
+        self.shown_len().saturating_sub(LIST_ROWS)
     }
 
     /// The panel's three stacked parts: the typed number, the list (or the no-match read-out) and the "+N more" line.
     fn parts(&self, measure: &dyn plx_machine::machine::Measure) -> [Item; 3] {
-        let n = self.shown().len();
+        let n = self.shown_len();
         let list = if n == 0 { ROW_H } else { n.min(LIST_ROWS) as f32 * ROW_H + PAD_V };
         let more = if self.more() > 0 { Item::new(measure.cap_h(theme::size::MICRO)) } else { Item::absent() };
         [Item::new(HEAD_H), Item::new(list), more]
@@ -420,9 +425,9 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
         let p = f.painter.alpha(appear).translate(dx, dy);
         let field = f.underlay;
         let [head, list, more] = self.bands(r, measure);
-        let typed = self.typed.clone();
-        let shown = self.shown().len();
-        let left = self.more();
+        let typed = &self.typed;
+        let shown = self.shown_len();
+        let left = shown.saturating_sub(LIST_ROWS);
         let frame = self.frame(measure);
         let text_x = |band: Rect| band.x + CONTENT_X - SIDE;
         plx_ui::profile::phase("dt.channel_entry", || {
@@ -438,7 +443,7 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
             }
             if let Some(band) = list {
                 if shown == 0 {
-                    let none = plx_os::i18n::msg::widgets_live_entry_none(&typed);
+                    let none = plx_os::i18n::msg::widgets_live_entry_none(typed);
                     if let Ok(text) = std::ffi::CString::new(none) {
                         Label::new(text.as_ptr(), theme::size::CAPTION, theme::TEXT_SECONDARY)
                             .h(HAlign::Left)
