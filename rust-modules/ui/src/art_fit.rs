@@ -14,8 +14,10 @@
 //!   still covered (a 2:3 poster draws exactly as before). Any other picture is CONTAINED: the whole
 //!   image, centred, its aspect kept, over a backdrop that is the same image cover-filled to the tile
 //!   and blurred, and dimmed ([`crate::theme::ART_BACKDROP_TINT`]) so the contained image reads. The
-//!   tile's rounded corners, shadow, sheen, focus scale and resume bar are the tile's, drawn once
-//!   around both layers by the shared card pass, exactly as for a covered picture.
+//!   tile's rounded corners, shadow, focus scale and resume bar are the tile's, and a FOCUSED tile
+//!   is lit (rim glow, sheen crown, gloss) as one card pass around both layers, exactly as a covered
+//!   picture is. At rest the picture is a second quad over the copy's card pass, so its square edge
+//!   covers the constant 1px sheen along the sides where it touches the tile.
 //!
 //! [`place`] is that decision, pure over the source size and the tile rect.
 //!
@@ -168,7 +170,7 @@ pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
 /// it (not `card_art::resample`'s full-area box mean, which would read every texel of a ~375 KB
 /// picture on the main thread, and would need the buffer copied into its `Rgba`), and one 3 x 3 box
 /// pass (edges clamped) smooths the result. **Colour is weighted by coverage** (alpha), so a picture
-/// with a transparent ground (a channel's logo, which the server hands back as a PNG) blurs to its
+/// with a transparent ground (a PNG, as some channel art links serve it) blurs to its
 /// own ink and not to whatever RGB sits under its transparent texels; a texel with no coverage
 /// around it takes the picture's overall colour. An opaque picture is a plain mean. The copy is
 /// opaque and keeps the picture's aspect, so the tile's cover window
@@ -363,7 +365,7 @@ mod tests {
         assert!(any.backdrop.is_some());
     }
 
-    /// A picture with a transparent ground (a channel's logo: the server returns it as a PNG) blurs to
+    /// A picture with a transparent ground (a PNG, as some channel art links serve it) blurs to
     /// its own ink: the RGB under the transparent texels is not the logo's colour and must not tint
     /// the copy, and a picture with nothing opaque still gets a (black) copy rather than none.
     #[test]

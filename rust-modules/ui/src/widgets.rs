@@ -1073,8 +1073,9 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
 ///
 /// A FOCUSED contained tile (`f > 0`) composes both layers INSIDE the one card pass
 /// ([`Painter::tex_carded_inset`]): the card's rim glow, sheen crown and gloss ramp are that pass's,
-/// and a second quad over it would paint over them inside its box. At rest there is no rim or gloss
-/// to lose and two plain quads are the cheaper program.
+/// and a second quad over it would paint over them inside its box. At rest there is no glow, crown or
+/// gloss to lose and two plain quads are the cheaper program; the picture's square edge does cover the
+/// constant 1px sheen along the sides where it touches the tile.
 fn paint_poster_art(pa: Painter, placement: Placement, t: u32, backdrop: u32, r: Rect, rad: f32, f: f32) {
     match placement {
         Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),

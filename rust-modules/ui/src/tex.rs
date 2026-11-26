@@ -7,7 +7,7 @@
 //!
 //! **The result handler only ACCEPTS** (`accept`: owned pixels into the pending queue, no GL).
 //! **Upload happens in PREPARE** (`prepare`: §3.3 step 9, after `glViewport`, inside the
-//! presented frame's GL scope, one `Budget::take` per upload, `warm` on each). A frame that does
+//! presented frame's GL scope, one `Budget::take` per entry, the picture warmed). A frame that does
 //! not present uploads nothing and the queue waits — and it does not wait long, because
 //! `note_queued` publishes the queue to the budget before the present decision reads it, so
 //! pending work is itself a reason to present. The class of a take is chosen by the decoded byte
@@ -70,7 +70,8 @@ pub enum Warm {
 }
 
 /// The application's SOURCE half of image caching (spec §10), as the library sees it: an
-/// interning of `(server, path, w, h, png)` into an opaque [`PosterKey`], a fetch it starts on a
+/// interning of `(server, path, w, h, png, backdrop)` (the request plus the blurred copy it declares)
+/// into an opaque [`PosterKey`], a fetch it starts on a
 /// miss, and a decoded image it hands back through [`accept`]. `srv` is the server's raw id —
 /// the library never names an application type. Installed once at boot ([`install`]).
 pub trait Source {
@@ -891,7 +892,7 @@ mod tests {
         c.prepare(&mut b, up, &mut PresentHandle(&mut present), || frame_us);
     }
 
-    /// The blurred copy lives and dies with its picture: uploaded and warmed with it, answered by
+    /// The blurred copy lives and dies with its picture: uploaded with it (the copy is not warmed), answered by
     /// the same one resolve, counted in the entry's bytes, and freed with the entry however the
     /// entry goes (recycled, evicted under pressure, replaced in place, shut down).
     #[test]

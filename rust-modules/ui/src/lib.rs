@@ -1696,7 +1696,8 @@ impl Painter {
     /// and inked `backdrop_ink`, and `inner_tex` the picture laid whole in `inner`, in ONE pass. A
     /// FOCUSED card's rim glow, sheen crown and gloss ramp belong to that pass, so the picture has to
     /// be composed inside it: a second quad over it paints over them. `false`, having drawn nothing,
-    /// for a resting card (no rim or gloss, and two plain quads are the cheaper program) or when the
+    /// for a resting card (no glow, crown or gloss to lose, and two plain quads are the cheaper program;
+    /// the picture's square edge does cover the constant 1px sheen where it touches the tile) or when the
     /// specialization did not link: the caller draws the two quads then.
     #[allow(clippy::too_many_arguments)]
     pub fn tex_carded_inset(self, tex: u32, uv: [f32; 4], backdrop_ink: [f32; 4], inner_tex: u32, inner: Rect,

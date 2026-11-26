@@ -152,8 +152,8 @@ void main(){
   vec3 tex = c.rgb;
   float ta = c.a;
 #elif defined(PLX_INSET)
-  // The backdrop is opaque and dimmed by `u_dim`; the picture goes over it by ITS OWN alpha (a
-  // channel's logo has a transparent ground), inked by `u_tint`. The card's alpha is the backdrop's
+  // The backdrop is opaque and dimmed by `u_dim`; the picture goes over it by ITS OWN alpha (art
+  // may have a transparent ground), inked by `u_tint`. The card's alpha is the backdrop's
   // times the fade, exactly as for a covered card.
   vec3 tex = c.rgb*u_dim;
   float ta = c.a*u_tint.a;

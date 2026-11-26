@@ -1,5 +1,5 @@
 //! The application's SOURCE half of image caching (restructure spec §10): interning
-//! `(server, path, w, h, png)` into an opaque [`PosterKey`] (a slot index), the transcode request
+//! `(server, path, w, h, png, backdrop)` into an opaque [`PosterKey`] (a slot index), the transcode request
 //! path and its token, the fetch + decode workers, the disk tier (`imgcache`), the prefetch gate
 //! and the slot LRU. It delivers a decoded image as `tex::PosterReady` and holds NO texture: GL
 //! residency is the library's [`plx_ui::tex::TexCache`], reached through `ui::tex`'s free
@@ -1245,14 +1245,15 @@ fn lookup_art(srv: ServerId, key_s: &str, touch: Touch, backdrop: Option<Backdro
             return (hit, Warm::Known);
         }
     }
-    // The same picture held under an older account epoch or identity: the hit loop above could not
-    // match it, so whatever this draw gets next — a claim, or a decline while the card moves — it
+    // The same picture held under an older account epoch or identity, or under another declared copy:
+    // the hit loop above could not match it, so whatever this draw gets next — a claim, or a decline while the card moves — it
     // lost that picture for THIS reason. Named here, before any early return, because the draw
     // that reports the blink is usually a declined one (imgtrace printed `cause=unknown` for 18 of
     // 19 tiles in the owner's revocation trace).
     if trace::armed() {
         if let Some(s) = g.slots.iter().find(|s| same_art(s, srv, key_s.as_bytes())) {
-            trace::lost_id(trace::current(), if s.cache_gen != cache_gen { "cache_gen" } else { "grant_epoch" });
+            let cause = if s.cache_gen != cache_gen { "cache_gen" } else if s.grant_epoch != grant_epoch { "grant_epoch" } else { "backdrop" };
+            trace::lost_id(trace::current(), cause);
         }
     }
     // A deck cover or composite that settled as a miss this session is not asked for again (not by

@@ -3748,7 +3748,7 @@ fn draw_tex_impl(
     // never onto all of it unless that is what `crop` says (a cover crop keeps the aspect).
     let uv = uv_compose(crop, uv_rect_padded(w, h, sides, top, qw, qh));
     let shinv = if shblur > 0.0 { 0.5 / shblur } else { 0.0 };
-    // An explicit `image` override (the still-fusion program) always wins — it is a whole different
+    // An explicit `image` override (the still-fusion, dissolve and inset programs) always wins — it is a whole different
     // specialization, never the plain/focus choice below. Otherwise, only a draw that is actually
     // focused or risen reaches for `FOCUS_IMAGE`; every other draw passes `None`, which
     // `draw_tex_core_in` resolves. A rounded resting card keeps drawing through the smaller `IPROG`
@@ -3905,7 +3905,8 @@ pub fn draw_tex_carded_blend(tex: c_uint, next: c_uint, mix: f32, crop: [f32; 4]
 ///
 /// `tint` is the picture's ink and the card's fade, `dim` the ink of the part of the card outside the
 /// picture (the backdrop's dimming). Returns `false`, drawing nothing, when the draw is not a focused
-/// or risen one (a resting card has no rim or gloss to lose, and the caller's two plain quads are
+/// or risen one (a resting card has no glow, crown or gloss to lose, though the picture's edge covers
+/// the constant 1px sheen where it touches the tile, and the caller's two plain quads are
 /// the cheaper program) or the specialization did not link; the caller then draws those two quads.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_tex_carded_inset(tex: c_uint, inner_tex: c_uint, inner: [f32; 4], crop: [f32; 4],
