@@ -47,7 +47,8 @@ use std::collections::VecDeque;
 /// `audio_track` is `true`: the contract makes a play whose PMS-selected audio stream has an id a `Selected` track
 /// requirement, and the start plan settles it with one `SelectTrack` once the player is prepared. The machine asks the
 /// host for it ([`Verb::AudioTrack`], `player_select_track` on the host's video thread) at a native index it chooses by
-/// evidence, never by position alone ([`choose_native_audio`]): the source's track map gives the stream's position among
+/// evidence, never by position alone ([`choose_native_audio`]), when the Part has more than one audio stream (a sole stream
+/// is settled by construction with no host call, as before the verb existed): the source's track map gives the stream's position among
 /// the Part's audio streams in PMS's order, and its [`NativeTrackCheck`] the stream's language, which the native track
 /// must report too (the host posts each native track's language before PREPARED). It settles the request only when the
 /// host's `PLAYER_TRACK` echoes the command with that index: the player's own answer, not a settle by construction. A
@@ -149,20 +150,19 @@ fn names_language(code: &str) -> bool {
     !code.is_empty() && !NO_LANGUAGE.iter().any(|none| code.eq_ignore_ascii_case(none))
 }
 
-/// **The native audio index of a stream, or why there is none.** `ordinal` is the stream's position among the Part's
-/// audio streams in PMS's order (the track map), `check` the identity evidence the source states for it, `native` each
-/// native track's language in the player's order (`None` = the player gave none). A sole stream is its ordinal. A stream
-/// with siblings is matched by language ([`lang_matches`], which folds ISO 639-1, 639-2/B and 639-2/T): the ordinal when
-/// its native track has the stream's language, else the ONE native track that does. Several such tracks with the ordinal
-/// not among them, none, or no language known on the server's side is a refusal: a wrong track must never settle as the
-/// viewer's pick.
-pub(super) fn choose_native_audio(ordinal: i64, check: Option<&NativeTrackCheck>, native: &[Option<String>])
-    -> Result<i64, String> {
-    let language = match check {
-        Some(NativeTrackCheck::Sole) => return Ok(ordinal),
-        Some(NativeTrackCheck::Language(language)) => language,
-        None => return Err("the source states no identity for the stream".to_owned()),
-    };
+/// **The native audio index of a stream with siblings, or why there is none.** `ordinal` is the stream's position among
+/// the Part's audio streams in PMS's order (the track map), `language` the stream's language as PMS states it, `native`
+/// each native track's language in the player's order (`None` = the player gave none). The stream is matched by
+/// language ([`lang_matches`], which folds ISO 639-1, 639-2/B and 639-2/T): the ordinal when its native track has the
+/// stream's language, else the ONE native track that does. Several such tracks with the ordinal not among them, none, or
+/// no language known on the server's side is a refusal.
+///
+/// What this cannot see: an order swap between siblings of ONE language (an English main track and an English
+/// commentary). When several native tracks share the stream's language and the ordinal is among them, the ordinal is
+/// trusted, so the player may play the sibling. Language is the only per-track identity the host reads with a verified
+/// call (`player_get_track_language_code`); the player API's codec and channel reads are of the CURRENT stream, not of
+/// an index, so they cannot tell siblings apart before a selection (`docs/tizen.md`, "The audio track is selected").
+pub(super) fn choose_native_audio(ordinal: i64, language: &str, native: &[Option<String>]) -> Result<i64, String> {
     if !names_language(language) {
         return Err(format!("PMS states no language for the stream ({language:?}), so its native track cannot be told"));
     }
@@ -423,7 +423,21 @@ impl Machine {
         }
         let Some(ordinal) = native_index(&active.tracks, track) else { return DispatchResult::Refused(Failure::Unsupported) };
         let check = active.checks.iter().find(|(stated, _)| *stated == track).map(|(_, check)| check);
-        let index = match choose_native_audio(ordinal, check, &active.native_audio) {
+        let chosen = match check {
+            // The only audio stream is the one the player plays: settled by construction, as before the verb existed,
+            // with no host call. Asking would prove nothing, and a firmware that reports no track for an HTTP source in
+            // READY would answer -1 and halt the start of every single-audio title.
+            Some(NativeTrackCheck::Sole) if ordinal == 0 => {
+                fx.push(Fx::Log(format!("tizen-uri: audio stream {id} is the only one: selected by construction, no host call")));
+                self.pending.push_back(DriverEvent::Observation { attempt, observation: Observation::TrackSelected(observed(track)) });
+                self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Audio, choice });
+                return DispatchResult::Queued;
+            }
+            Some(NativeTrackCheck::Sole) => Err(format!("a sole stream cannot sit at ordinal {ordinal}")),
+            Some(NativeTrackCheck::Language(language)) => choose_native_audio(ordinal, language, &active.native_audio),
+            None => Err("the source states no identity for the stream".to_owned()),
+        };
+        let index = match chosen {
             Ok(index) => index,
             Err(why) => {
                 fx.push(Fx::Log(format!("tizen-uri: audio stream {id} at ordinal {ordinal} refused: {why}")));

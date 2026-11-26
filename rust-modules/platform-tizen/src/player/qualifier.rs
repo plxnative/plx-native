@@ -11,7 +11,7 @@
 //!   behind those verdicts is `Caps::assumed()` today, not a Tizen measurement (`docs/tizen.md`).
 //! - **The selected audio stream is certified wherever it sits** (discussion #1460: the first retail set refused every
 //!   multi-audio title while this rule allowed only one stream). The offer's track map names it at its position among
-//!   the Part's audio streams (`audio_ordinal`), and states its identity check: [`NativeTrackCheck::Sole`] for a Part
+//!   the Part's audio streams (`audio_ordinal`), and states its identity check: [`NativeTrackCheck::Sole`] (settled by construction, no host call) for a Part
 //!   with one audio stream, otherwise the stream's language ([`NativeTrackCheck::Language`]), which the driver matches
 //!   against the native tracks' own languages before it asks the host player for an index, and settles on the player's
 //!   answer ([`super::machine::CAPS`]). A play that selects a stream whose position is unknown is declined
