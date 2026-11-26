@@ -26,9 +26,10 @@ use super::probe::Location;
 // bounds and sample rate, shared with the device profile.
 pub use plx_os::devcaps::DP_AUDIO_CODECS;
 
-/// Codec, channel and rate check for an actual selected track, against the capability value `caps`
-/// of the attempt asking. Codec-only membership is insufficient on devices whose DTS decoder stops
-/// at 5.1 or whose AAC decoder stops at stereo, on the PCM path, which can name only some rates,
+/// Codec, channel and rate check for an actual selected track the app's own demuxer will be fed
+/// direct, against the capability value `caps` of the attempt asking (a DTS track is judged by the
+/// core it is fed as, `Caps::audio_supports`). Codec-only membership is insufficient on devices
+/// whose DTS row stops below the 5.1 core or whose AAC decoder stops at stereo, on the PCM path, which can name only some rates,
 /// and for a source above the rate ceiling the profile asks the server for (the app-decoded lossless
 /// codecs have none: the app resamples a faster track, `devcaps::pcm_load_rate`). The rate half is
 /// `devcaps::audio_track_fits` (see `devcaps::AUDIO_RATE_CEILING`, #951).
@@ -37,6 +38,15 @@ pub use plx_os::devcaps::DP_AUDIO_CODECS;
 /// server is sent ([`TranscodeSpec::caps`]) and the plan that chose the track come from the same one.
 pub fn is_dp_audio_track_with(caps: &plx_os::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
     caps.audio_supports(codec, channels) && plx_os::devcaps::audio_track_fits(codec, channels, sample_rate)
+}
+
+/// [`is_dp_audio_track_with`] as an ENCODER SESSION's profile ([`profile_for_delivery`]) states it:
+/// that profile keeps a DTS row's bound on the track's own layout (`Caps::audio_layout_supports`),
+/// so the server converts a 7.1 DTS-HD MA on a `DTS/6` set even though the direct-play ask would
+/// admit it (#1537). A guess at what a session copies (`remux_output_acodec`, `classify_outcome`)
+/// reads this, never the direct-play predicate.
+pub fn is_session_audio_track_with(caps: &plx_os::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
+    caps.audio_layout_supports(codec, channels) && plx_os::devcaps::audio_track_fits(codec, channels, sample_rate)
 }
 
 /// Subtitle codecs Original client-renders (`ff.rs` / the track menu). This is the

@@ -950,7 +950,7 @@ fn decision_audio(mc: &plx_plex::plex::MediaContainer) -> Option<&str> {
 /// Grade a kept enhanced decision (issue #266's `EnhancementOutcome`). `Applied` only when the
 /// server transcoded audio this profile would otherwise have COPIED — the one case where the
 /// transcode is provably the DSP's doing (M2's AC3 2.0). A carried track outside the copy list
-/// (`plex::is_dp_audio_track_with` over the attempt's `caps`, the same value the profile's
+/// (`plex::is_session_audio_track_with` over the attempt's `caps`, the same value the session profile's
 /// `audioCodec`, `audio.channels` and `audio.samplingRate` lanes are built from) is transcoded at
 /// baseline too, so the ask was delivered but cannot be told apart from what would have happened
 /// anyway: `Unverified` (M2's AAC 5.1 under the measured profile).
@@ -965,7 +965,7 @@ pub(super) fn classify_outcome(
     if audio.is_none() {
         return EnhancementOutcome::Off;
     }
-    let copyable = carried.is_some_and(|a| plx_plex::plex::is_dp_audio_track_with(caps, &a.codec, a.channels, a.sample_rate));
+    let copyable = carried.is_some_and(|a| plx_plex::plex::is_session_audio_track_with(caps, &a.codec, a.channels, a.sample_rate));
     match mc.and_then(decision_audio) {
         Some("transcode") if copyable => EnhancementOutcome::Applied,
         _ => EnhancementOutcome::Unverified,
