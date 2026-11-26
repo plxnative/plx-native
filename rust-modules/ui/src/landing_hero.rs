@@ -127,8 +127,7 @@ pub fn shelf_fade(tiles_top: f32, hero_a: f32) -> WashRamp {
 /// layers when the hero slides. The field stays put while title and controls move across it.
 pub fn home_shade(shelf: WashRamp, hero_a: f32) -> crate::widgets::WashScrim {
     let k = hero_a.clamp(0.0, 1.0);
-    edge_wash(shelf, theme::shade::HOME_SIDE_HOLD, theme::shade::HOME_SIDE_REACH, None,
-        theme::shade::HOME_SIDE_A * k, k)
+    edge_wash(shelf, theme::shade::HOME_SIDE_REACH, None, theme::shade::HOME_SIDE_A * k, k)
 }
 
 /// Detail's continuous edge shade. During the logo's move the left fade gives way to a shallow
@@ -145,21 +144,19 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let rise = theme::shade::DETAIL_PREVIEW_RISE * t;
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));
-    // The rise grows only the reach: the hold already stands near the top-left, and growing it too
-    // would hold the side's full darkness over the corner the logo is travelling into while the side
-    // is fading out, so the corner would lighten before the top fade takes it over.
     let [reach_x, reach_y] = theme::shade::DETAIL_SIDE_REACH;
-    edge_wash(ramp, theme::shade::DETAIL_SIDE_HOLD, [reach_x, reach_y + rise], top_fade,
+    edge_wash(ramp, [reach_x, reach_y + rise], top_fade,
         theme::shade::DETAIL_SIDE_A * field * (1.0 - t), base.max(field.min(1.0)))
 }
 
-/// Both heroes' field: the side shade is an ellipse about the screen's bottom-left corner, held
-/// inside `hold` and gone at `reach` (semi-axes, `gfx::scrim::EdgeShade`), joined with `ramp`.
-fn edge_wash(ramp: WashRamp, hold: [f32; 2], reach: [f32; 2], top: Option<([f32; 2], f32)>,
+/// Both heroes' field: the side shade is an ellipse about the screen's bottom-left corner, gone at
+/// `reach` (semi-axes, `gfx::scrim::EdgeShade`) and rising across [`theme::shade::SIDE_FEATHER`]
+/// inside it, joined with `ramp`.
+fn edge_wash(ramp: WashRamp, reach: [f32; 2], top: Option<([f32; 2], f32)>,
     peak: f32, strength: f32) -> crate::widgets::WashScrim {
     use plx_gfx::gfx::scrim::{EdgeShade, GroundShade};
     let field = if strength > 0.0 {
-        GroundShade::from_edge(EdgeShade::new([0.0, SCR_H], hold, reach, top, ramp.stops,
+        GroundShade::from_edge(EdgeShade::new([0.0, SCR_H], reach, theme::shade::SIDE_FEATHER, top, ramp.stops,
             peak, theme::shade::EDGE_JOIN * strength))
     } else {
         GroundShade::NONE

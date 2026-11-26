@@ -280,12 +280,10 @@ pub mod hero {
 /// feathered content blocks. Both field types use `gfx::scrim::GroundShade`.
 pub mod shade {
     /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::EdgeShade`):
-    /// it holds [`DETAIL_SIDE_A`] inside these semi-axes (x along the bottom, y up the left edge)...
-    /// Detail needs legibility farther into the art for its wider title and synopsis.
-    pub const DETAIL_SIDE_HOLD: [f32; 2] = [1450.0, 900.0];
-    /// ...and has fallen to nothing at these. Both are curves, so the shade has no straight top or
-    /// right edge for the eye to read as a plate (discussion #1460).
-    pub const DETAIL_SIDE_REACH: [f32; 2] = [1900.0, 1020.0];
+    /// nothing on and outside these semi-axes (x along the bottom, y up the left edge), so on the
+    /// left edge the shade starts at y = 120, where the old box ramp started, and never sooner;
+    /// wide, so the iso-lines run in one long arc under the title's right end to the bottom-right.
+    pub const DETAIL_SIDE_REACH: [f32; 2] = [2234.0, 960.0];
     /// Grow the side shade's reach upward as the preview logo travels into the corner.
     pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
@@ -298,11 +296,15 @@ pub mod shade {
     /// Inactive pagination dots still need contrast against the art.
     pub const PAGER_IDLE_A: f32 = 0.50;
 
-    /// Home's side shade, the same ellipse about the bottom-left corner: held inside these
-    /// semi-axes, so the copy column keeps its full shade to its right edge...
-    pub const HOME_SIDE_HOLD: [f32; 2] = [1350.0, 870.0];
-    /// ...and gone at these.
-    pub const HOME_SIDE_REACH: [f32; 2] = [1650.0, 1075.0];
+    /// Home's side shade, the same ellipse about the bottom-left corner: nothing on and outside
+    /// these semi-axes, so it starts at y = 110 on the left edge (the old box ramp's start) and has
+    /// reached nothing at the right edge above the shelf.
+    pub const HOME_SIDE_REACH: [f32; 2] = [2125.0, 970.0];
+    /// **How far inside the reach ellipse either side shade rises to its full strength**, in px along
+    /// the ellipse's shorter axis (wider along the longer one): a smoothstep, so the shade never
+    /// changes faster than `1.5 * peak / SIDE_FEATHER` per px in any direction. Wide on purpose: a
+    /// narrower band reads as an edge, which a tester took for a backlight fault (discussion #1460).
+    pub const SIDE_FEATHER: f32 = 400.0;
     /// Strength at the left under the logo, metadata and actions.
     pub const HOME_SIDE_A: f32 = 0.59;
     /// Opacity difference over which the side and shelf shades softly join.

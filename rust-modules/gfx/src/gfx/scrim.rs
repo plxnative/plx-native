@@ -153,19 +153,21 @@ impl ShadeBlock {
 /// so it cannot produce the dark seam of two independently blended overlays.
 ///
 /// **The side shade is elliptical, anchored at a corner** (`origin`, the screen's bottom-left on
-/// both heroes). It holds `peak` inside the ellipse of semi-axes `hold` and falls smoothly to
-/// exactly 0 at the ellipse of semi-axes `reach`, both centred on `origin`. Between the two the
-/// fall is `smoothstep` of `t = (d_hold - 1) / (d_hold - d_reach)`, where `d_*` is the point's
-/// elliptical radius against each ellipse (`|(q.x / a, q.y / b)|`, `q` the offset from `origin`
-/// with y pointing up): `t` is 0 on the hold ellipse, 1 on the reach ellipse and rises
-/// monotonically along any row, column or ray between them. It replaced a separable product of a
-/// horizontal and a vertical ramp, whose iso-lines are straight along both axes and read as the
-/// edges of a dark plate (discussion #1460). Every edge of this one is a curve.
+/// both heroes). It is exactly 0 on and outside the ellipse of semi-axes `reach` centred on
+/// `origin`, and rises inward across a band `feather` px wide (measured along the shorter
+/// semi-axis, wider along the longer one) to hold `peak` inside it: `peak * smoothstep(t)` with
+/// `t = (1 - d) * min(reach) / feather`, where `d = |(q.x / reach.x, q.y / reach.y)|` is the point's
+/// elliptical radius (`q` the offset from `origin`, y pointing up). `d` is homogeneous, so its
+/// gradient is constant along a ray and at most `1 / min(reach)` anywhere: the side shade never
+/// changes faster than `1.5 * peak / feather` per px, in any direction. That bound is the softness
+/// (discussion #1460: a tester read the shade's edge as a backlight fault). It replaced a separable
+/// product of a horizontal and a vertical ramp, whose iso-lines are straight along both axes and
+/// read as the edges of a dark plate; every iso-line of this one is a curve.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EdgeShade {
     origin: [f32; 2],
-    hold: [f32; 2],
     reach: [f32; 2],
+    feather: f32,
     top: Option<([f32; 2], f32)>,
     shelf: [(f32, f32); 3],
     peak: f32,
@@ -173,33 +175,34 @@ pub struct EdgeShade {
 }
 
 impl EdgeShade {
-    /// The side shade anchored at `origin` (held inside the `hold` semi-axes, gone at the `reach`
-    /// ones; `reach` must exceed `hold` on both axes), an optional full-width top fade given as its
-    /// vertical bounds and peak alpha, and the shelf ramp. The top fade's alpha and the side alpha
-    /// can crossfade before the lower ramp joins them.
-    pub fn new(origin: [f32; 2], hold: [f32; 2], reach: [f32; 2], top: Option<([f32; 2], f32)>,
+    /// The side shade anchored at `origin` (gone at the `reach` semi-axes, at full `peak` from
+    /// `feather` px inside them), an optional full-width top fade given as its vertical bounds and
+    /// peak alpha, and the shelf ramp. The top fade's alpha and the side alpha can crossfade before
+    /// the lower ramp joins them.
+    pub fn new(origin: [f32; 2], reach: [f32; 2], feather: f32, top: Option<([f32; 2], f32)>,
         shelf: [(f32, f32); 3], peak: f32, join: f32) -> Self {
-        debug_assert!(reach[0] > hold[0] && reach[1] > hold[1] && hold[0] > 0.0 && hold[1] > 0.0,
-            "the reach ellipse lies outside the hold ellipse");
-        Self { origin, hold, reach, top, shelf, peak, join }
+        debug_assert!(reach[0] > 0.0 && reach[1] > 0.0 && feather > 0.0 && feather <= reach[0].min(reach[1]),
+            "a feather inside a non-empty ellipse");
+        Self { origin, reach, feather, top, shelf, peak, join }
     }
 
-    /// The side shade's fall, 0 inside the hold ellipse to 1 on and past the reach ellipse, from
-    /// the same reciprocals the shader is handed ([`GroundShade::uniforms`]).
+    /// The side shade's rise, 0 on and past the reach ellipse to 1 at `feather` inside it, from the
+    /// same reciprocals the shader is handed ([`GroundShade::uniforms`]).
     fn side_t(self, x: f32, y: f32) -> f32 {
         let (qx, qy) = (x - self.origin[0], self.origin[1] - y);
-        let d_hold = ((qx * (1.0 / self.hold[0])).powi(2) + (qy * (1.0 / self.hold[1])).powi(2)).sqrt();
-        if d_hold <= 1.0 {
-            return 0.0;
-        }
-        let d_reach = ((qx * (1.0 / self.reach[0])).powi(2) + (qy * (1.0 / self.reach[1])).powi(2)).sqrt();
-        ((d_hold - 1.0) / (d_hold - d_reach).max(1e-6)).clamp(0.0, 1.0)
+        let d = ((qx * (1.0 / self.reach[0])).powi(2) + (qy * (1.0 / self.reach[1])).powi(2)).sqrt();
+        ((1.0 - d) * self.band()).clamp(0.0, 1.0)
+    }
+
+    /// `min(reach) / feather`: how many units of `t` one unit of elliptical radius is.
+    fn band(self) -> f32 {
+        self.reach[0].min(self.reach[1]) / self.feather
     }
 
     fn at(self, x: f32, y: f32) -> f32 {
         let progress = |v: f32, lo: f32, hi: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
         let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-        let side = self.peak * (1.0 - smooth(self.side_t(x, y)));
+        let side = self.peak * smooth(self.side_t(x, y));
         let upper = side + self.top.map_or(0.0, |([start, end], peak)| {
             peak * (1.0 - smooth(progress(y, start, end)))
         });
@@ -226,8 +229,8 @@ impl EdgeShade {
     fn placed(self, ox: f32, oy: f32, s: f32) -> Self {
         Self {
             origin: [self.origin[0] * s + ox, self.origin[1] * s + oy],
-            hold: self.hold.map(|a| a * s),
             reach: self.reach.map(|a| a * s),
+            feather: self.feather * s,
             top: self.top.map(|(bounds, peak)| (bounds.map(|y| y * s + oy), peak)),
             shelf: self.shelf.map(|(y, a)| (y * s + oy, a)),
             ..self
@@ -352,7 +355,7 @@ impl GroundShade {
         let mut u = [[0.0; 4]; VEC4S];
         if let Some(edge) = self.edge {
             let [(top, a), (mid, b), (foot, c)] = edge.shelf;
-            u[0] = [1.0 / edge.hold[0], 1.0 / edge.hold[1], 1.0 / edge.reach[0], 1.0 / edge.reach[1]];
+            u[0] = [1.0 / edge.reach[0], 1.0 / edge.reach[1], edge.band(), 0.0];
             u[1] = [top, mid, foot, a];
             u[2] = [b, c, edge.peak, edge.join];
             if let Some(([start, end], peak)) = edge.top {
@@ -465,7 +468,7 @@ mod tests {
 
     #[test]
     fn edge_shade_translates_and_scales_with_its_painter() {
-        let edge = EdgeShade::new([0.0, 1080.0], [700.0, 675.0], [960.0, 970.0], Some(([20.0, 260.0], 0.32)),
+        let edge = EdgeShade::new([0.0, 1080.0], [960.0, 970.0], 300.0, Some(([20.0, 260.0], 0.32)),
             [(768.0, 0.0), (886.0, 0.25), (1012.0, 0.93)], 0.59, 0.10);
         let shade = GroundShade::from_edge(edge);
         assert_eq!(shade.shader_count(), -1.0);

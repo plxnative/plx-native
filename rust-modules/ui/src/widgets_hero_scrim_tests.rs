@@ -155,3 +155,65 @@ fn the_side_shade_falls_off_in_a_curve_not_a_box_corner() {
             "{name}: the shade's top edge is a straight horizontal line (y={top_left} on x=100, y={top_inner} on x=500)");
     }
 }
+
+/// Both heroes' side shade on its own, with its peak: the page's field with the bottom ramp (Detail)
+/// or the shelf (Home) at zero, which leaves exactly the side term (`EdgeShade::at` joins a zero
+/// ramp to nothing).
+fn side_shades() -> [(&'static str, WashScrim, f32); 2] {
+    use crate::landing_hero::{detail_shade, home_shade, shelf_fade, SHELF_TOP};
+    [
+        ("detail", detail_shade(1.0, 1.0, 0.0, 0.0), theme::shade::DETAIL_SIDE_A),
+        ("home", home_shade(shelf_fade(SHELF_TOP, 0.0), 1.0), theme::shade::HOME_SIDE_A),
+    ]
+}
+
+/// **The side shade has no edge anywhere: it changes slowly in every direction.** Discussion #1460:
+/// the tester read a crisp fall of the shade as a backlight fault, so the side term may never change
+/// faster than a smoothstep across 400 px would at its steepest (`1.5 * peak / 400`), with a
+/// little room (`1.6`) for the sampling. Graded on the gradient's MAGNITUDE over the whole frame,
+/// so a band that is wide across the copy but narrow up the left edge (the old box's 280 px
+/// vertical ramp) or narrow normal to a curve (a thin feather between two ellipses) both fail.
+#[test]
+fn the_side_shade_has_no_edge_anywhere() {
+    for (name, shade, peak) in side_shades() {
+        let limit = 1.6 * peak / 400.0;
+        let mut worst = (0.0f32, 0.0, 0.0);
+        for y in (1..1080).step_by(4) {
+            for x in (1..1920).step_by(4) {
+                let (x, y) = (x as f32, y as f32);
+                let gx = (shade.alpha(x + 1.0, y) - shade.alpha(x - 1.0, y)) * 0.5;
+                let gy = (shade.alpha(x, y + 1.0) - shade.alpha(x, y - 1.0)) * 0.5;
+                let g = (gx * gx + gy * gy).sqrt();
+                if g > worst.0 {
+                    worst = (g, x, y);
+                }
+            }
+        }
+        let (g, x, y) = worst;
+        eprintln!("{name}: steepest {:.5}/px at ({x},{y}), limit {limit:.5} (a {:.0} px smoothstep)", g, 1.5 * peak / g);
+        assert!(g <= limit, "{name}: the side shade changes {g:.5}/px at ({x},{y}), over {limit:.5}: a visible edge");
+    }
+}
+
+/// **The side shade covers no more of the art's top-left than the box it replaced.** The tester's
+/// complaint was a shade too strong over the picture, so softening it may not buy legibility by
+/// climbing higher: over the top-left (x ≤ 600, y ≤ 250, where the title's art usually is) the
+/// side term is no darker anywhere than the old separable field's (`main` before #1460's fix: a
+/// smoothstep down from y0 to y1 times one across from x0 to x1, quoted here as it was).
+#[test]
+fn the_side_shade_covers_no_more_of_the_top_left_than_the_box_did() {
+    let smooth = |t: f32| { let t = t.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) };
+    let old = |x: f32, y: f32, peak: f32, [x0, x1]: [f32; 2], [y0, y1]: [f32; 2]| {
+        peak * (1.0 - smooth((x - x0) / (x1 - x0))) * smooth((y - y0) / (y1 - y0))
+    };
+    let boxes = [([600.0, 1700.0], [120.0, 400.0]), ([850.0, 1650.0], [110.0, 405.0])];
+    for ((name, shade, peak), (bx, by)) in side_shades().into_iter().zip(boxes) {
+        for y in (0..=250).step_by(2) {
+            for x in (0..=600).step_by(4) {
+                let (x, y) = (x as f32, y as f32);
+                let (now, was) = (shade.alpha(x, y), old(x, y, peak, bx, by));
+                assert!(now <= was + 1e-6, "{name}: ({x},{y}) is {now:.3}, darker than the box's {was:.3}");
+            }
+        }
+    }
+}

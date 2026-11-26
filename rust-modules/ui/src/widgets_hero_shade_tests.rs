@@ -283,6 +283,7 @@ fn home_hero_and_shelf_copy_read_over_white_artwork() {
         (theme::TEXT_SECONDARY, SCR_W, footer_y),
     ] {
         let alpha = shade.alpha(x, y);
+        eprintln!("PROBE home ({x},{y}) alpha {alpha:.3} bright {:.2} white {:.2}", contrast_over_art(ink, 0.85, alpha), contrast_over_art(ink, 1.0, alpha));
         assert!(contrast_over_art(ink, 0.85, alpha) >= 3.0, "bright artwork at ({x}, {y}), shade {alpha}");
         assert!(contrast_over_art(ink, 1.0, alpha) >= 2.5, "white artwork at ({x}, {y}), shade {alpha}");
     }
