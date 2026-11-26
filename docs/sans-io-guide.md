@@ -51,7 +51,7 @@ global sites are retired: the Person-only checkpoint is **4 workers / 43 globals
 ## Which code is a machine
 
 Every entry in `ci/machines.ini` must bind its private state field, sole transition and constructor
-with `writer_policy = strict`; none of the ten registered machines has a privacy-only exemption.
+with `writer_policy = strict`; none of the registered machines has a privacy-only exemption.
 Add the matching module enum policy and an unconditional `deny`/`forbid` header for
 `clippy::wildcard_enum_match_arm`. Local `allow`, `expect` and `warn` (including `cfg_attr` and
 production children/includes) fail the source gate. Numeric/wire-string fallbacks are still valid.
