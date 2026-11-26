@@ -734,12 +734,23 @@ recorded afresh the same way (`tests/focusfp.sh --rec --only 12`, `plxnative-rec
 true` restored), then replayed SAME in Targets and Resolve on three consecutive runs.
 `docs/ui-replay-v13-anchor.md` has the record.
 
-The recorded Home result's shape gained a shelf's decided `library` (`record::SHAPE`), which moved the state
-shape from `8363262880582770195` to `1163829971889928819`; the Home roster's key also began to fold Browse's
-household verdicts before a pin table, which republishes Home once more on the verdict's landing, so the
-committed anchors replayed DIVERGED from the first Home landing with every difference counter at zero. Both current
-anchors no longer match the shape (`plxnative-rec rerecord` accepts a fixture only when its shape moved), so they
-were recorded afresh against the synthetic server (`MOCK_PORT=32685 tests/focusfp.sh --rec --only 12,13`) and installed
-with `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a
-`ShelfLibrary` variant name). Targets and Resolve both report SAME with every difference counter at zero (998 and
-1343 frames). `docs/ui-replay-v13-anchor.md` has the record.
+The Live TV What's on page (its Recent row replaces the lineup shelf) added the Recent channels to the Live TV
+screen's shape, so `SCREEN_SHAPES_PIN` moved and the two current anchors, `v13-owned-input-content` and
+`13-by-id-filmography`, were observed refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`,
+`plxnative-rec rerecord`, `anchor: true` preserved; shape `2884821880834123965`). `make check-replay` replays
+them SAME in Targets and Resolve (925 and 1210 frames, every difference counter zero); the four historical
+fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The What's on page's Channels shelf (a third shelf on the Live TV screen, so every channel stays reachable) moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors, `v13-owned-input-content` and `13-by-id-filmography`, were observed
+refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape
+`13368307521658900119`). `make check-replay` replays them SAME in Targets and Resolve (919 and 1138 frames, every difference
+counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The recorded Home result's shape then gained a shelf's decided `library` (`record::SHAPE`), on top of the What's on page and its
+Channels shelf (merged 2026-11-26), which moved the state shape from `13368307521658900119` to `2394259170236073719`; the Home roster's key also began
+to fold Browse's household verdicts before a pin table, which republishes Home once more on the verdict's landing. Both current anchors,
+`v13-owned-input-content` and `13-by-id-filmography`, no longer match the shape (`plxnative-rec rerecord` accepts a fixture only when its
+shape moved), so they were recorded afresh on the merged tree (`tests/focusfp.sh --rec --only 12,13`) and installed with
+`tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a `ShelfLibrary` variant name). Targets
+and Resolve both report SAME with every difference counter at zero (965 and 1306 frames). `docs/ui-replay-v13-anchor.md` has the record.

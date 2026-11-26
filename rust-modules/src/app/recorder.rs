@@ -2883,8 +2883,14 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        // A recorded shelf carries the library it was decided for: previously 0x7410_4747_8858_9e13.
-        assert_eq!(state_fp(), 0x1026_c131_7573_ba73, "current V13 producer census");
+        // A recorded shelf carries the library it was decided for (`record::SHAPE`), on top of the What's on
+        // page (the Live TV screen's shape lists its Recent channels, moved from 0x7410_4747_8858_9e13) and its
+        // Channels shelf (three shelves on the Live TV stack, moved from 0x2808_f237_5764_68bd): moved from
+        // 0xb985_c4dc_d4a9_4e97.
+        assert_eq!(state_fp(), 0x213a_1e07_ae24_86f7, "current V13 producer census");
+        assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the shelf's recorded library");
+        assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");
+        assert_ne!(state_fp(), 0x7410_4747_8858_9e13, "the census before the What's on page");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");
