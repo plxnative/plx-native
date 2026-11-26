@@ -380,7 +380,7 @@
       "gfx/Cargo.toml": "a25b3c3d2ffa326949694ab36de52f4233ed3dd4372e69eb0af2b66bace3cb72",
       "machine/Cargo.toml": "ac864d90649890758fa1ea8bae030139c478af437d81efb4f0e707e6c3136095",
       "media-codecs/Cargo.toml": "503c8681289314b5c8a63195aad6796cbad93fcb3eedd8d7cba9e8ed0233783f",
-      "media/Cargo.toml": "fcaccbc4931f6565029283b303b14e737098c4baba41f8d765400cc532221f95",
+      "media/Cargo.toml": "f54a26471364ebc0550e86c8050192ae3deb1e0e281899fa36089f6d69bc47a3",
       "net/Cargo.toml": "bfdb3a08200642eeeafc9762733718c407529f26dce8a7b90665bc77ac928171",
       "os/Cargo.toml": "5277cc70ba105d97dbea8bdbeac04a3f56674b7cf80419c49bf0d7e0f1874624",
       "owp/Cargo.toml": "2c1354bce16b34f0d006fc04cd4c8eb22ef91f00063b53a1113e32f475ecae33",
