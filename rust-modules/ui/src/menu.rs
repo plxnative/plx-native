@@ -669,6 +669,11 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         crate::page_stack::popover_place(self, key, measure)
     }
 
+    /// The identity of the row under focus key `key`, on the page showing.
+    pub fn id_of(&self, key: u32) -> Option<&Id> {
+        self.form.index_of_key(crate::form::RowKey(key)).and_then(|i| self.form.id_at(i))
+    }
+
     /// The rows a focus stop exists for, in row order.
     pub fn focusable(&self) -> impl Iterator<Item = u32> + '_ {
         (0..self.form.table.n_rows() as usize).filter_map(|i| self.form.key_at(i).map(|k| k.0))

@@ -1,6 +1,5 @@
 //! Shared detail hero geometry, also used by the contrast and safe-area audits.
-use super::{consts::{MARGIN_X, MARGIN_Y}, table::TableView, theme, widgets, Rect};
-use plx_machine::machine::Measure;
+use super::{consts::{MARGIN_X, MARGIN_Y}, theme, widgets, Rect};
 #[cfg(any(test, feature = "test-support"))]
 use super::consts::SCR_W;
 #[cfg(test)]
@@ -93,18 +92,6 @@ pub fn hero_host(anchor: [u32; 4]) -> super::menu::Host {
         clear_y: Some(f32::from_bits(anchor[1]) - SYNOPSIS_FOOT_ABOVE_ACTIONS),
         fill: theme::ACCENT,
     }
-}
-
-/// **The ONE sizing and placing rule of every panel that grows out of a hero control**: the `…` menu with
-/// its pages, Select Version and Audio & Subtitles. The width is the table's own menu width, never
-/// narrower than the control's pill ([`TableView::menu_panel_width_from`], which honours
-/// `min_panel_w`); the height is the table's, between 120 px and the safe frame's height; the rect is
-/// [`hero_panel_over`] the pill of the control whose drawn rect is `anchor`.
-pub fn hero_panel_rect(table: &TableView, anchor: [u32; 4], measure: &dyn Measure) -> Rect {
-    let pill = hero_pill(anchor);
-    let actions_y = f32::from_bits(anchor[1]);
-    let size = (table.menu_panel_width_from(measure, pill), table.measured_height().clamp(120.0, super::consts::SAFE.h));
-    hero_panel_over(pill, actions_y, size)
 }
 
 /// Bottom of the credits' full leading boxes, aligned by the last cap band to the facts.
