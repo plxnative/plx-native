@@ -32,7 +32,7 @@
 //! do, not a codec verdict ([`CAPS`]); which streams the platform player decodes is the qualifier's concern
 //! ([`super::qualifier`]).
 use super::port::{Refusal, Verb, FULL_WINDOW};
-use crate::host_abi::{language_of_word, PlayerEvent, PlayerKind, PLAYER_FAIL_BASE};
+use crate::host_abi::{language_of_word, PlayerEvent, PlayerKind, AUDIO_LANGUAGE_REPORTS, PLAYER_FAIL_BASE};
 use plx_media::route::uri_preflight::lang_matches;
 use plx_playback_contract::uri::{native_index, NativeTrackCheck, NativeTrackIndex, UriSource};
 use plx_playback_contract::{AttemptId, Capabilities, CommandId, ContentTime, DispatchResult, DriverEvent,
@@ -140,10 +140,6 @@ struct Pending {
     /// The native index an audio request asked for, which its `PLAYER_TRACK` must echo; `None` for every other control.
     native: Option<i64>,
 }
-
-/// How many native audio tracks' languages the machine keeps: the host reports at most this many (`plx_host.h`,
-/// PLAYER_AUDIO_LANGUAGE), and a report past it is dropped, so that track's language reads as unknown.
-const LANGUAGE_REPORTS: usize = 32;
 
 /// ISO 639-2's codes that name no language: a track tagged with one cannot be told apart by its language.
 const NO_LANGUAGE: [&str; 4] = ["und", "mul", "mis", "zxx"];
@@ -551,7 +547,7 @@ impl Machine {
             }
             // The host reports these before PREPARED, one per native audio track; a report after it changes nothing.
             PlayerKind::AudioLanguage if live && !active.prepared => {
-                if let Some(index) = usize::try_from(event.a).ok().filter(|index| *index < LANGUAGE_REPORTS) {
+                if let Some(index) = usize::try_from(event.a).ok().filter(|index| *index < AUDIO_LANGUAGE_REPORTS) {
                     if active.native_audio.len() <= index {
                         active.native_audio.resize(index + 1, None);
                     }

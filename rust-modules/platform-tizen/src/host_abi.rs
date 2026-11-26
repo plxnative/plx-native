@@ -66,6 +66,10 @@ pub const EVENT_PLAYER_TRACK: u32 = 28;
 /// b = the code's ASCII bytes, first character in the lowest byte, 0 when the player has none; [`language_of_word`]).
 pub const EVENT_PLAYER_AUDIO_LANGUAGE: u32 = 29;
 
+/// The most native audio tracks whose `PLAYER_AUDIO_LANGUAGE` the host posts (`plx_host.h`; `LanguageReports` in
+/// `PlxPlayer.cs`): a report past it is dropped by the driver, so that track's language reads as unknown.
+pub const AUDIO_LANGUAGE_REPORTS: usize = 32;
+
 /// The language code a `PLAYER_AUDIO_LANGUAGE` word carries: two or three ASCII letters, first character in the lowest
 /// byte and zero-padded. Anything else (no code, a tag with a region, a byte that is not a letter) is `None`, which the
 /// driver treats as a track whose language is unknown.
