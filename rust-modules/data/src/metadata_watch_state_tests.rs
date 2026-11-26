@@ -912,6 +912,30 @@ fn applied_lends_the_pages_streams_without_a_pick_and_lays_the_pick_over_them_wi
     assert!(audio[0].selected && subs[0].selected, "the page's own copy is untouched");
 }
 
+/// **The panel is offered only for a file a pick can be found by** (the rule `failed_tracks` follows): a part
+/// key naming no file (`part_id_of` is 0) has no pick key and no part for the PUT to address, so the page shows
+/// no tracks for it, while the same page with a real part does.
+#[test]
+fn a_part_key_that_names_no_file_offers_no_preplay_tracks() {
+    let _serial = plx_base::testlock::serial();
+    let keys = plx_plex::plex::ClientKeys::default();
+    let page = |part: &str| Detail {
+        sid: SRV_A,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: part.into(),
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        ..Default::default()
+    };
+    let state = test_state();
+    assert!(install_landed_detail(state, test_adapter(), Some(page("/library/parts/31/1/f.mkv")), &keys, false));
+    assert!(preplay_tracks(state, SRV_A, "m1", None).is_some(), "control: a part with an id is offered");
+    assert!(install_landed_detail(state, test_adapter(), Some(page("/library/parts/none/1/f.mkv")), &keys, false));
+    assert!(preplay_tracks(state, SRV_A, "m1", None).is_none(), "a part that names no file is not");
+    assert!(!has_preplay_tracks(state, SRV_A, "m1", None));
+    clear(test_state(), test_adapter());
+}
+
 /// **A pick's file key is its part, for the store, every read and the spend alike.** A file with no audio
 /// stream (a video-only part with subtitles) is named by no audio id, so a key made of one stored the pick
 /// and then never found it, and a spend by audio id never spent it. The key is the part id the pick is held

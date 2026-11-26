@@ -3121,7 +3121,9 @@ fn preplay_source<'a>(
         Some(v) => (v.part.as_str(), v.audio.as_slice(), v.subs.as_slice()),
         None => (default_part, d.audio.as_slice(), d.subs.as_slice()),
     };
-    (!part.is_empty() && !audio.is_empty()).then_some(PreplaySource { kind, show_rk, part, audio, subs })
+    // The offer follows the rule `failed_tracks` does: a part key that names no file (`part_id_of` is 0)
+    // has no pick to be found by and no part for the PUT to address.
+    (plx_plex::plex::part_id_of(part) > 0 && !audio.is_empty()).then_some(PreplaySource { kind, show_rk, part, audio, subs })
 }
 
 fn preplay_tracks(
