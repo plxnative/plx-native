@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T18:51:20Z",
+ "generated": "2026-11-26T18:51:47Z",
  "metrics": [
   {
-   "change30_pct": 38.3,
-   "change7_pct": 33.7,
+   "change30_pct": 39.8,
+   "change7_pct": 35.1,
    "d30": 201,
-   "delta30": 77,
-   "delta7": 70,
+   "delta30": 80.0,
+   "delta7": 73.0,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 63,
+   "n_now": 64,
    "n_prev": 47,
-   "now": 278,
+   "now": 281.0,
    "prev7": 208,
    "shown": true,
    "state": "worse",
@@ -340,18 +340,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 22.3,
-   "change7_pct": 2.5,
+   "change30_pct": 22.0,
+   "change7_pct": 2.2,
    "d30": 341.0,
-   "delta30": 76.0,
-   "delta7": 10.0,
+   "delta30": 75.0,
+   "delta7": 9,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 70,
+   "n_now": 71,
    "n_prev": 63,
-   "now": 417.0,
+   "now": 416,
    "prev7": 407,
    "shown": true,
    "state": "flat",
@@ -583,18 +583,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 33.7,
-   "change7_pct": 0.9,
+   "change30_pct": 33.1,
+   "change7_pct": 0.4,
    "d30": 265.5,
-   "delta30": 89.5,
-   "delta7": 3,
+   "delta30": 88.0,
+   "delta7": 1.5,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 63,
+   "n_now": 64,
    "n_prev": 47,
-   "now": 355,
+   "now": 353.5,
    "prev7": 352,
    "shown": true,
    "state": "flat",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 40.5,
-   "change7_pct": 3.6,
+   "change30_pct": 38.0,
+   "change7_pct": 1.8,
    "d30": 163.0,
-   "delta30": 66.0,
-   "delta7": 8,
+   "delta30": 62.0,
+   "delta7": 4.0,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 63,
+   "n_now": 64,
    "n_prev": 47,
-   "now": 229,
+   "now": 225.0,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -820,14 +820,14 @@
    "change7_pct": 0.0,
    "d30": 18.0,
    "delta30": 2.0,
-   "delta7": 0,
+   "delta7": 0.0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 63,
+   "n_now": 64,
    "n_prev": 47,
-   "now": 20,
+   "now": 20.0,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -923,13 +923,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 33.7,
+   "change_pct": 35.1,
    "commits": [
-    {
-     "pr": 1561,
-     "sha": "62ab67fff",
-     "title": "Tizen: grab the remote's media keys so the TV does not raise \"Not Available\""
-    },
     {
      "pr": 1559,
      "sha": "464a6a023",
@@ -974,6 +969,11 @@
      "pr": 1560,
      "sha": "5c1274eff",
      "title": "URI engine: a title that played to its end no longer blocks the next play"
+    },
+    {
+     "pr": 1547,
+     "sha": "91c523a7c",
+     "title": "Auto plays a 7.1 DTS-HD MA as its 5.1 core on a DTS-capable set"
     }
    ],
    "from": 208,
@@ -981,7 +981,7 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-26",
    "threshold_pct": 20.0,
-   "to": 278
+   "to": 281.0
   }
  ],
  "schema": 2,
@@ -1008,7 +1008,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 355
+   "now": 353.5
   },
   {
    "group": "ci",
