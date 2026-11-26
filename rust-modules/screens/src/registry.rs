@@ -254,7 +254,9 @@ pub use crate::family::NoInit;
 #[cfg(test)]
 pub(crate) use crate::{about_panel::AboutPanelScreen, tracks_panel::audio_rows as tracks_panel_audio_rows};
 #[cfg(test)]
-pub(crate) use crate::preplay_panel::{PreplayArg, Source as PreplaySource};
+pub(crate) use crate::preplay_panel::PreplayArg;
+/// The tracks' source a menu page commits with (`item_menu` may not name the panel's module).
+pub(crate) use crate::preplay_panel::Source as PreplaySource;
 
 /// **What the item context menu asks of the loop**, once its own `step` has resolved the pressed
 /// row to an [`crate::item_menu::Action`].
@@ -838,7 +840,54 @@ fn versions_page<'a>(
     meta: plx_data::metadata::MetadataView<'a>,
     arg: &crate::versions_panel::VersionsArg,
 ) -> Option<&'a plx_data::metadata::Detail> {
-    meta.current().filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
+    loaded_page(meta, arg.sid, &arg.rk)
+}
+
+/// The loaded Detail when it is the item `(sid, rk)`: the page the hero's panels belong to.
+fn loaded_page<'a>(
+    meta: plx_data::metadata::MetadataView<'a>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> Option<&'a plx_data::metadata::Detail> {
+    meta.current().filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (sid, rk)))
+}
+
+/// **The versions the hero's Select Version lists, and the one Play takes now** (the check mark), of the
+/// page that is `(sid, rk)`: what the standalone panel's mount reads, for the hero's `…` menu to host the
+/// same list as a page (`item_menu`, which may not name the page's module).
+pub(crate) fn hero_page_versions(
+    meta: plx_data::metadata::MetadataView<'_>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> (Vec<plx_data::pms::MediaVersion>, Option<plx_plex::plex::MediaId>) {
+    let page = loaded_page(meta, sid, rk);
+    (page.map_or_else(Vec::new, |d| crate::detail::hero_versions(d).to_vec()), page.and_then(crate::detail::taken_version))
+}
+
+/// **The tracks the hero's Audio & Subtitles offers** for the page that is `(sid, rk)` ([`preplay_tracks_of`]'s
+/// `Source::Page`): the ones of the item its hero plays, an empty set when the page cannot say.
+pub(crate) fn page_preplay_tracks(
+    meta: plx_data::metadata::MetadataView<'_>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> plx_data::metadata::PreplayTracks {
+    loaded_page(meta, sid, rk)
+        .and_then(|d| meta.preplay_tracks(sid, d.play_rk(), crate::detail::taken_version(d)))
+        .unwrap_or_else(|| empty_tracks(sid, rk))
+}
+
+/// A page that cannot say what it offers: nothing to pick, rather than another item's tracks.
+pub(crate) fn empty_tracks(sid: plx_plex::plex::ServerId, rk: &str) -> plx_data::metadata::PreplayTracks {
+    plx_data::metadata::PreplayTracks {
+        sid,
+        rk: rk.to_string(),
+        kind: String::new(),
+        show_rk: String::new(),
+        part: String::new(),
+        audio: Vec::new(),
+        subs: Vec::new(),
+        pick: None,
+    }
 }
 
 /// **The ratingKey a Select Version row selects for**, the subject of its accessibility id: the page's Play pill's own
@@ -858,25 +907,11 @@ pub(crate) fn versions_subject<H: MetadataLike>(cx: &Cx<'_, H>, arg: &crate::ver
 /// with nothing to pick rather than naming another item's tracks.
 pub(crate) fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::preplay_panel::PreplayArg) -> plx_data::metadata::PreplayTracks {
     use crate::preplay_panel::Source;
-    let empty = |sid, rk: &str| plx_data::metadata::PreplayTracks {
-        sid,
-        rk: rk.to_string(),
-        kind: String::new(),
-        show_rk: String::new(),
-        part: String::new(),
-        audio: Vec::new(),
-        subs: Vec::new(),
-        pick: None,
-    };
     match arg.source {
-        Source::Page => meta
-            .current()
-            .filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
-            .and_then(|d| meta.preplay_tracks(arg.sid, d.play_rk(), crate::detail::taken_version(d)))
-            .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
+        Source::Page => page_preplay_tracks(meta, arg.sid, &arg.rk),
         Source::Failed { part_id, pick } => meta
             .failed_tracks(arg.sid, &arg.rk, part_id, pick)
-            .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
+            .unwrap_or_else(|| empty_tracks(arg.sid, &arg.rk)),
     }
 }
 
@@ -3153,6 +3188,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // (the app census, 0x882c_217d_f372_9dbb, is pinned in `app/recorder.rs`); this screen-half pin only
 // asserts the inventory, it is not a recorded value. The hero menus' morph then added `opener` to
 // `VersionsPanel` and `PreplayPanel` (`opener:Option<{entry:u32,elem:u32}>`): the control each grows out of.
+// Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains
+// `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin:
+// 0x8e9e_7e81_3543_b640.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.
@@ -3180,7 +3218,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // The hero row (#1553) adds the Audio & Subtitles panel (`PreplayPanel`) and the item menu's hero
 // overflow (`HeroOverflow{rows:len}`). The pin moved from 0x8e79_1d31_a441_fb57 to 0xde99_c01f_cb88_02a4 with the `ctl` field, then to the value below once
 // this branch merged main (previous main pin: 0x16f9_ab79_9300_dc0a).
-const SCREEN_SHAPES_PIN: u64 = 0x8e9e_7e81_3543_b640;
+const SCREEN_SHAPES_PIN: u64 = 0x095f_8019_34dd_17f6;
 
 #[cfg(test)]
 mod arg_tests {

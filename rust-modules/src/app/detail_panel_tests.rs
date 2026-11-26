@@ -551,10 +551,10 @@ fn back_out(w: &mut World) {
     }
 }
 
-/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`** (the menu row
-/// hands its panel to the page, so the panel is presented while the closing menu still owns the ring).
-/// The page used to keep the menu's row as its return spot and was restored onto a dead entry: no ring,
-/// Left and Right dead, Down on the cast. The same close as BACK without a pick.
+/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`**: the page is
+/// pushed INTO the menu's own glass, and the pick closes the whole menu (the surface the ring returns
+/// from is the menu's). BACK from the page returns to the menu's rows with the ring on Select Version,
+/// and BACK again closes the menu with the ring on the `…`.
 #[test]
 fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
     use plx_screens::detail::HeroCtl;
@@ -562,18 +562,48 @@ fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
     walk_to(&mut w, HeroCtl::More);
     w.press(Key::Ok);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
-    w.press(Key::Ok); // its first row: Select Version
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel replaced the menu");
+    w.press(Key::Ok); // its first row: Select Version, pushed into the same glass
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: still the one surface (the menu), now on its Select Version page");
     w.press(Key::Down);
     w.press(Key::Ok);
     assert_focus_on_hero(&w, HeroCtl::More, "a version pick");
 
-    // control: BACK without a pick
+    // control: BACK without a pick pops to the menu's rows, then closes the menu
     w.press(Key::Ok);
     w.press(Key::Ok);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the panel is up again");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the menu is up again, on its page");
     w.press(Key::Back);
-    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the panel");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "BACK from the page returns to the menu's rows, still up");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the menu");
+}
+
+/// **The `…` menu's pages push into the one glass and BACK walks them back, through the product frame**:
+/// OK on Audio & Subtitles pushes its page (the surface is still the menu, never re-presented), OK on
+/// Subtitles pushes over it, and each BACK pops one with the ring on the row that opened the page it
+/// leaves; the last BACK closes the menu with the ring on the `…`.
+#[test]
+fn the_more_menu_pages_push_into_one_glass_and_back_returns_to_the_row_that_opened_them() {
+    use plx_screens::detail::HeroCtl;
+    use plx_screens::item_menu::ItemRow;
+    let mut w = hero_world("menu-pages", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    w.press(Key::Down); // Select Version, then Audio & Subtitles
+    let menu_entry = w.d.nav.modals.surfaces[0].entry.id;
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Audio & Subtitles is a page of the menu, not a new surface");
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry, "the same entry: the glass is never re-presented");
+    w.press(Key::Down); // Audio, then Subtitles
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Subtitles pushes further in the same glass");
+    w.press(Key::Back);
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(plx_appkit::preplay_tracks::PickRow::OpenSubtitles).focus_key()), "back on Subtitles");
+    w.press(Key::Back);
+    assert_eq!(w.elem(), Some(ItemRow::Hero(HeroCtl::AudioSubtitles).focus_key()), "back on Audio & Subtitles, in the menu's rows");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the menu's rows");
 }
 
 /// **A pick in Audio & Subtitles, opened from the hero's `…` menu, returns focus to the `…`**, the panel

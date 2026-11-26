@@ -337,16 +337,83 @@ pub enum Outcome {
     Nothing,
 }
 
-/// **The Audio & Subtitles panel's state, with no screen**: the item's tracks, the choice made so
-/// far, the pages pushed over the root and the slide between them. The page showing is the
-/// stack's top (the root when empty), never a field of its own.
-pub struct PickerState {
+/// **What an Audio & Subtitles picker knows, with no table, no stack and no screen**: the item's tracks
+/// and the choice made so far, and the page forms they build. The standalone panel ([`PickerState`])
+/// and the hero's `…` menu (`screens::item_menu`, whose page stack it stands on) each host one, so the
+/// rows, the picks and what a pick writes are this code once.
+#[derive(Clone)]
+pub struct PickerCore {
     tracks: plx_data::metadata::PreplayTracks,
     /// **What is chosen, as the one value** ([`PreplayPick`]): seeded from [`PreplayTracks::pick`] (the
     /// store's pick, or on the failure screen the held / standing selection), then each pick's
     /// [`Selection::pick`]. `None` until there is one: the rows then read the server's selection.
     /// What the panel shows ([`Self::now`]) is [`chosen`] of it, never a second field.
     pick: Option<PreplayPick>,
+}
+
+impl PickerCore {
+    pub fn new(tracks: plx_data::metadata::PreplayTracks) -> Self {
+        Self { pick: tracks.pick, tracks }
+    }
+
+    fn set(&self) -> TrackSet<'_> {
+        TrackSet { part_id: PreplayItem::of(&self.tracks).part_id, audio: &self.tracks.audio, subs: &self.tracks.subs }
+    }
+
+    pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
+        &self.tracks
+    }
+
+    pub fn now(&self) -> Chosen {
+        chosen(self.set(), self.pick.as_ref())
+    }
+
+    /// "Your languages" for the Subtitles page: the language of the audio that will play.
+    fn yours(&self) -> Vec<String> {
+        self.tracks.audio.get(self.now().audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
+    }
+
+    /// The rows of `page`, as the standalone panel and the menu both show them.
+    pub fn page_form(&self, page: PickPage) -> PickForm {
+        match page {
+            PickPage::Root => root_form(self.set(), self.now()),
+            PickPage::Audio => audio_form(self.set(), self.now()),
+            PickPage::Subtitles => subtitle_form(self.set(), self.now(), &self.yours()),
+        }
+    }
+
+    /// Where focus opens on a page: the checked row, so the viewer sees what is chosen.
+    pub fn page_initial(&self, page: PickPage) -> Option<PickRow> {
+        match page {
+            PickPage::Root => None,
+            PickPage::Audio => Some(PickRow::Audio(self.now().audio)),
+            PickPage::Subtitles => Some(self.now().sub.map_or(PickRow::SubOff, PickRow::Sub)),
+        }
+    }
+
+    /// The page's title band (`None` for the root).
+    pub fn title_of(page: PickPage) -> Option<String> {
+        match page {
+            PickPage::Root => None,
+            PickPage::Audio => Some(plx_os::i18n::msg::widgets_tracks_audio().to_string()),
+            PickPage::Subtitles => Some(plx_os::i18n::msg::widgets_tracks_subtitles().to_string()),
+        }
+    }
+
+    /// A pick (not a drill-in): carry the choice forward as the standing pick and answer what it
+    /// writes. `None` for a drill-in or an index off the list.
+    pub fn select(&mut self, pick: Pick) -> Option<Selection> {
+        let sel = select(self.set(), self.pick.as_ref(), pick)?;
+        self.pick = Some(sel.pick);
+        Some(sel)
+    }
+}
+
+/// **The Audio & Subtitles panel's state, with no screen**: the [`PickerCore`], the pages pushed
+/// over the root and the slide between them. The page showing is the stack's top (the root when
+/// empty), never a field of its own.
+pub struct PickerState {
+    core: PickerCore,
     pages: PageStack<PickPage, PickRow>,
     pub form: FormTable<PickRow, (), PickPage>,
     pub motion: PanelMotion,
@@ -360,8 +427,7 @@ pub struct PickerState {
 impl PickerState {
     pub fn new(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> Self {
         let mut s = Self {
-            pick: tracks.pick,
-            tracks,
+            core: PickerCore::new(tracks),
             pages: PageStack::new(),
             form: FormTable::new(plx_ui::table_screen::BAND_BASE),
             motion: PanelMotion::new(),
@@ -390,16 +456,12 @@ impl PickerState {
         plx_ui::widgets::focus_pill(Rect::new(x, y, w, h))
     }
 
-    fn set(&self) -> TrackSet<'_> {
-        TrackSet { part_id: PreplayItem::of(&self.tracks).part_id, audio: &self.tracks.audio, subs: &self.tracks.subs }
-    }
-
     pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
-        &self.tracks
+        self.core.tracks()
     }
 
     pub fn now(&self) -> Chosen {
-        chosen(self.set(), self.pick.as_ref())
+        self.core.now()
     }
 
     /// The page showing.
@@ -411,34 +473,12 @@ impl PickerState {
         self.pages.len()
     }
 
-    /// "Your languages" for the Subtitles page: the language of the audio that will play.
-    fn yours(&self) -> Vec<String> {
-        self.tracks.audio.get(self.now().audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
-    }
-
     fn page_form(&self, page: PickPage) -> PickForm {
-        match page {
-            PickPage::Root => root_form(self.set(), self.now()),
-            PickPage::Audio => audio_form(self.set(), self.now()),
-            PickPage::Subtitles => subtitle_form(self.set(), self.now(), &self.yours()),
-        }
-    }
-
-    /// Where focus opens on a page: the checked row, so the viewer sees what is chosen.
-    fn page_initial(&self, page: PickPage) -> Option<PickRow> {
-        match page {
-            PickPage::Root => None,
-            PickPage::Audio => Some(PickRow::Audio(self.now().audio)),
-            PickPage::Subtitles => Some(self.now().sub.map_or(PickRow::SubOff, PickRow::Sub)),
-        }
+        self.core.page_form(page)
     }
 
     fn title_of(page: PickPage) -> Option<String> {
-        match page {
-            PickPage::Root => None,
-            PickPage::Audio => Some(plx_os::i18n::msg::widgets_tracks_audio().to_string()),
-            PickPage::Subtitles => Some(plx_os::i18n::msg::widgets_tracks_subtitles().to_string()),
-        }
+        PickerCore::title_of(page)
     }
 
     /// OK on the row `id`.
@@ -448,9 +488,8 @@ impl PickerState {
                 self.push(page, id);
                 Outcome::Pushed
             }
-            pick => match select(self.set(), self.pick.as_ref(), pick) {
+            pick => match self.core.select(pick) {
                 Some(sel) => {
-                    self.pick = Some(sel.pick);
                     let form = self.page_form(self.page());
                     self.form.set_sliding(form, Some(&id));
                     Outcome::Picked(sel)
@@ -466,7 +505,7 @@ impl PickerState {
         self.pages.push(page, opener, self.form.table.scroll_pos());
         let leaving = page_stack::leave_page(&mut self.form);
         let form = self.page_form(page);
-        self.form.open(form, self.page_initial(page).as_ref());
+        self.form.open(form, self.core.page_initial(page).as_ref());
         self.form.table.set_title(Self::title_of(page));
         self.motion.begin_slide(leaving, 1.0);
     }
@@ -490,7 +529,7 @@ impl PickerState {
             let pw = self.form.table.menu_panel_width(measure);
             if self.over_opener {
                 let h = self.form.table.measured_height().clamp(120.0, plx_ui::consts::SAFE.h);
-                return plx_ui::popover::cover_opener(self.pill(), (pw, h), plx_ui::consts::SAFE);
+                return plx_ui::detail_layout::hero_panel_over(self.pill(), y, (pw, h));
             }
             plx_ui::popover::under_or_above_fit(Rect::new(x, y, w, h), pw, self.form.table.measured_height())
         })
@@ -683,7 +722,7 @@ mod tests {
         assert_eq!(off.subtitle_sid, 0);
         assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off), "diffed against the carried pick, not the server's");
         assert_eq!(p.back(), Back::Popped);
-        assert_eq!(subtitle_label(p.set(), p.now().sub), plx_os::i18n::msg::widgets_tracks_off());
+        assert_eq!(subtitle_label(p.core.set(), p.now().sub), plx_os::i18n::msg::widgets_tracks_off());
         assert_eq!(p.ok(PickRow::Audio(9)), Outcome::Nothing, "an index off the list picks nothing");
     }
 
