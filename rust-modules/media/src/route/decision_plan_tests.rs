@@ -1973,7 +1973,7 @@ fn a_retry_of_the_landed_plan_under_a_new_transaction_spends_and_a_stopped_one_d
     let plan = rig.plan(PickRig::URL);
     let first = rig.land(plan).expect("a playable plan");
     assert!(rig.settle(first, RouteStartResult::StartFailed));
-    retire_stopped_playback(&mut rig.ps);
+    retire_stopped_playback(&mut rig.ps, StopKind::Visit);
     let retry = begin_route_start().expect("a new transaction");
     let second = claim_route_start_attempt(retry).expect("the retry's attempt");
     assert!(rig.settle(second, RouteStartResult::Started));
@@ -2141,7 +2141,7 @@ fn a_full_stop_then_play_holds_no_pick() {
     let mut rig = PickRig::new();
     let pick = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Track(21) };
     rig.failed_with_pick(&pick);
-    retire_stopped_playback(&mut rig.ps);
+    retire_stopped_playback(&mut rig.ps, StopKind::Visit);
     assert!(rig.ps.held_pick.is_none(), "the stop ended the visit");
     rig.ps.request = Some(rig.request("m1"));
     begin_track_selection(&mut rig.ps, None);
