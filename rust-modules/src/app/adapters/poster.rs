@@ -216,10 +216,11 @@ struct Pslot {
     /// cooldown is armed ([`PosterSource::unresident`]) or the slot's eviction history is
     /// otherwise cleared (recovery, recycle) — a new deadline is something to wake for again.
     evict_wake_sent: bool,
-    /// The blurred copy this slot's request asked for ([`BackdropSpec`]), made of its decoded picture
-    /// in [`drain_decoded`]. Set at the claim and part of the slot's identity (the hit loop in
-    /// [`lookup_art`] matches on it), so a slot never answers a request with a picture that lacks
-    /// the copy it declared, and art nobody asked a copy for never pays for one.
+    /// The backdrop this slot's request asked for ([`BackdropSpec`]: a blurred copy, or the flat ground
+    /// of a picture with transparency), made of its decoded picture in [`drain_decoded`]. Set at the
+    /// claim and part of the slot's identity (the hit loop in [`lookup_art`] matches on it), so a slot
+    /// never answers a request with a picture that lacks the copy it declared, and art nobody asked
+    /// a copy for never pays for one.
     backdrop: Option<BackdropSpec>,
 }
 impl Pslot {

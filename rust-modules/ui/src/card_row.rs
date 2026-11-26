@@ -81,7 +81,7 @@ pub struct RowStyle {
     pub under_tile: f32,
     /// **How the tile's art meets its box** ([`ArtFit`]): [`ArtFit::Cover`] (fill and crop) for every
     /// row but Live TV's programme posters ([`RowStyle::PROGRAMME`]), whose non-poster art is
-    /// contained over its own blurred copy. Read by the shared card draw, never by a screen; only the
+    /// contained over its own blurred copy (or, with transparency, a flat ground). Read by the shared card draw, never by a screen; only the
     /// shelf tile draws (`draw_tile_led`, `draw_focused_tile_led`) honour it, and
     /// [`ArtFit::ContainOnBlur`] is only valid for 2:3 tiles (the copy is made against 2:3).
     pub fit: ArtFit,
@@ -169,7 +169,8 @@ impl RowStyle {
     /// radius are HOME's; only the height differs.
     pub const CHANNEL: RowStyle = RowStyle { h: 140.0, ..RowStyle::HOME };
     /// **A shelf of Live TV programme posters** (On now, Channels): [`RowStyle::HOME`]'s tile and motion,
-    /// with art that is not poster-shaped contained whole over its own blurred copy
+    /// with art that is not poster-shaped contained whole over its own blurred copy (art with
+    /// transparency, a channel's logo, over the Recent plates' flat ground instead)
     /// ([`ArtFit::ContainOnBlur`], owner 2026-11-26: "square should fit with blurred bg") instead of
     /// cover-cropped. A 2:3 poster draws exactly as on Home.
     pub const PROGRAMME: RowStyle = RowStyle { fit: ArtFit::ContainOnBlur, ..RowStyle::HOME };
@@ -1374,8 +1375,8 @@ pub fn draw_focused(
 /// reader is looking at waited for every other one (CONFIRM A1). A grid calls this before it
 /// paints the others and passes the answer to the draw, so the tile still resolves ONCE.
 /// `rect` and `s` are the draw's own.
-pub fn lead_focused(p: Painter, art: &Art<'_>, rect: Rect, s: f32) -> crate::widgets::ArtImage {
-    crate::widgets::lead_card_art(p, rect.scaled(1.0 / s), art, true, s)
+pub fn lead_focused(p: Painter, art: &Art<'_>, rect: Rect, s: f32, sty: &RowStyle) -> crate::widgets::ArtImage {
+    crate::widgets::lead_card_art(p, rect.scaled(1.0 / s), art, true, s, sty.fit)
 }
 
 /// [`draw_focused`] for a tile whose art was asked for ahead of its draw ([`lead_focused`]).

@@ -973,7 +973,7 @@ pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFi
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
-        if let Some(q) = card_art_request(art) {
+        if let Some(q) = card_art_request_fitted(art, fit) {
             crate::card_probe::art(q.srv, q.path, q.w, q.h, tex != 0);
         }
     }
@@ -1033,9 +1033,11 @@ pub fn card(p: Painter, frame: Rect, art: Art, rad: f32, focused: bool, scale: f
 /// at the rect it would resolve at (`frame` scaled by `scale` for a focused card), so the card's
 /// one motion occurrence is this call's. The source serves the newest frame's requests in the
 /// order they were made, so a card painted last (the focused one) that asks first gets its poster
-/// first.
-pub fn lead_card_art(p: Painter, frame: Rect, art: &Art<'_>, focused: bool, scale: f32) -> ArtImage {
-    resolve_card_art(p, if focused { frame.scaled(scale) } else { frame }, art)
+/// first. `fit` is the tile's own ([`RowStyle::fit`](crate::card_row::RowStyle::fit)): the led answer
+/// is the tile's ONLY resolve this frame, so it must name the key (picture and copy) the tile draws
+/// with, or a contained tile would be led a picture without its copy and take a second slot.
+pub fn lead_card_art(p: Painter, frame: Rect, art: &Art<'_>, focused: bool, scale: f32, fit: ArtFit) -> ArtImage {
+    resolve_card_art_fitted(p, if focused { frame.scaled(scale) } else { frame }, art, fit)
 }
 
 /// [`card`] for a caller whose art is a bare path to a collection's thumb and who knows the
@@ -1065,24 +1067,32 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
     card_fitted(p, frame, art, fan_name, rad, focused, scale, f, led, ArtFit::Cover)
 }
 
-/// Paint a poster tile's picture `t` (and its blurred copy `backdrop`, 0 for none) as `placement`
-/// decided, in the tile `r`: ONE card pass for a covered picture; for a contained one the blurred copy
-/// is the card (rounded coverage, shadow, sheen, pop) over the whole tile and the picture is laid
-/// whole in `inner` with square corners (it touches the tile only along straight edges: a square or
-/// 16:9 never reaches a corner, and `place` covers anything near enough to the tile's shape to).
+/// Paint a poster tile's picture `t` (and its backdrop `backdrop`, 0 for none: a blurred copy, or a
+/// flat ground for a picture with transparency) as `placement` decided, in the tile `r`: ONE card pass
+/// for a covered picture; for a contained one the backdrop is the card (rounded coverage, shadow,
+/// sheen, pop) over the whole tile and the picture is laid whole in `inner` with square corners (it
+/// touches the tile only along straight edges: a square or 16:9 never reaches a corner, and `place`
+/// covers anything near enough to the tile's shape to).
+///
+/// `p` is the tile's painter and `pa` the same under the late-arrival fade ([`ArtImage::shown`]).
+/// **The fade belongs to the card.** Two layers each drawn at the fade would composite to
+/// `1 - (1 - shown)^2` inside the picture's box, ahead of its own backdrop, so a resting tile fades the
+/// BACKDROP card in (over the skeleton it replaces) and lays the picture at full alpha over it; a
+/// focused tile is one pass, which fades as the one surface it is.
 ///
 /// A FOCUSED contained tile (`f > 0`) composes both layers INSIDE the one card pass
 /// ([`Painter::tex_carded_inset`]): the card's rim glow, sheen crown and gloss ramp are that pass's,
 /// and a second quad over it would paint over them inside its box. At rest there is no glow, crown or
 /// gloss to lose and two plain quads are the cheaper program; the picture's square edge does cover the
 /// constant 1px sheen along the sides where it touches the tile.
-fn paint_poster_art(pa: Painter, placement: Placement, t: u32, backdrop: u32, r: Rect, rad: f32, f: f32) {
+#[allow(clippy::too_many_arguments)]
+fn paint_poster_art(p: Painter, pa: Painter, placement: Placement, t: u32, backdrop: u32, r: Rect, rad: f32, f: f32) {
     match placement {
         Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),
         Placement::Contained { inner, backdrop_uv } => {
-            if !pa.tex_carded_inset(backdrop, backdrop_uv, theme::ART_BACKDROP_TINT, t, inner, r, rad, f) {
-                pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::ART_BACKDROP_TINT, f);
-                pa.tex(t, inner, 0.0, theme::TINT_WHITE);
+            if !pa.tex_carded_inset(backdrop, backdrop_uv, t, inner, r, rad, f) {
+                pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::TINT_WHITE, f);
+                p.tex(t, inner, 0.0, theme::TINT_WHITE);
             }
         }
     }
@@ -1128,7 +1138,7 @@ pub fn card_fitted(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, ra
             }
             if t != 0 {
                 if shown < 1.0 { crate::placeholder::skeleton_under(p, r, rad); }
-                paint_poster_art(pa, place(fit, art_crop(&art), tw, th, r, backdrop != 0), t, backdrop, r, rad, f);
+                paint_poster_art(p, pa, place(fit, art_crop(&art), tw, th, r, backdrop != 0), t, backdrop, r, rad, f);
                 // A collection whose thumb is the server's composite is drawn as our baked fan,
                 // which leaves its name to be set live — on every tile, focused or not.
                 if let Some(m) = m.filter(|m| m.kind == TileKind::Collection && m.composite_thumb) {

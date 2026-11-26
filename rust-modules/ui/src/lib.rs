@@ -53,7 +53,7 @@ pub mod glassload; // dev-only backdrop-glass LOAD DIAL + the blurred-route-tran
 pub mod hold_hint; // the standing "Hold [OK] for options" capsule: dwell/life schedule, hold-progress cap, fade + rise
 pub mod hit; // RESTRUCTURE (spec §7.6): the double-buffered hit map and the pointer gates
 pub mod placeholder; // placeholder accounting: a per-frame count at every placeholder DRAW + the #FF00FE pixel sentinel (feature `placeholder-sentinel`)
-pub mod art_fit; // how a picture meets a tile of another shape: cover, or contained over its own blurred copy
+pub mod art_fit; // how a picture meets a tile of another shape: cover, or contained over its own backdrop
 pub mod card_art; // the Continue Watching card's art: the pure composite (background + logo baked once), the cover/composite/type walk
 pub mod hero_logo; // the ONE clearLogo sizing rule + its fallback-to-title band (both heroes, the compact title)
 pub mod landing_hero; // shared landing hero geometry and scrim curve, also read by route/legibility checks
@@ -1693,14 +1693,15 @@ impl Painter {
     }
     /// [`tex_carded`](Self::tex_carded) for a card whose art is CONTAINED over its own backdrop
     /// ([`art_fit::Placement::Contained`]): `tex` is the backdrop, windowed by `uv` to the whole card
-    /// and inked `backdrop_ink`, and `inner_tex` the picture laid whole in `inner`, in ONE pass. A
+    /// and `inner_tex` the picture laid whole in `inner`, in ONE pass (both inked white, under this
+    /// painter's own fade: the backdrop's brightness is baked into the copy). A
     /// FOCUSED card's rim glow, sheen crown and gloss ramp belong to that pass, so the picture has to
     /// be composed inside it: a second quad over it paints over them. `false`, having drawn nothing,
     /// for a resting card (no glow, crown or gloss to lose, and two plain quads are the cheaper program;
     /// the picture's square edge does cover the constant 1px sheen where it touches the tile) or when the
     /// specialization did not link: the caller draws the two quads then.
     #[allow(clippy::too_many_arguments)]
-    pub fn tex_carded_inset(self, tex: u32, uv: [f32; 4], backdrop_ink: [f32; 4], inner_tex: u32, inner: Rect,
+    pub fn tex_carded_inset(self, tex: u32, uv: [f32; 4], inner_tex: u32, inner: Rect,
         r: Rect, rad: f32, f: f32) -> bool {
         if f <= 0.0 { return false; }
         #[cfg(any(test, feature = "test-support"))]
@@ -1716,12 +1717,10 @@ impl Painter {
             uv.record(data);
             [inner.x, inner.y, inner.w, inner.h].record(data);
             rad.record(data);
-            backdrop_ink.record(data);
             f.record(data);
         }) { return true; }
         if self.records() { return true; }
         let t = self.c(theme::TINT_WHITE);
-        let dim = self.c(backdrop_ink);
         let (blur, _off, sa, off_l) = card_shadow_params(r.h, f, theme::CARD_SHADOW[3]);
         let dy = self.px(f.clamp(0.0, 1.0) * off_l);
         let blur = self.px(blur);
@@ -1730,7 +1729,7 @@ impl Painter {
         let (m, mi) = (self.place(r), self.place(inner));
         plx_gfx::gfx::draw_tex_carded_inset(
             tex, inner_tex, [mi.x, mi.y, mi.w, mi.h], uv, m.x, m.y, m.w, m.h, self.px(rad),
-            t.as_ptr(), [dim[0], dim[1], dim[2]], self.px(theme::CARD_SHEEN_W),
+            t.as_ptr(), self.px(theme::CARD_SHEEN_W),
             self.sheen_rim().as_ptr(), pad, blur, shcol.as_ptr(), f, dy,
         )
     }

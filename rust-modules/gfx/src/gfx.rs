@@ -216,7 +216,8 @@ const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n
 const VS_FOCUS: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_FOCUS\n");
 const FS_FOCUS: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
 /// [`FS_FOCUS`] with a second picture laid whole inside the card ([`draw_tex_carded_inset`]): the
-/// FOCUSED tile of a row whose art is contained over its own blurred copy, lit as one card.
+/// FOCUSED tile of a row whose art is contained over its own backdrop (a blurred copy or a flat
+/// ground), lit as one card.
 const FS_INSET: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n#define PLX_INSET\n");
 /// The wash with its photograph dissolved into it (`draw_art_wash`): dithered, because the wash it
 /// carries always dithers, over `vs_ambient.vert`'s field mesh so its colour is the wash's own
@@ -1090,10 +1091,10 @@ static mut DISSOLVE_IMAGE: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_PLAIN: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_TRIED: bool = false;
 /// Optional focused-card specialization with a contained picture ([`FS_INSET`], over [`VS_FOCUS`]):
-/// the program, its uniforms and its `u_inset` and `u_dim` locations. Linked on first use; `None`
-/// when it did not link, and the caller keeps its two-quad composition.
-static mut INSET_IMAGE: Option<(c_uint, ImageUniforms, c_int, c_int)> = None;
-static mut INSET_TRIED: bool = false;
+/// the program, its uniforms and its `u_inset` location. Linked at init beside [`FOCUS_IMAGE`], never
+/// on the first focused draw (that is mid-animation); `None` when it did not link, and the caller
+/// keeps its two-quad composition.
+static mut INSET_IMAGE: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut STILL_IMAGE: Option<(c_uint, ImageUniforms, c_int, c_int)> = None;
 /// Optional FOCUSED-card specialization ([`VS_FOCUS`]/[`FS_FOCUS`]) — [`IPROG`] remains the
 /// fallback (the plain look, same as before this program existed) if this fails to link.
@@ -2832,6 +2833,23 @@ pub fn init_image() -> Result<(), GfxFault> {
             log("focus image prog unavailable — focused cards keep the plain look");
         }
 
+        INSET_IMAGE = link_optional_program(VS_FOCUS.as_ptr(), FS_INSET.as_ptr()).map(|program| {
+            let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
+            let uniforms = ImageUniforms {
+                rect: loc(c"u_trect"), tint: loc(c"u_tint"), uvrect: loc(c"u_uvrect"),
+                card: loc(c"u_card"), rimw: loc(c"u_rimw"), rimcol: loc(c"u_rimcol"),
+                shinv: loc(c"u_shinv"), shcol: loc(c"u_shcol"), focus: loc(c"u_focus"),
+            };
+            use_prog(program);
+            glUniform2f(loc(c"u_tscreen"), SCR_W, SCR_H);
+            glUniform1i(loc(c"u_tex"), 0);
+            glUniform1i(loc(c"u_next"), 1);
+            (program, uniforms, loc(c"u_inset"))
+        });
+        if std::ptr::addr_of!(INSET_IMAGE).read().is_none() {
+            log("inset image prog unavailable - contained art keeps its two plain quads");
+        }
+
         PLAIN_IMAGE = link_optional_program(VS_IMG.as_ptr(), FS_TEX.as_ptr()).map(|program| {
             let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
             use_prog(program);
@@ -3903,41 +3921,21 @@ pub fn draw_tex_carded_blend(tex: c_uint, next: c_uint, mix: f32, crop: [f32; 4]
 /// light the whole tile; the picture drawn as a second quad over a card pass painted over them
 /// inside its box (the side glow, the top gloss step).
 ///
-/// `tint` is the picture's ink and the card's fade, `dim` the ink of the part of the card outside the
-/// picture (the backdrop's dimming). Returns `false`, drawing nothing, when the draw is not a focused
-/// or risen one (a resting card has no glow, crown or gloss to lose, though the picture's edge covers
-/// the constant 1px sheen where it touches the tile, and the caller's two plain quads are
-/// the cheaper program) or the specialization did not link; the caller then draws those two quads.
+/// `tint` inks the whole card (the picture and its backdrop) and carries its fade. Returns `false`,
+/// drawing nothing, when the draw is not a focused or risen one (a resting card has no glow, crown or
+/// gloss to lose, though the picture's edge covers the constant 1px sheen where it touches the tile,
+/// and the caller's two plain quads are the cheaper program) or the specialization did not link; the
+/// caller then draws those two quads.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_tex_carded_inset(tex: c_uint, inner_tex: c_uint, inner: [f32; 4], crop: [f32; 4],
-    x: f32, y: f32, w: f32, h: f32, radius: f32, tint: *const f32, dim: [f32; 3],
+    x: f32, y: f32, w: f32, h: f32, radius: f32, tint: *const f32,
     rimw: f32, rimcol: *const f32, pad: f32, blur: f32, shcol: *const f32, f: f32, dy: f32) -> bool {
     if tex == 0 || inner_tex == 0 || inner[2] <= 0.0 || inner[3] <= 0.0 || !wants_focus_program(f, dy) {
         return false;
     }
     // SAFETY: the same render-thread-only lifecycle as the other image specializations.
-    let (program, uniforms, loc_inset, loc_dim) = unsafe {
-        if !INSET_TRIED {
-            INSET_TRIED = true;
-            INSET_IMAGE = link_optional_program(VS_FOCUS.as_ptr(), FS_INSET.as_ptr()).map(|program| {
-                let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
-                let uniforms = ImageUniforms {
-                    rect: loc(c"u_trect"), tint: loc(c"u_tint"), uvrect: loc(c"u_uvrect"),
-                    card: loc(c"u_card"), rimw: loc(c"u_rimw"), rimcol: loc(c"u_rimcol"),
-                    shinv: loc(c"u_shinv"), shcol: loc(c"u_shcol"), focus: loc(c"u_focus"),
-                };
-                use_prog(program);
-                glUniform2f(loc(c"u_tscreen"), SCR_W, SCR_H);
-                glUniform1i(loc(c"u_tex"), 0);
-                glUniform1i(loc(c"u_next"), 1);
-                (program, uniforms, loc(c"u_inset"), loc(c"u_dim"))
-            });
-            if std::ptr::addr_of!(INSET_IMAGE).read().is_none() {
-                log("inset image prog unavailable — contained art keeps its two plain quads");
-            }
-        }
-        let Some(image) = std::ptr::addr_of!(INSET_IMAGE).read() else { return false };
-        image
+    let Some((program, uniforms, loc_inset)) = (unsafe { std::ptr::addr_of!(INSET_IMAGE).read() }) else {
+        return false;
     };
     // The picture's box from the CARD's centre, and its inverse size: the shader's own coordinate is
     // card-centred (`v_p` shifted by the shadow's dy), so the CPU folds the placement once here.
@@ -3952,7 +3950,6 @@ pub fn draw_tex_carded_inset(tex: c_uint, inner_tex: c_uint, inner: [f32; 4], cr
     unsafe {
         use_prog(program);
         glUniform4f(loc_inset, inset[0], inset[1], inset[2], inset[3]);
-        glUniform3f(loc_dim, dim[0], dim[1], dim[2]);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, inner_tex);
         glActiveTexture(GL_TEXTURE0);
@@ -10630,6 +10627,11 @@ mod tests {
         let mut stack: Vec<Frame> = Vec::new();
         for line in src.lines() {
             let t = line.trim();
+            // This helper models `#ifdef`/`#ifndef`/`#else`/`#endif` and nothing else: a directive it
+            // does not know would be read as shader text and a variant no compiler builds would be
+            // pinned (an `#elif` once was). Refuse it here, so the pins below can only read what builds.
+            assert!(!t.starts_with("#elif") && !t.starts_with("#if ") && !t.starts_with("#undef"),
+                "`{t}`: preprocess() does not model this directive; write it as #ifdef/#else");
             // A real GLSL preprocessor leaves comments alone too, but a header comment mentioning
             // `u_focus` in PROSE (as this very file's own module doc does, outside any `#ifdef`)
             // is not the thing this test exists to catch — strip full-line `//` comments first, the
@@ -10701,6 +10703,46 @@ mod tests {
         for gone in ["wide", "wide2", " vp ", "dShadowBox", "glareTop", "qs", "straightS"] {
             assert!(!fs.contains(gone), "plain fs_img.frag must not carry focus identifier `{gone}`");
         }
+    }
+
+    /// **The inset program is the focus program plus ONE picture mix, and nothing leaks out of it.**
+    /// `PLX_INSET` is the only difference between [`FS_INSET`] and [`FS_FOCUS`]: the picture sampler,
+    /// its box uniform and the mix of it over the backdrop - and the focus program, the unfocused one
+    /// and the still carry none of that. The variants are read through [`preprocess`] (what the driver
+    /// compiles) with the macros each program prepends, so a branch no compiler builds cannot be pinned.
+    #[test]
+    fn the_inset_program_is_the_focus_program_plus_the_picture_mix() {
+        let src = FS_IMG.to_str().unwrap();
+        let inset = preprocess(src, &["PLX_FOCUS", "PLX_INSET"]);
+        let focus = preprocess(src, &["PLX_FOCUS"]);
+        let plain = preprocess(src, &[]);
+        let still = preprocess(src, &["PLX_STILL_GROUND"]);
+        for line in [
+            "uniform sampler2D u_next; // the picture, laid whole inside the card",
+            "highp vec2 ip = (vec2(v_p.x, v_p.y + u_focus.z) - u_inset.xy) * u_inset.zw + 0.5;",
+            "vec4 pic = texture2D(u_next, ip);",
+            "tex = mix(tex, pic.rgb*u_tint.rgb, pic.a);",
+        ] {
+            assert!(inset.contains(line), "the inset program lost `{line}`:\n{inset}");
+        }
+        // The backdrop is inked exactly as a covered card is, and the picture mix follows it.
+        let ink = inset.find("vec3 tex = c.rgb*u_tint.rgb;").expect("the card's ink");
+        assert!(inset.find("texture2D(u_next, ip)").unwrap() > ink, "the picture goes over the backdrop's ink");
+        assert!(!inset.contains("u_dim"), "one ink for the whole card: the copy carries its own brightness");
+        // The focus lighting is still there: the inset program IS the focus program.
+        for line in ["bool wide = u_focus.x > 0.0 && (u_card.z - straight) < 12.0;", "float glareTop = 0.0;"] {
+            assert!(inset.contains(line) && focus.contains(line), "`{line}` lights the focused card in both");
+        }
+        // Without PLX_INSET nothing of the picture is there, in any program that does not compose one.
+        for (name, hay) in [("focus", &focus), ("plain", &plain), ("still", &still)] {
+            for needle in ["u_inset", "ip.x", "pic.", "u_next"] {
+                assert!(!hay.contains(needle), "the {name} program must not carry `{needle}`");
+            }
+        }
+        // And the file has no directive the helper (or a reader) could mistake: the only branches are
+        // `#ifdef`/`#ifndef`/`#else`/`#endif`.
+        assert!(!src.lines().any(|l| l.trim_start().starts_with("#elif")), "fs_img.frag must not use #elif");
+        assert!(inset.lines().all(|l| !l.trim_start().starts_with('#')), "a directive leaked into the inset variant");
     }
 
     /// **The three ways a fragment leaves `fs_img.frag` as plain texture x tint are one expression.**

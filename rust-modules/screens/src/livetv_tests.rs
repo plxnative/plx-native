@@ -495,7 +495,7 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
     }
 }
 
-/// **The posters contain their art on a blurred copy; the plates do not read the fit.** On now and the
+/// **The posters contain their art on a backdrop; the plates do not read the fit.** On now and the
 /// Channels shelf stand on `RowStyle::PROGRAMME` (owner 2026-11-26, "square should fit with blurred bg",
 /// over the cover-crop default of #1557), Recent's plates on the cover-fit `CHANNEL` style, and a 2:3
 /// poster draws as it does on Home (`art_fit`'s tests pin the placement itself).

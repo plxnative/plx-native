@@ -104,7 +104,6 @@ uniform float u_mix;
 #endif
 uniform sampler2D u_next; // the picture, laid whole inside the card
 uniform highp vec4 u_inset; // (its centre from the card's centre in px, 1 / its size in px)
-uniform vec3 u_dim; // the ink of the PART OF THE CARD OUTSIDE the picture (the dimmed backdrop)
 #endif
 #ifndef PLX_STILL_GROUND
 uniform vec4 u_tint;
@@ -151,19 +150,18 @@ void main(){
   // The CPU admits only an exactly-white tint to this specialization.
   vec3 tex = c.rgb;
   float ta = c.a;
-#elif defined(PLX_INSET)
-  // The backdrop is opaque and dimmed by `u_dim`; the picture goes over it by ITS OWN alpha (art
-  // may have a transparent ground), inked by `u_tint`. The card's alpha is the backdrop's
-  // times the fade, exactly as for a covered card.
-  vec3 tex = c.rgb*u_dim;
+#else
+  vec3 tex = c.rgb*u_tint.rgb;
   float ta = c.a*u_tint.a;
+#ifdef PLX_INSET
+  // The backdrop is opaque (a blurred copy already at its brightness, or a flat ground); the picture
+  // goes over it by ITS OWN alpha (a channel's logo has a transparent ground), under the same ink.
+  // The card's alpha is the backdrop's times the fade, exactly as for a covered card.
   if (ip.x >= 0.0 && ip.x <= 1.0 && ip.y >= 0.0 && ip.y <= 1.0) {
     vec4 pic = texture2D(u_next, ip);
     tex = mix(tex, pic.rgb*u_tint.rgb, pic.a);
   }
-#else
-  vec3 tex = c.rgb*u_tint.rgb;
-  float ta = c.a*u_tint.a;
+#endif
 #endif
 #ifdef PLX_STILL_GROUND
   float ramp = u_still_col.a * clamp(v_still_ramp, 0.0, 1.0);

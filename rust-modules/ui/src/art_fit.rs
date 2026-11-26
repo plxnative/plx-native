@@ -13,7 +13,12 @@
 //! - [`ArtFit::ContainOnBlur`]: a picture within [`POSTER_FIT_TOLERANCE`] of the tile's own aspect is
 //!   still covered (a 2:3 poster draws exactly as before). Any other picture is CONTAINED: the whole
 //!   image, centred, its aspect kept, over a backdrop that is the same image cover-filled to the tile
-//!   and blurred, and dimmed ([`crate::theme::ART_BACKDROP_TINT`]) so the contained image reads. The
+//!   and blurred, and dimmed ([`crate::theme::ART_BACKDROP_DIM`]) so the contained image reads. **A
+//!   picture with transparency (a channel's logo, a PNG with a clear ground) gets no blurred copy**: a
+//!   blur of a mark on a clear ground is a grey wash with the mark's colours smeared into bands behind
+//!   it. It is contained on the same flat ground the Recent channel plates stand on
+//!   ([`crate::theme::CHANNEL_PLATE`]), carried as a one-texel copy so the tile draws exactly as it
+//!   does over a blur. The
 //!   tile's rounded corners, shadow, focus scale and resume bar are the tile's, and a FOCUSED tile
 //!   is lit (rim glow, sheen crown, gloss) as one card pass around both layers, exactly as a covered
 //!   picture is. At rest the picture is a second quad over the copy's card pass, so its square edge
@@ -39,7 +44,7 @@
 //! picture's own ~375 KB. The size is the request's, so another surface (a full-screen blurred
 //! ground) asks for the copy size that suits it.
 use crate::tex::Decoded;
-use crate::{Crop, Rect};
+use crate::{theme, Crop, Rect};
 
 /// How far a picture's aspect may sit from its tile's and still be COVERED rather than contained:
 /// the picture's aspect over the tile's lies in `1 +/- 0.08`. A 2:3 tile takes 0.61 - 0.72 as its own,
@@ -71,7 +76,8 @@ pub enum ArtFit {
     /// Fill the tile and crop the overflow: every row but Live TV's posters.
     #[default]
     Cover,
-    /// Cover a picture of the tile's own shape; contain any other over its own blurred copy.
+    /// Cover a picture of the tile's own shape; contain any other over its own blurred copy, or over a
+    /// flat ground if it has transparency.
     ContainOnBlur,
 }
 
@@ -99,12 +105,22 @@ pub struct BackdropSpec {
     /// A picture within [`POSTER_FIT_TOLERANCE`] of this shape (`w`, `h`) is one the tile covers
     /// whatever the copy, so it is given none; `None` makes a copy of every picture.
     pub skip_shape: Option<(u16, u16)>,
+    /// What a picture WITH TRANSPARENCY ([`is_see_through`]) gets instead of a blur: this flat ground
+    /// (RGB, drawn as it is), or `None` for no copy at all (it is then covered, as without a spec).
+    /// The blur of a mark on a clear ground is a grey wash, so the policy is the request's, not the
+    /// blur's.
+    pub ground: Option<[u8; 3]>,
 }
 
 impl BackdropSpec {
     /// A poster tile's: [`POSTER_BACKDROP_SIDE`] texels, none for a picture within the tolerance of
-    /// 2:3 (a poster-tile fit covers it, and so does [`place`] for any 2:3 tile).
-    pub const POSTER: Self = Self { short_side: POSTER_BACKDROP_SIDE, skip_shape: Some((2, 3)) };
+    /// 2:3 (a poster-tile fit covers it, and so does [`place`] for any 2:3 tile), and for a picture
+    /// with transparency the Recent channel plates' own ground ([`theme::CHANNEL_PLATE_RGB8`]).
+    pub const POSTER: Self = Self {
+        short_side: POSTER_BACKDROP_SIDE,
+        skip_shape: Some((2, 3)),
+        ground: Some(theme::CHANNEL_PLATE_RGB8),
+    };
 
     /// Does a `w` x `h` picture get a copy under this spec?
     pub fn wanted_for(self, w: u16, h: u16) -> bool {
@@ -117,7 +133,7 @@ impl BackdropSpec {
 pub enum Placement {
     /// One quad filling the tile, sampling the `uv` window ([`crate::widgets::art_uv`]'s answer).
     Cover { uv: [f32; 4] },
-    /// Two quads: the blurred copy over the whole tile (its `backdrop_uv` window), then the picture
+    /// Two quads: the backdrop (a blurred copy, or a flat ground) over the whole tile (its `backdrop_uv` window), then the picture
     /// whole in `inner`, centred in the tile with its aspect kept.
     Contained { inner: Rect, backdrop_uv: [f32; 4] },
 }
@@ -135,8 +151,8 @@ fn within_tolerance(rw: f32, rh: f32, w: f32, h: f32) -> bool {
 
 /// **The placement of a `tw` x `th` picture in the tile `r`** under `fit`. `crop` is the cover's
 /// ([`crate::widgets::art_crop`]); `has_backdrop` says whether the picture came with its blurred
-/// copy ([`crate::widgets::ArtImage::backdrop`] is not 0): without one a picture is covered, as it
-/// was before this existed, and never drawn contained on a bare ground.
+/// copy or ground ([`crate::widgets::ArtImage::backdrop`] is not 0): without one a picture is covered,
+/// as it was before this existed, and never drawn contained on a bare ground.
 pub fn place(fit: ArtFit, crop: Crop, tw: f32, th: f32, r: Rect, has_backdrop: bool) -> Placement {
     let cover = r.cover_uv(tw, th, crop);
     if fit != ArtFit::ContainOnBlur || !has_backdrop || r.w <= 0.0 || r.h <= 0.0 || within_tolerance(r.w, r.h, tw, th) {
@@ -153,11 +169,54 @@ fn backdrop_size(w: usize, h: usize, short: usize) -> (usize, usize) {
     if w >= h { (long, short) } else { (short, long) }
 }
 
-/// `picture` with the blurred copy `spec` asks for, when the picture gets one
-/// ([`BackdropSpec::wanted_for`], [`backdrop_of`]). The producer's one call.
+/// The share of a picture's sampled texels (percent) that must be translucent for it to count as one
+/// with transparency: a few anti-aliased edge texels on an opaque picture are not a clear ground.
+const SEE_THROUGH_PERCENT: usize = 5;
+
+/// An alpha below this is translucent (a texel that is not quite opaque is still a plain picture's).
+const OPAQUE_ALPHA: u8 = 250;
+
+/// The most texels per axis [`is_see_through`] reads: an even grid, so the cost is bounded
+/// (`64 * 64`) whatever the picture's size.
+const SEE_THROUGH_TAPS_PER_AXIS: usize = 64;
+
+/// Does this picture have transparency: at least [`SEE_THROUGH_PERCENT`] of an even grid of its
+/// texels (at most [`SEE_THROUGH_TAPS_PER_AXIS`] per axis) are translucent? A channel's logo on a
+/// clear ground does; a JPEG never does. An empty or short buffer does not.
+pub fn is_see_through(d: &Decoded) -> bool {
+    let (w, h) = (d.w as usize, d.h as usize);
+    if w == 0 || h == 0 || d.rgba.len() < w * h * 4 {
+        return false;
+    }
+    let (nx, ny) = (w.min(SEE_THROUGH_TAPS_PER_AXIS), h.min(SEE_THROUGH_TAPS_PER_AXIS));
+    let mut clear = 0;
+    for j in 0..ny {
+        let y = (j * 2 + 1) * h / (ny * 2);
+        for i in 0..nx {
+            let x = (i * 2 + 1) * w / (nx * 2);
+            clear += (d.rgba[(y * w + x) * 4 + 3] < OPAQUE_ALPHA) as usize;
+        }
+    }
+    clear * 100 >= nx * ny * SEE_THROUGH_PERCENT
+}
+
+/// The one-texel copy that is a flat `ground`: what a picture with transparency is contained on.
+fn ground_copy(ground: [u8; 3]) -> Decoded {
+    Decoded { w: 1, h: 1, rgba: Box::new([ground[0], ground[1], ground[2], 255]), backdrop: None }
+}
+
+/// `picture` with the copy `spec` asks for, when the picture gets one ([`BackdropSpec::wanted_for`]):
+/// the blurred copy of an opaque picture ([`backdrop_of`]), and for one with transparency
+/// ([`is_see_through`]) the spec's flat [`ground`](BackdropSpec::ground), or nothing if it has none.
+/// The producer's one call.
 pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
     if spec.wanted_for(picture.w, picture.h) {
-        picture.backdrop = backdrop_of(&picture, spec.short_side as usize).map(Box::new);
+        picture.backdrop = if is_see_through(&picture) {
+            spec.ground.map(ground_copy)
+        } else {
+            backdrop_of(&picture, spec.short_side as usize)
+        }
+        .map(Box::new);
     }
     picture
 }
@@ -169,12 +228,11 @@ pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
 /// Each output texel is the mean of an even grid of at most [`TAPS_PER_AXIS`]^2 source texels under
 /// it (not `card_art::resample`'s full-area box mean, which would read every texel of a ~375 KB
 /// picture on the main thread, and would need the buffer copied into its `Rgba`), and one 3 x 3 box
-/// pass (edges clamped) smooths the result. **Colour is weighted by coverage** (alpha), so a picture
-/// with a transparent ground (a PNG, as some channel art links serve it) blurs to its
-/// own ink and not to whatever RGB sits under its transparent texels; a texel with no coverage
-/// around it takes the picture's overall colour. An opaque picture is a plain mean. The copy is
-/// opaque and keeps the picture's aspect, so the tile's cover window
-/// ([`Placement::Contained::backdrop_uv`]) addresses it as it addresses the picture.
+/// pass (edges clamped) smooths the result. The picture is taken as OPAQUE: alpha is ignored, because
+/// a picture with transparency is never blurred ([`attach_backdrop`] gives it a flat ground instead).
+/// The copy is dimmed to [`theme::ART_BACKDROP_DIM`] (so the tile draws it with no tint), opaque, and
+/// keeps the picture's aspect, so the tile's cover window ([`Placement::Contained::backdrop_uv`])
+/// addresses it as it addresses the picture.
 pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
     let (w, h) = (d.w as usize, d.h as usize);
     // A copy is smaller than its picture or it is not a blur of it: a thumbnail this small is its own.
@@ -184,7 +242,7 @@ pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
     let (bw, bh) = backdrop_size(w, h, short);
     let (span_x, span_y) = (w as f32 / bw as f32, h as f32 / bh as f32);
     let (nx, ny) = ((span_x.ceil() as usize).clamp(1, TAPS_PER_AXIS), (span_y.ceil() as usize).clamp(1, TAPS_PER_AXIS));
-    // Per output texel: the coverage-weighted colour sum (r, g, b) and the coverage sum.
+    // Per output texel: the colour sum (r, g, b) and the number of taps.
     let mut sum = vec![[0.0f32; 4]; bw * bh];
     for j in 0..bh {
         for i in 0..bw {
@@ -194,17 +252,14 @@ pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
                 for tx in 0..nx {
                     let x = (((i as f32 + (tx as f32 + 0.5) / nx as f32) * span_x) as usize).min(w - 1);
                     let p = &d.rgba[(y * w + x) * 4..][..4];
-                    let a = p[3] as f32 / 255.0;
                     for k in 0..3 {
-                        acc[k] += p[k] as f32 * a;
+                        acc[k] += p[k] as f32;
                     }
-                    acc[3] += a;
+                    acc[3] += 1.0;
                 }
             }
         }
     }
-    let all = sum.iter().fold([0.0f32; 4], |t, s| [t[0] + s[0], t[1] + s[1], t[2] + s[2], t[3] + s[3]]);
-    let overall = if all[3] > 0.0 { [all[0] / all[3], all[1] / all[3], all[2] / all[3]] } else { [0.0; 3] };
     let mut rgba = Vec::with_capacity(bw * bh * 4);
     for j in 0..bh {
         for i in 0..bw {
@@ -217,8 +272,8 @@ pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
                     }
                 }
             }
-            let c = if m[3] > 1e-3 { [m[0] / m[3], m[1] / m[3], m[2] / m[3]] } else { overall };
-            rgba.extend(c.map(|c| c.round().clamp(0.0, 255.0) as u8));
+            let k = theme::ART_BACKDROP_DIM / m[3];
+            rgba.extend([m[0] * k, m[1] * k, m[2] * k].map(|c| c.round().clamp(0.0, 255.0) as u8));
             rgba.push(255);
         }
     }
@@ -291,7 +346,7 @@ mod tests {
         assert!(!spec.wanted_for(72, 100) && spec.wanted_for(73, 100), "wide edge");
         assert!(!spec.wanted_for(920, 1500) && spec.wanted_for(919, 1500), "narrow edge");
         assert!(!spec.wanted_for(250, 375) && spec.wanted_for(375, 375) && spec.wanted_for(667, 375));
-        let any = BackdropSpec { short_side: 16, skip_shape: None };
+        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None };
         assert!(any.wanted_for(250, 375), "a spec with no shape to skip wants every picture");
         assert_eq!(ArtFit::Cover.copy_request(), None);
         assert_eq!(ArtFit::ContainOnBlur.copy_request(), Some(BackdropSpec::POSTER));
@@ -361,30 +416,68 @@ mod tests {
         let square = attach_backdrop(px(375, 375, |_, _| [1, 2, 3, 255]), BackdropSpec::POSTER);
         let copy = square.backdrop.as_deref().expect("a square gets a copy");
         assert_eq!((copy.w, copy.h), (16, 16));
-        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None });
+        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None });
         assert!(any.backdrop.is_some());
     }
 
-    /// A picture with a transparent ground (a PNG, as some channel art links serve it) blurs to
-    /// its own ink: the RGB under the transparent texels is not the logo's colour and must not tint
-    /// the copy, and a picture with nothing opaque still gets a (black) copy rather than none.
+    /// A logo on a clear ground (a PNG, as a channel's thumb arrives): the owner's decision is NO blurred
+    /// copy, the blur of such a mark being a grey wash with its colours smeared in bands. It is handed
+    /// the flat ground of the Recent channel plates, one texel, undimmed.
     #[test]
-    fn a_transparent_ground_blurs_to_the_ink_not_the_rgb_under_it() {
+    fn a_picture_with_transparency_gets_the_plate_ground_not_a_blur() {
         let logo = px(300, 300, |x, y| if (100..200).contains(&x) && (100..200).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
-        let copy = backdrop_of(&logo, 16).expect("a logo gets a copy");
-        assert!(copy.rgba.chunks(4).all(|p| p == [250, 200, 0, 255]), "every texel is the logo's yellow: {:?}", &copy.rgba[..8]);
-        let ghost = backdrop_of(&px(300, 300, |_, _| [250, 200, 0, 0]), 16).expect("an empty picture still has a size");
-        assert!(ghost.rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "no coverage anywhere: black, not the invisible RGB");
+        assert!(is_see_through(&logo));
+        let got = attach_backdrop(logo, BackdropSpec::POSTER);
+        let copy = got.backdrop.as_deref().expect("a ground");
+        assert_eq!((copy.w, copy.h), (1, 1), "a flat ground, not a blur");
+        assert_eq!(&copy.rgba[..], &[0x22, 0x27, 0x2d, 255], "the Recent plates' own colour, undimmed");
+        assert_eq!(theme::CHANNEL_PLATE_RGB8, [0x22, 0x27, 0x2d]);
+        assert_eq!(plx_gfx::gfx::tokens::rgb8(0x22, 0x27, 0x2d), theme::CHANNEL_PLATE, "the bytes ARE the plate");
+        assert_eq!(BackdropSpec::POSTER.ground, Some(theme::CHANNEL_PLATE_RGB8));
+    }
+
+    /// An opaque off-shape picture keeps the blurred copy, dimmed; a spec with no ground gives a
+    /// picture with transparency nothing at all (it is covered, as without a spec).
+    #[test]
+    fn an_opaque_picture_keeps_its_blur_and_a_spec_without_a_ground_gives_transparency_none() {
+        let opaque = attach_backdrop(px(375, 375, |_, _| [200, 100, 50, 255]), BackdropSpec::POSTER);
+        let copy = opaque.backdrop.as_deref().expect("a blur");
+        assert_eq!((copy.w, copy.h), (16, 16));
+        let k = theme::ART_BACKDROP_DIM;
+        assert!(copy.rgba.chunks(4).all(|p| p == [(200.0 * k).round() as u8, (100.0 * k).round() as u8, (50.0 * k).round() as u8, 255]),
+            "its own colours at the dim: {:?}", &copy.rgba[..4]);
+        let clear = || px(300, 300, |_, _| [250, 200, 0, 0]);
+        let none = attach_backdrop(clear(), BackdropSpec { ground: None, ..BackdropSpec::POSTER });
+        assert!(none.backdrop.is_none());
+        assert!(attach_backdrop(clear(), BackdropSpec::POSTER).backdrop.is_some(), "the poster spec's ground");
+    }
+
+    /// The edge of "has transparency": a few anti-aliased texels on an opaque picture are not a clear
+    /// ground; a picture with at least 5% of its sampled texels translucent is.
+    #[test]
+    fn transparency_is_a_share_of_the_picture_not_a_single_texel() {
+        // A 64 x 64 picture is sampled at every texel: clear the first `n` columns.
+        let with_clear_columns = |n: u32| px(64, 64, move |x, _| if x < n { [0, 0, 0, 0] } else { [9, 9, 9, 255] });
+        assert!(!is_see_through(&with_clear_columns(0)), "opaque");
+        assert!(!is_see_through(&with_clear_columns(3)), "4.7% clear");
+        assert!(is_see_through(&with_clear_columns(4)), "6.3% clear");
+        assert!(!is_see_through(&px(64, 64, |_, _| [9, 9, 9, 251])), "alpha 251 is a plain picture's");
+        assert!(is_see_through(&px(64, 64, |_, _| [9, 9, 9, 249])));
+        let mut short = px(64, 64, |_, _| [0; 4]);
+        short.rgba = vec![0; 16].into_boxed_slice();
+        assert!(!is_see_through(&short) && !is_see_through(&px(0, 0, |_, _| [0; 4])), "a short or empty buffer");
     }
 
     #[test]
     fn the_backdrop_is_the_blurred_mean_not_a_crop() {
         let flat = backdrop_of(&px(300, 300, |_, _| [200, 100, 50, 255]), 16).unwrap();
-        assert!(flat.rgba.chunks(4).all(|p| p == [200, 100, 50, 255]), "a flat image blurs to itself, opaque");
+        let k = theme::ART_BACKDROP_DIM;
+        let dimmed = |c: f32| (c * k).round() as u8;
+        assert!(flat.rgba.chunks(4).all(|p| p == [dimmed(200.0), dimmed(100.0), dimmed(50.0), 255]), "a flat image blurs to itself, dimmed, opaque");
         let split = backdrop_of(&px(320, 320, |x, _| if x < 160 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }), 16).unwrap();
         let row = |x: usize| split.rgba[(8 * 16 + x) * 4..][..3].to_vec();
-        assert_eq!(row(0)[0], 255, "far left stays red");
-        assert_eq!(row(15)[2], 255, "far right stays blue");
+        assert_eq!(row(0)[0], dimmed(255.0), "far left stays red");
+        assert_eq!(row(15)[2], dimmed(255.0), "far right stays blue");
         let (a, b) = (row(7), row(8));
         assert!(a[0] > 0 && a[2] > 0 && b[0] > 0 && b[2] > 0, "the edge is smeared across texels: {a:?} {b:?}");
     }

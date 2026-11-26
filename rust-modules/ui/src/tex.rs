@@ -280,7 +280,8 @@ pub fn resolve_wh_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> (u32, f
 }
 
 /// What a tile's draw asks of the cache for one picture: the texture, its decoded size, and the
-/// texture of its blurred copy ([`Decoded::backdrop`]), `0` when the picture has none.
+/// texture of its backdrop ([`Decoded::backdrop`]: a blurred copy, or the flat ground of a picture with
+/// transparency), `0` when the picture has none.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct ArtTex {
     pub id: u32,
@@ -436,8 +437,9 @@ pub struct Decoded {
     pub w: u16,
     pub h: u16,
     pub rgba: Box<[u8]>,
-    /// The tiny blurred copy of this picture ([`crate::art_fit::attach_backdrop`]) that its request
-    /// asked for ([`crate::art_fit::BackdropSpec`]), made once when the picture arrives. It is
+    /// The tiny backdrop of this picture ([`crate::art_fit::attach_backdrop`]) that its request
+    /// asked for ([`crate::art_fit::BackdropSpec`]): a blurred copy, or for a picture with
+    /// transparency a one-texel flat ground. Made once when the picture arrives. It is
     /// uploaded with the picture, held in the same [`Entry`] and freed with it, so it never outlives
     /// or lags the texture it was made from. `None` when the request asked for none, or the picture
     /// needs none.
