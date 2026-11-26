@@ -281,21 +281,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-26T16:28:48Z",
+ "generated": "2026-11-26T16:32:12Z",
  "metrics": [
   {
-   "change30_pct": 38.3,
-   "change7_pct": 35.0,
+   "change30_pct": 37.1,
+   "change7_pct": 33.7,
    "d30": 201.0,
-   "delta30": 77.0,
-   "delta7": 72.0,
+   "delta30": 74.5,
+   "delta7": 69.5,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 61,
+   "n_now": 62,
    "n_prev": 48,
-   "now": 278,
+   "now": 275.5,
    "prev7": 206.0,
    "shown": true,
    "state": "worse",
@@ -326,18 +326,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 21.5,
-   "change7_pct": 2.1,
+   "change30_pct": 21.3,
+   "change7_pct": 2.0,
    "d30": 342,
-   "delta30": 73.5,
-   "delta7": 8.5,
+   "delta30": 73,
+   "delta7": 8.0,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 68,
+   "n_now": 69,
    "n_prev": 64,
-   "now": 415.5,
+   "now": 415,
    "prev7": 407.0,
    "shown": true,
    "state": "flat",
@@ -569,18 +569,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 32.3,
-   "change7_pct": 0.0,
+   "change30_pct": 32.9,
+   "change7_pct": 0.4,
    "d30": 266,
-   "delta30": 86,
-   "delta7": 0.0,
+   "delta30": 87.5,
+   "delta7": 1.5,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 61,
+   "n_now": 62,
    "n_prev": 48,
-   "now": 352,
+   "now": 353.5,
    "prev7": 352.0,
    "shown": true,
    "state": "flat",
@@ -695,18 +695,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 40.5,
-   "change7_pct": 3.2,
+   "change30_pct": 41.1,
+   "change7_pct": 3.6,
    "d30": 163,
-   "delta30": 66,
-   "delta7": 7.0,
+   "delta30": 67.0,
+   "delta7": 8.0,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 61,
+   "n_now": 62,
    "n_prev": 48,
-   "now": 229,
+   "now": 230.0,
    "prev7": 222.0,
    "shown": true,
    "state": "flat",
@@ -802,18 +802,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 5.6,
-   "change7_pct": -5.0,
+   "change30_pct": 8.3,
+   "change7_pct": -2.5,
    "d30": 18,
-   "delta30": 1,
-   "delta7": -1.0,
+   "delta30": 1.5,
+   "delta7": -0.5,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 61,
+   "n_now": 62,
    "n_prev": 48,
-   "now": 19,
+   "now": 19.5,
    "prev7": 20.0,
    "shown": false,
    "state": "flat",
@@ -909,13 +909,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 35.0,
+   "change_pct": 33.7,
    "commits": [
-    {
-     "pr": 1557,
-     "sha": "8a01472b4",
-     "title": "Live TV: the What's on page"
-    },
     {
      "pr": 1553,
      "sha": "77d7d145f",
@@ -960,6 +955,11 @@
      "pr": 1564,
      "sha": "d75cc3b80",
      "title": "Live TV: the player banner, debounced zap and BACK to the channel left"
+    },
+    {
+     "pr": 1570,
+     "sha": "986332559",
+     "title": "Live TV: the Channels shelf draws channel plates, not posters"
     }
    ],
    "from": 206.0,
@@ -967,7 +967,7 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-26",
    "threshold_pct": 20.0,
-   "to": 278
+   "to": 275.5
   }
  ],
  "schema": 2,
@@ -994,7 +994,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 352
+   "now": 353.5
   },
   {
    "group": "ci",
