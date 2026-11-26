@@ -917,6 +917,22 @@ fn a_now_earlier_than_the_last_input_counts_as_the_last() {
 }
 
 #[test]
+fn a_connection_given_up_before_it_opens_is_closed() {
+    for give_up in [PartyInput::Call { at: at(10), call: 2, request: Request::Leave }, PartyInput::Wake { at: at(10_000) }] {
+        let mut party = one_relay();
+        let mut effects = Vec::new();
+        party.step(PartyInput::Call { at: at(0), call: 1, request: Request::Create }, &mut effects);
+        let conn = match effects.as_slice() {
+            [PartyEffect::Open { conn, .. }] => *conn,
+            other => panic!("{other:?}"),
+        };
+        effects.clear();
+        party.step(give_up, &mut effects);
+        assert!(effects.contains(&PartyEffect::Close { conn, code: 1000 }), "{effects:?}");
+    }
+}
+
+#[test]
 fn every_party_trace_passes() {
     let cases = traces();
     let failed: Vec<String> = cases

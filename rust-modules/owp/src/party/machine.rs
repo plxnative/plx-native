@@ -805,11 +805,11 @@ impl Party {
                 }
                 Work::Timer(timer) => match timer {
                     Timer::LinkOpen { conn } => {
+                        let mut fx = Vec::new();
                         if let Some(link) = self.links.get_mut(&conn) {
-                            link.step(LinkEvent::Lost, &mut Vec::new());
+                            link.step(LinkEvent::Close, &mut fx);
                         }
-                        self.deadlines.cancel_where(deadlines::of_conn, conn);
-                        stack.push(Work::Lost { conn, code: None });
+                        then(&mut stack, vec![Work::LinkFx { conn, fx }, Work::Lost { conn, code: None }]);
                     }
                     Timer::LinkPing { conn } => {
                         let mut fx = Vec::new();
@@ -926,11 +926,9 @@ impl Party {
                             LinkEffect::PingAt { at_ms } => self.deadlines.set(now, at_ms - now, Timer::LinkPing { conn }),
                             LinkEffect::SilenceAt { at_ms } => self.deadlines.set(now, at_ms - now, Timer::LinkSilence { conn }),
                             LinkEffect::Ponged => seq.push(Work::Ponged { conn }),
-                            LinkEffect::Closed { opened } => {
+                            LinkEffect::Closed { .. } => {
                                 self.deadlines.cancel_where(deadlines::of_conn, conn);
-                                if opened {
-                                    effects.push(PartyEffect::Close { conn, code: 1000 });
-                                }
+                                effects.push(PartyEffect::Close { conn, code: 1000 });
                             }
                         }
                     }
