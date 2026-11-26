@@ -1,9 +1,10 @@
 // PROBE ONLY (branch claude/tizen-subtitle-probe; never shipped): does the device's player hand the app subtitle cue text, and from which
 // source (an embedded text track chosen with player_select_track(TEXT), or a sidecar file given to player_set_subtitle_path)? Inert unless
-// the file <app data>/subprobe.txt exists; it is read once per open, `key=value` per line:
+// http://10.0.2.2:8765/subprobe.txt answers; it is read once per open, `key=value` per line:
 //   cb=1            register player_set_subtitle_updated_cb before prepare
 //   path=<p>        call player_set_subtitle_path(p) before prepare (a local path or an http URL)
 //   select=<n>      at PREPARED, player_select_track(TEXT, n); -1 (the default) selects nothing
+//   local=<url>     download <url> into the app's data directory and use that file as the path
 //   offset=<ms>     at the first cue, player_set_subtitle_position_offset(ms)
 //
 // The contract, from the Tizen 3.0 rootstrap's usr/include/media/player.h and TizenFX API8 Interop.Player.cs:
@@ -47,27 +48,49 @@ namespace PlxHost
         private static bool offsetSent;
         private static int select = -1;
 
+        // The config comes over HTTP from the emulator host's loopback (sdb refuses a push into the app's data directory); no answer = off.
+        internal const string ConfigUrl = "http://10.0.2.2:8765/subprobe.txt";
+
+        private static string Get(string url, int timeoutMs)
+        {
+            using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) })
+            {
+                var resp = http.GetAsync(url).GetAwaiter().GetResult();
+                if (!resp.IsSuccessStatusCode) return null;
+                return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            }
+        }
+
         private static Dictionary<string, string> ReadConfig()
         {
-            try
+            string text;
+            try { text = Get(ConfigUrl, 800); }
+            catch (Exception) { return null; }
+            if (text == null) return null;
+            var d = new Dictionary<string, string>();
+            foreach (string raw in text.Split('
+'))
             {
-                string data = Tizen.Applications.Application.Current.DirectoryInfo.Data;
-                string file = Path.Combine(data, "subprobe.txt");
-                if (!File.Exists(file)) return null;
-                var d = new Dictionary<string, string>();
-                foreach (string raw in File.ReadAllLines(file))
+                string line = raw.Trim();
+                int eq = line.IndexOf('=');
+                if (eq > 0) d[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+            }
+            // local=<url>: download that file into the app's data directory and use the local copy as the path.
+            string local;
+            if (d.TryGetValue("local", out local) && local.Length > 0)
+            {
+                try
                 {
-                    string line = raw.Trim();
-                    int eq = line.IndexOf('=');
-                    if (eq > 0) d[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+                    string body = Get(local, 2000);
+                    string file = Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.Data, "probe-side.srt");
+                    File.WriteAllText(file, body ?? "");
+                    d["path"] = file;
+                    PlxApp.Log("subprobe: wrote " + (body ?? "").Length + " chars of " + local + " to " + file);
                 }
-                return d;
+                catch (Exception e) { PlxApp.Log("subprobe: local copy threw " + e.GetType().Name + ": " + e.Message); }
             }
-            catch (Exception e)
-            {
-                PlxApp.Log("subprobe: config read threw " + e.GetType().Name + ": " + e.Message);
-                return null;
-            }
+            PlxApp.Log("subprobe: config " + string.Join(" ", d));
+            return d;
         }
 
         // Before prepare (IDLE).
