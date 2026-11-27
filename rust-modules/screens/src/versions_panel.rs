@@ -25,13 +25,14 @@ use std::convert::Infallible;
 
 use plx_data::pms::MediaVersion;
 use plx_plex::plex::{MediaId, ServerId};
-use crate::registry::{AppLike, AppMsg, MetadataLike, PageMemory};
+use crate::registry::{AppFx, AppLike, AppMsg, MetadataLike, PageMemory, PlayerReq};
 use plx_ui::a11y::{A11y, A11yPath};
 use plx_machine::machine::{
     Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine,
     MachineId, NavOp,
 };
-use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Out, Page};
+use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Out, Page, Shade};
+use plx_ui::popover::Placement;
 use plx_ui::screen::{
     At, Dir, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen, ScreenEvent,
     Step,
@@ -56,6 +57,20 @@ pub struct VersionsArg {
     /// button when the menu handed the row over, the disc itself otherwise): the page leaves it out
     /// of its own pass and the opener lift draws it at the morph's alpha ([`Screen::opener`]).
     pub opener: Option<(EntryId, u32)>,
+    /// Whose versions these are and where a pick goes ([`Source`]). Not in the canon: `host` already tells the two
+    /// apart (a Detail page's instance, or the player's), and the recorder's shape pin stays what it was.
+    pub source: Source,
+}
+
+/// **Where the list comes from and where a pick goes**: a Detail page's hero (the row reports the file to the page,
+/// which records it for its Play and Resume), or the playback failure screen (the row asks the one recovery door to
+/// play the failed item on that file, `Recovery::PickVersion`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    Page,
+    /// `attempted` is the file the failed attempt asked for (`None`: it asked for none, so the one that plays unasked
+    /// wears the check mark).
+    Failed { attempted: Option<MediaId> },
 }
 
 impl LogicalState for VersionsArg {
@@ -68,6 +83,17 @@ impl LogicalState for VersionsArg {
     }
     fn probe(&self, out: &mut String) {
         out.push_str("versions_arg");
+    }
+}
+
+/// **The host the panel stands on, chosen from where its list comes from** (as `preplay_panel::host_of`): the failure
+/// screen's panel stands over the VIDEO PLANE, a card under or above its button; a Detail page's grows out of the hero
+/// control that opened it, else hangs under or above its disc on the sheet ground.
+fn host_of(arg: &VersionsArg) -> Host {
+    match (arg.source, arg.opener) {
+        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet, need_h: None },
+        (Source::Page, Some(_)) => plx_ui::detail_layout::hero_host(arg.anchor),
+        (Source::Page, None) => Host::Sheet { anchor: arg.anchor },
     }
 }
 
@@ -102,10 +128,7 @@ impl VersionsPanelScreen {
     pub fn new(entry: EntryId, arg: VersionsArg, versions: &[MediaVersion], checked: Option<MediaId>, can_play: bool) -> Self {
         // over the control when it morphs out of one; under the disc when there is room and above it when
         // there is not for a panel with no opener. Rows carry a sub-line: the track menu's size class.
-        let host = match arg.opener {
-            Some(_) => plx_ui::detail_layout::hero_host(arg.anchor),
-            None => Host::Sheet { anchor: arg.anchor },
-        };
+        let host = host_of(&arg);
         let mut menu = Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE);
         let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
         let opening = checked.and_then(|id| versions.iter().position(|v| v.id == id)).unwrap_or(0);
@@ -145,11 +168,14 @@ impl VersionsPanelScreen {
             Out::Dismiss => None,
         };
         self.dismiss(fx);
-        if let Some(media) = media {
-            fx.push(Fx::Deliver(
+        let Some(media) = media else { return };
+        match self.arg.source {
+            Source::Page => fx.push(Fx::Deliver(
                 MachineId::Instance(self.arg.host),
                 Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(media))),
-            ));
+            )),
+            // The failed item plays on that file through the same door every failure recovery takes.
+            Source::Failed { .. } => fx.push(Fx::App(AppFx::Player(PlayerReq::Recover(plx_media::player::Recovery::PickVersion(media))))),
         }
     }
 }
@@ -351,7 +377,7 @@ pub(crate) mod tests {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
         VersionsPanelScreen::new(
             EntryId(3),
-            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None },
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None, source: crate::versions_panel::Source::Page },
             &plx_appkit::version_list::sample(),
             None,
             true,
@@ -445,7 +471,7 @@ pub(crate) mod tests {
     fn the_taken_version_wears_the_check_and_the_list_opens_on_it() {
         let versions = plx_appkit::version_list::sample();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None, source: crate::versions_panel::Source::Page };
         for (checked, marked, opening) in [(None, None, 0), (Some(versions[0].id), Some(0), 0), (Some(versions[1].id), Some(1), 1)] {
             let p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &versions, checked, true);
             let rows: Vec<_> = p.form().table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
@@ -474,6 +500,35 @@ pub(crate) mod tests {
         assert_eq!(played, Some(plx_appkit::version_list::sample()[1].id), "the host page is told which version");
     }
 
+    /// **On the failure screen a pick asks the one recovery door** (`Recovery::PickVersion`) and tells no page: the panel
+    /// stands over the video plane, the file the failed attempt asked for wears the check mark, and OK on a row closes
+    /// the panel and asks to play the failed item on THAT version.
+    #[test]
+    fn on_the_failure_screen_a_row_asks_the_recovery_door_for_that_version() {
+        use crate::registry::PlayerReq;
+        use plx_media::player::Recovery;
+        let sample = plx_appkit::version_list::sample();
+        let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
+        let arg = VersionsArg {
+            host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None,
+            source: Source::Failed { attempted: Some(sample[1].id) },
+        };
+        assert!(matches!(host_of(&arg), plx_ui::menu::Host::Video { .. }), "the read-out's panel stands over the video plane");
+        let mut p = VersionsPanelScreen::new(EntryId(3), arg, &sample, Some(sample[1].id), true);
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+        <VersionsPanelScreen as Machine<HostFixture>>::step(&mut p, &ScreenEvent::Activate(0), &cx(), &mut fx);
+        let fx: Vec<_> = out.into_iter().map(|e| e.fx).collect();
+        assert!(fx.iter().any(|f| matches!(f, Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the panel closes");
+        assert!(!fx.iter().any(|f| matches!(f, Fx::Deliver(..))), "no page is told: the failed item is not a Detail page's");
+        let asked: Vec<_> = fx.iter().filter_map(|f| match f {
+            Fx::App(AppFx::Player(PlayerReq::Recover(r))) => Some(r.clone()),
+            _ => None,
+        }).collect();
+        assert_eq!(asked, [Recovery::PickVersion(sample[0].id)], "the door is asked to play that file");
+    }
+
     /// A platform that composed no playback driver opens the same list with every row disabled and the
     /// one reason noted under them (`browse.detail.no_playback`, the Detail facts line's own word): OK
     /// on a row does nothing, as on every disabled row (`ui/CLAUDE.md`), so the panel stays up and
@@ -484,7 +539,7 @@ pub(crate) mod tests {
         let _lang = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None, source: crate::versions_panel::Source::Page };
         // What one event does to a panel: the effects it pushes.
         let drive = |p: &mut VersionsPanelScreen, ev: ScreenEvent<HostFixture>| {
             let mut out = Vec::new();
@@ -562,7 +617,7 @@ pub(crate) mod tests {
         let anchor = [500.0f32, 700.0, 64.0, 64.0].map(f32::to_bits);
         VersionsPanelScreen::new(
             EntryId(3),
-            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener },
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener, source: crate::versions_panel::Source::Page },
             &plx_appkit::version_list::sample(),
             None,
             true,

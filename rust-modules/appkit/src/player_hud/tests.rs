@@ -980,7 +980,9 @@ fn every_failure_row_fits_the_screen_in_every_language() {
             rows.push(row);
         }
     }
-    assert!(rows.contains(&vec![A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest Disabled row is enumerated");
+    assert!(rows.contains(&vec![A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::SelectVersion, A::Back]),
+        "the widest row (a Disabled refusal on an item with several files) is enumerated");
+    assert!(rows.iter().any(|r| r.contains(&A::SelectVersion)), "Select Version's rows are width-checked");
     let mut out = Vec::new();
     for language in plx_os::i18n::SHIPPED {
         let _guard = language_on_this_thread_for_test(language);

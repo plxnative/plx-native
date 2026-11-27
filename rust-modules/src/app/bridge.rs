@@ -4536,6 +4536,24 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor:
     present_once(d, arg, Style::PlayerPanel { survives_failure: true });
 }
 
+/// **Present the failed item's versions over the failed player** (`PlayerReq::OpenFailedVersions`): the item is the
+/// failed attempt's and the file it asked for is read off the session, so the list opens on it (else on what plays
+/// unasked). A player panel that survives the failure, as `open_failed_tracks`; a pick comes back through
+/// `PlayerReq::Recover(Recovery::PickVersion)`, the one recovery door.
+pub(crate) fn open_failed_versions(ps: &plx_media::route::PlaybackSession, anchor: [u32; 4], d: &mut Dispatcher<AppHost>) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::VersionsPanel(plx_screens::versions_panel::VersionsArg {
+        host,
+        sid: plx_media::route::cur_sid(ps),
+        rk: plx_media::route::cur_rk(ps),
+        anchor,
+        opener: None,
+        source: plx_screens::versions_panel::Source::Failed { attempted: plx_media::route::attempt_version(ps) },
+    });
+    present_once(d, arg, Style::PlayerPanel { survives_failure: true });
+}
+
 /// **Present a surface that is only ever one**: refused when one of its kind is already up, and when one is already
 /// PARKED for this frame's commit (a surface mounts at the commit, once a frame, so two requests in one frame cannot
 /// see each other in the tree). A later request for a parked surface is folded into it ([`AppArg::absorb`]: number

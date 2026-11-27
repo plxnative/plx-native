@@ -4844,8 +4844,9 @@ pub struct StatusOverlay<'a> {
 /// empty second line. A `theme::space` rung.
 const REASON_ROW_DROP: f32 = theme::space::MD;
 
-/// The most controls one read-out row carries: a primary, a secondary and two `extra` slots.
-pub const STATUS_ROW_MAX: usize = 4;
+/// The most controls one read-out row carries: a primary, a secondary and three `extra` slots (the player's failure row at
+/// its widest: *Play automatically*, *Change quality*, *Audio*, *Select Version*, *Back*).
+pub const STATUS_ROW_MAX: usize = 5;
 
 /// The stacked read-out's geometry — the ONE place its bands are placed, read by the draw and by
 /// [`StatusOverlay::action_frames_measured`] so a screen's hit test cannot drift from the pills it
@@ -5307,7 +5308,7 @@ impl<'a> StatusOverlay<'a> {
 
     #[cfg(any(test, feature = "test-support"))]
     fn action_rect(&self, width: f32, bands: &StatusBands) -> Rect {
-        self.row_rects([Some(width), None, None, None], bands)[0].expect("one pill")
+        self.row_rects([Some(width), None, None, None, None], bands)[0].expect("one pill")
     }
 
     /// Render through the very geometry used by `action_frames_measured`, without live font

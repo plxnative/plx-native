@@ -1332,7 +1332,7 @@ fn the_player_panels_dim_through_the_container_in_the_neutral_dim_whatever_the_i
     assert!(store.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(Some(plx_data::metadata::PlayingItem {
         sid: plx_plex::plex::ServerId::from_raw(0), rk: "rk".into(), show_rk: String::new(), kind: String::new(), duration_ms: None, audio: Vec::new(), subs: Vec::new(),
         video_fps: 0.0, width: 0, height: 0, bitrate: 0, video_kbps: 0, dovi: Default::default(),
-        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(),
+        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(), versions: Vec::new(),
     }))));
     for (kind, alpha) in [
         (OverlayKind::Tracks { tab: 0 }, DIM_PLAYER),
