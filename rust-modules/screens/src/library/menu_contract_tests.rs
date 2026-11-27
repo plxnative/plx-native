@@ -196,8 +196,8 @@ fn sources_menu_left_is_an_engine_edge_not_an_editor_transition() {
         let mut engine = FocusEngine::new();
         engine.enter(owner, &menu, plx_ui::screen::FocusTarget::ContainerGroup(GroupId(0)), None, cx);
         let before = engine.current(owner).expect("source menu seats its first row");
-        // LEFT is the page stack's edge (`EdgeRule::Screen`): the engine hands it back to the menu, which pops a page
-        // or, at the root, swallows it; focus never moves
+        // LEFT is the page stack's edge (`EdgeRule::Screen`): the engine hands it back to the menu (re-delivered with
+        // `at_edge`), which pops a page or, at the root, swallows it; focus never moves
         assert!(matches!(engine.move_dir(owner, &menu, &[], Dir::Left, cx), Outcome::Edge(plx_ui::screen::EdgeRule::Screen)));
         assert_eq!(engine.current(owner), Some(before));
 
@@ -213,13 +213,13 @@ fn sources_menu_left_is_an_engine_edge_not_an_editor_transition() {
                         sym: 0,
                         wcode: 0,
                         edge: Edge::Down,
-                        at_edge: false,
+                        at_edge: true,
                     },
                 }),
                 cx,
                 &mut Effects::new(&mut output, MachineId::Instance(plx_machine::machine::InstanceId(7)), &mut present),
             ),
-            Handled::No
+            Handled::Yes
         );
         assert_eq!(menu.kind(), LibraryMenuKind::Sources, "LEFT cannot enter an editor");
         assert!(output.is_empty(), "LEFT emits no source/editor action");

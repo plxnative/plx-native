@@ -6,7 +6,7 @@ pub use plx_data::watchlist::order::SortKey;
 use plx_data::watchlist::order::{sorted_filtered, FilterSpec, Show, SortSpec};
 use plx_os::i18n::msg;
 use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
-use plx_ui::menu::{Class, Host, Menu, Morph};
+use plx_ui::menu::{Class, GrowWidth, Host, Menu, Morph};
 use plx_ui::table::Row;
 use plx_ui::Rect;
 use std::convert::Infallible;
@@ -274,7 +274,7 @@ pub type OptionsMenu = Menu<Infallible, OptionsRow, OptionsRow>;
 /// The menu for a header pill at `pill`.
 pub fn options_menu(pill: Rect) -> OptionsMenu {
     // the header pill opens it: the close's blob whitens toward the pill's own focused fill
-    let host = Host::Grows { pill, clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill };
+    let host = Host::Grows { pill, clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill, width: GrowWidth::Catch };
     Menu::new(host, Class::Action, crate::registry::BAND)
 }
 

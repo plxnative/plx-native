@@ -39,7 +39,7 @@ use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
 use plx_machine::machine::{
     Canon, Cx, Effects, EntryId, FocusKey, Fx, GroupId, Handled, LogicalState, Machine, NavOp,
 };
-use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Morph, Out};
+use plx_ui::menu::{no_pages, Class, Event, GrowWidth, Host, Menu, Morph, Out};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::table::{Row, Section};
 use plx_ui::Rect;
@@ -231,7 +231,7 @@ fn action_row(a: Action) -> Row {
 /// No `fill`: the chip is itself a glass capsule at every focus, with no flat focused fill for the close's blob to
 /// whiten toward. `chip` is the resting circle before the first draw hands in the live rect.
 fn account_host(chip: Rect) -> Host {
-    Host::Grows { pill: chip, clear_y: None, fill: None, morph: Morph::Fade }
+    Host::Grows { pill: chip, clear_y: None, fill: None, morph: Morph::Fade, width: GrowWidth::Catch }
 }
 
 /// The chip's resting rect, the closed circle: the opener a menu that has not been handed its
@@ -273,9 +273,7 @@ impl AccountMenuScreen {
         Self {
             entry,
             header: plx_os::i18n::msg::settings_account_title().to_string(),
-            // a rebuild that takes the focused row away opens afresh on its safe opening row, never on the
-            // neighbour that slid into the vacated place (*Sign out*, once *Change profile* is hidden)
-            menu: Menu::new(account_host(resting_chip()), Class::Action, crate::registry::BAND).opening_afresh(),
+            menu: Menu::new(account_host(resting_chip()), Class::Action, crate::registry::BAND),
             built: false,
             session_watch: Default::default(),
             switch_refused: false,
@@ -293,10 +291,9 @@ impl AccountMenuScreen {
         self.switch_refused = switch_refused;
         let (header, form) = account_form(&AccountInputs::of(&acc, switch_refused));
         self.header = header;
-        // The action that was focused keeps its row when it survives the rebuild; otherwise (the first
-        // build, or the row was taken away under an open menu) the menu OPENS afresh.
+        // the first build installs the root, as the Watchlist's options do
         let mut form = Some(form);
-        self.menu.step(Event::Refresh { keep: None }, &mut |page| page.is_none().then(|| form.take()).flatten().map(plx_ui::menu::Page::root));
+        self.menu.step(Event::ReplaceRoot { slide: None }, &mut |page| page.is_none().then(|| form.take()).flatten().map(plx_ui::menu::Page::root));
     }
 
     /// The panel as laid this frame (over the chip's live rect).

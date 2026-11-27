@@ -15,7 +15,7 @@ use plx_machine::machine::{
     LogicalState, Machine, MachineId, NavOp,
 };
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::menu::{Class, Event, Host, Menu, Morph, Out, Page};
+use plx_ui::menu::{Class, Event, GrowWidth, Host, Menu, Morph, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::form::{Binding, Form, FormSection, FormTable, RowKey, RowKind};
 use plx_appkit::source_list::{self, SrcTarget, Tail};
@@ -572,17 +572,15 @@ pub struct LibraryMenu {
 
 impl LibraryMenu {
     pub fn new(entry: EntryId, arg: LibraryMenuArg) -> Self {
-        // a header pill opens it: the close's blob whitens toward the pill's own focused fill; a rebuild that takes
-        // the focused row away opens afresh on the draft's own pick (the checked row), never a neighbour
-        let host = Host::Grows { pill: pill_of(&arg), clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill };
-        let menu = Menu::new(host, Class::Action, crate::registry::BAND).opening_afresh();
-        // the "+N" list's rows are library NAMES a user chose: as wide as the widest, up to the safe width,
-        // never cut with room to spare
-        let menu = if arg.kind == LibraryMenuKind::Sources {
-            menu.with_width_ceiling(plx_ui::page_header::TEXT_X1 - 96.0)
-        } else {
-            menu
+        // a header pill opens it: the close's blob whitens toward the pill's own focused fill. The "+N" list's
+        // rows are library NAMES a user chose: as wide as the widest, up to the safe width, never cut with room
+        // to spare
+        let width = match arg.kind {
+            LibraryMenuKind::Sources => GrowWidth::Names { ceiling: plx_ui::page_header::TEXT_X1 - 96.0 },
+            _ => GrowWidth::Catch,
         };
+        let host = Host::Grows { pill: pill_of(&arg), clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill, width };
+        let menu = Menu::new(host, Class::Action, crate::registry::BAND);
         Self {
             entry,
             arg,
@@ -646,7 +644,9 @@ impl LibraryMenu {
         {
             self.draft_rebuilds += 1;
         }
-        self.drive(Event::Refresh { keep: None }, cx);
+        // the first root is installed, not refreshed: it opens on the draft's own pick (the checked row)
+        let first = self.stamp.is_empty();
+        self.drive(if first { Event::ReplaceRoot { slide: None } } else { Event::Refresh { keep: None } }, cx);
     }
 
     /// Install `draft` as the root page, as the page beneath would publish it (a test's arrangement).
