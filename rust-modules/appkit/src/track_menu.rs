@@ -1738,7 +1738,7 @@ impl TrackMenuState {
         let focused = self.menu.id_of(key).copied();
         if tab == 0 {
             // The two Plex Pass DSP rows (issue #266), after the audio tracks — see
-            // `Self::audio_form`, which declares them beside the tracks, so a track pick below is
+            // `track_rows::audio_page`, which declares them beside the tracks, so a track pick below is
             // never mistaken for one of these by position arithmetic.
             return match focused {
                 // A `Disabled` pair is drawn dim, reading Off, and OK on it is a no-op — same
@@ -4199,7 +4199,7 @@ mod enhancement_menu_tests {
     }
 
     /// Offered-but-not-applied (the enhancement toggle is off, or the offer is merely available)
-    /// must NOT lock the rows: `table_form` locks only when `subtitle_presenter` is `ServerBurn`,
+    /// must NOT lock the rows: `track_rows::subtitles_page` locks only when the route's `burn` is `Some` (`subtitle_presenter` is `ServerBurn`),
     /// and here the live route is Direct, so Timing stays live and no reason note is drawn.
     #[test]
     fn subtitles_tab_timing_and_color_stay_live_when_not_applied() {
