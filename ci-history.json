@@ -1,4 +1,4 @@
-{"updated":"2026-11-27T17:12:39Z",
+{"updated":"2026-11-27T17:35:42Z",
 "ci":[
 {"id":33248488089,"at":"2026-08-29T10:43:47Z","sha":"37a5160c4","title":"Merge branch 'abr-mode-flap' into main","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":111},"failed":["host checks (NOT a device gate)"]},
 {"id":33276894833,"at":"2026-08-29T21:45:48Z","sha":"87aae35ff","title":"ui: a control on video is a light film, and a capsule is not a stadium","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
@@ -6181,7 +6181,8 @@
 {"id":46029634358,"at":"2026-11-27T15:58:56Z","sha":"14785c8fb","title":"Player Tracks and More menus on plx_ui::menu","pr":1593,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":291,"macOS tests against bundled FFmpeg and ASS":130,"macOS simulator build + launch":137,"Windows launcher syntax":16}},
 {"id":46030432923,"at":"2026-11-27T16:04:22Z","sha":"4918597a7","title":"Playback: the failure read-out is one captured value, not a per-frame derivation","pr":1595,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":260,"Windows launcher syntax":17,"Linux simulator build + launch":370,"macOS simulator build + launch":329}},
 {"id":46038434598,"at":"2026-11-27T17:01:19Z","sha":"d2909490e","title":"Tests: say why the refused-restore rig injects a failure","pr":1596,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":18,"Linux simulator build + launch":417,"macOS tests against bundled FFmpeg and ASS":281,"macOS simulator build + launch":294}},
-{"id":46038548910,"at":"2026-11-27T17:02:10Z","sha":"f61597aaa","title":"Keep the language aliases in the hero menu's Audio & Subtitles","pr":1597,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":201,"macOS simulator build + launch":331,"Linux simulator build + launch":296,"Windows launcher syntax":20}}
+{"id":46038548910,"at":"2026-11-27T17:02:10Z","sha":"f61597aaa","title":"Keep the language aliases in the hero menu's Audio & Subtitles","pr":1597,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":201,"macOS simulator build + launch":331,"Linux simulator build + launch":296,"Windows launcher syntax":20}},
+{"id":46042112328,"at":"2026-11-27T17:28:29Z","sha":"626cf8176","title":"Tests: the could-not-start pin does not read the process-global resolve slot","pr":1596,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":291,"Windows launcher syntax":32,"macOS simulator build + launch":418,"Linux simulator build + launch":270}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
