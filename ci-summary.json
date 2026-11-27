@@ -295,7 +295,7 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-27T01:07:41Z",
+ "generated": "2026-11-27T01:13:48Z",
  "metrics": [
   {
    "change30_pct": 51.6,
@@ -926,11 +926,6 @@
    "change_pct": 44.7,
    "commits": [
     {
-     "pr": 1562,
-     "sha": "0f22f7455",
-     "title": "Playback: stopping a play or trailer frees the stream slots its decision reserved"
-    },
-    {
      "pr": 1572,
      "sha": "571e6be4d",
      "title": "Live TV: number entry"
@@ -974,6 +969,11 @@
      "pr": 1578,
      "sha": "ada31c221",
      "title": "Live TV: the Guide"
+    },
+    {
+     "pr": 1582,
+     "sha": "ccd8731c3",
+     "title": "Tizen: a packet-player probe in Settings > Diagnostics, and the Feed port's design"
     }
    ],
    "from": 208,
@@ -987,11 +987,6 @@
    "change_pct": 23.2,
    "commits": [
     {
-     "pr": 1562,
-     "sha": "0f22f7455",
-     "title": "Playback: stopping a play or trailer frees the stream slots its decision reserved"
-    },
-    {
      "pr": 1572,
      "sha": "571e6be4d",
      "title": "Live TV: number entry"
@@ -1035,6 +1030,11 @@
      "pr": 1578,
      "sha": "ada31c221",
      "title": "Live TV: the Guide"
+    },
+    {
+     "pr": 1582,
+     "sha": "ccd8731c3",
+     "title": "Tizen: a packet-player probe in Settings > Diagnostics, and the Feed port's design"
     }
    ],
    "from": 209.5,
