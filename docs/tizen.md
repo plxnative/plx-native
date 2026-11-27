@@ -735,7 +735,7 @@ and posted the log and a photo of the row reading `64 passed, 0 failed`. The log
 | `aac`, `ac3`, `eac3`, `pcm_s16le` alone | PASS: prepared in 64-101 ms, advancing about 508 ms after `start` |
 | `first-frame` | never raised, in any scenario (as on the emulator) |
 
-The video runs logged `buffer video underrun` notes: 16 in `h264-clock`, three each in `h264+aac` and `hevc10-hdr10`, one each in
+The video runs logged `buffer video underrun` notes, 16 in all: 7 in `h264-clock`, three each in `h264+aac` and `hevc10-hdr10`, one each in
 `hevc`, `av1` and `vp9`. Their cause is not determined. The probe feeds a 2 s horizon ahead of the clock (`FEED_AHEAD_MS`), and every
 run passed regardless. So most of the Feed port's open questions are answered for this set. The packet player opens without the
 Partner privilege, and its armv7 layouts are the build's. Every codec the probe sends is accepted: H.264, HEVC, HEVC Main 10 with
