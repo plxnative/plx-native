@@ -203,9 +203,9 @@ fn merge_far(fresh: &mut Guide, held: &Guide, now: i64) {
 #[derive(Debug, PartialEq, Eq)]
 pub struct LiveTvReq {
     sid: ServerId, key: ClientKey, now: i64, work: Work,
-    /// The far end this read asks: the store's reach for the first read or when the far span is owed
-    /// ([`Guide::far_due`]), else `0`, the live window alone (the read widens it to the window's own end), so a
-    /// scheduled refresh does not read the far span again.
+    /// The far end this read asks: the store's reach for the first read, when the far span is owed
+    /// ([`Guide::far_due`]) or when the reach ends inside the live window ([`Work::until`]), else `0`, the live window
+    /// alone (the read widens it to the window's own end), so a scheduled refresh does not read the far span again.
     until: i64,
 }
 impl LiveTvReq {
