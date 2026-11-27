@@ -59,7 +59,8 @@ struct Seen {
     origin: AttemptOrigin,
     /// the failure of the attempt that was replaced is gone
     failure_cleared: bool,
-    /// the live Direct Play preference
+    /// the live Direct Play preference (what *Play automatically* persists; the mode the NEW attempt resolves under is
+    /// pinned in `plx_media`: `the_recovery_doors_overrides_set_the_mode_the_retry_resolves_under`)
     mode: DirectPlayMode,
     /// how many times it was published since the test began
     mode_publishes: u32,

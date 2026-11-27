@@ -546,6 +546,7 @@ mod tests {
     #[test]
     fn every_offered_action_maps_to_one_recovery() {
         use super::super::FailureAction as A;
+        let _g = plx_base::testlock::serial();
         let recoveries = [Recovery::RetrySame, Recovery::PlayAutomatically,
             Recovery::PickQuality(crate::route::Quality::P720), Recovery::PickTracks(pick())];
         for action in [A::TryAgain, A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks] {
@@ -563,6 +564,10 @@ mod tests {
                 };
                 assert_eq!(recovery_offered(&failure, live, recovery), drawn.contains(&recovery.action()),
                     "{:?} {recovery:?} {live:?}", failure.kind());
+                // and the DOOR itself, on a session standing on that failure, answers the same
+                let mut ps = standing(failure.clone());
+                assert_eq!(crate::route::begin_recovery(&mut ps, live, recovery).is_ok(), drawn.contains(&recovery.action()),
+                    "door: {:?} {recovery:?} {live:?}", failure.kind());
             }
         }
     }

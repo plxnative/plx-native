@@ -775,21 +775,27 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             ContentReq::CommitPreplayPick { tracks, sel, source: tracks_from } => {
                 // The selection PUT (queued off the frame thread) and, for an episode, the show's
                 // track memory; a page's pick is already held by the metadata store.
-                if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
-                    plx_base::eventlog::log("preplay: pick not written (no part to address)");
-                }
+                let write = || {
+                    if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
+                        plx_base::eventlog::log("preplay: pick not written (no part to address)");
+                    }
+                };
                 // On the failure screen the pick is what the retry plays, and the pick STARTS it, as a
                 // quality pick from Change quality does (`apply_quality`): the pair is held on the
                 // session, the one owner of what a retry carries, and the retry consumes it. A refusal
                 // DecisionRefused has no Try again, so a pick that only held would have nothing to play it.
+                // The failure screen's pick writes only once the recovery is accepted (see `commit_failed_pick`).
                 if let plx_screens::preplay_panel::Source::Failed { .. } = tracks_from {
                     commit_failed_pick(
                         &mut app.player.session,
                         &mut app.adapters.player,
                         app.bridge.metadata_mut(),
                         sel.pick,
+                        write,
                         || content_back(&mut app.pages, source, entry, ret),
                     );
+                } else {
+                    write();
                 }
             }
             ContentReq::Panel(panel) => {
@@ -822,18 +828,20 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
 }
 
 /// **A pick made on the failure screen, performed** as the recovery it is (`Recovery::PickTracks`, through the one
-/// door, `playback::perform_recovery`): the pair is held on the session, the one owner of what a retry carries, and the
-/// retry consumes it. The panel closes only when the retry STARTED: a refused one leaves the panel up, with the pair
-/// held for Try again.
+/// door, `playback::perform_recovery_with`): once the door accepts it the pair is held on the session, the one owner of
+/// what a retry carries, `write` (the selection PUT and the show's track memory) runs, and the retry, which consumes
+/// the pair, starts. The panel closes only when the retry STARTED: a retry that could not start leaves the panel up,
+/// with the pair held for Try again. A door refusal or a server stop holds and writes nothing.
 fn commit_failed_pick(
     session: &mut plx_media::route::PlaybackSession,
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     meta: &mut plx_data::stores::metadata::MetadataStore,
     pick: plx_data::metadata::PreplayPick,
+    write: impl FnOnce(),
     close: impl FnOnce(),
 ) {
     let recovery = plx_media::player::Recovery::PickTracks(pick);
-    if super::playback::perform_recovery(session, pa, meta, recovery) == super::playback::Recovered::Started {
+    if super::playback::perform_recovery_with(session, pa, meta, recovery, write) == super::playback::Recovered::Started {
         close();
     }
 }
@@ -2965,9 +2973,9 @@ mod failed_pick_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
-        let mut closed = 0;
-        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || closed += 1);
-        assert_eq!(closed, 1, "the retry started: the panel closes");
+        let (mut closed, mut written) = (0, 0);
+        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || written += 1, || closed += 1);
+        assert_eq!((closed, written), (1, 1), "the retry started: the pick was written and the panel closes");
         assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "and the pair is held");
         plx_media::route::cancel_play(&mut session);
     }
@@ -2982,11 +2990,51 @@ mod failed_pick_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
-        let mut closed = false;
-        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || closed = true);
+        let (mut closed, mut written) = (false, false);
+        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || written = true, || closed = true);
         assert!(!closed, "no request descriptor: the recovery is refused and the panel stays");
+        assert!(!written, "a refused pick writes nothing (no selection PUT, no track memory)");
         assert_eq!(plx_media::route::failed_pick(&session), None,
             "no request, no item the pick could belong to: nothing is held");
+    }
+
+    /// **A retry that could not START leaves the panel up with the pair held** (`Recovered::Kept`): the door accepted
+    /// the pick (the failure offers it and the session has a request), the failed attempt was stopped, but the request
+    /// names no item to resolve again, so no resolve began. The pick is written and held for Try again; the panel stays.
+    #[test]
+    fn a_retry_that_could_not_start_keeps_the_panel_up_and_the_pick_held() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        // a request with neither a key nor a part: "something to retry" to the door, never resolvable
+        plx_media::route::seed_request_for_test(&mut session, "");
+        capture_the_failure(&mut session);
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let (mut closed, mut written) = (false, false);
+        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || written = true, || closed = true);
+        assert!(!closed, "no resolve started: the panel stays up");
+        assert!(written, "the door accepted the pick: its selection was written");
+        assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "and the pair is held for Try again");
+        assert!(!plx_media::route::play_pending(), "nothing is resolving");
+    }
+
+    /// A server's stop ends the playback: the pick is neither held nor written, and the panel stays.
+    #[test]
+    fn a_server_stop_holds_and_writes_nothing() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        plx_media::route::seed_request_for_test(&mut session, "m1");
+        plx_media::route::note_engine_failure(&mut session, plx_media::player::attempt_view::RuntimeFailure::ServerStopped, 0);
+        assert!(plx_media::player::server_stop_applies(&session), "rig");
+        capture_the_failure(&mut session);
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let (mut closed, mut written) = (false, false);
+        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || written = true, || closed = true);
+        assert!(!closed && !written, "a stopped playback starts and writes nothing");
+        assert_eq!(plx_media::route::failed_pick(&session), None, "and holds nothing");
     }
 
     /// **Try again plays the pick it was made for**, through the real retry on a session that HAS a request:
@@ -3002,7 +3050,7 @@ mod failed_pick_tests {
         let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
         let mut closed = false;
-        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || closed = true);
+        commit_failed_pick(&mut session, &mut adapter, &mut meta, pick(), || {}, || closed = true);
         assert!(closed, "the retry was taken: it stopped and started a resolve");
         assert_eq!(plx_media::player::report::error_context_for_test(&session).attempt_origin,
             plx_media::player::report::AttemptOrigin::ViewerReconfigure, "as the viewer's reconfiguration");

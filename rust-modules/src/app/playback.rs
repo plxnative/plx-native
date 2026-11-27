@@ -201,6 +201,19 @@ pub(crate) fn perform_recovery(
     meta: &mut plx_data::stores::metadata::MetadataStore,
     recovery: plx_media::player::Recovery,
 ) -> Recovered {
+    perform_recovery_with(ps, pa, meta, recovery, || {})
+}
+
+/// [`perform_recovery`] with `accepted`: the caller's own writes for a recovery, run only once the door has accepted
+/// it and ahead of the retry (after step 3). A server stop or a refusal runs none of it, so a refused recovery writes
+/// nothing. The failure screen's track pick queues its selection PUT here.
+pub(crate) fn perform_recovery_with(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    meta: &mut plx_data::stores::metadata::MetadataStore,
+    recovery: plx_media::player::Recovery,
+    accepted: impl FnOnce(),
+) -> Recovered {
     use plx_media::player::Recovery;
     if plx_media::player::server_stop_applies(ps) {
         return Recovered::Refused;
@@ -218,6 +231,7 @@ pub(crate) fn perform_recovery(
     if let Recovery::PickQuality(quality) = recovery {
         plx_media::route::set_quality_for_retry(quality);
     }
+    accepted();
     if retry_failed_playback(ps, pa, meta, overrides) { Recovered::Started } else { Recovered::Kept }
 }
 
