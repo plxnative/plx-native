@@ -521,6 +521,36 @@ fn an_in_place_subtitle_put_does_not_write_a_pending_audio_pick() {
     lane.finish();
 }
 
+/// A send that panics must not strand the serial queue: its waiter is released (a PUT that did not
+/// happen), a waiter behind it is not left waiting for a thread that is gone, and the next
+/// `put_selection` is served by a fresh worker.
+#[test]
+fn a_panicking_send_releases_its_waiters_and_the_next_put_gets_a_fresh_worker() {
+    fn panics_on_audio_one(_: &plx_base::task::OffFrame, req: &QueuedSelection) -> bool {
+        assert_ne!(req.aud, 1, "the send panicked");
+        true
+    }
+    let lane = Lane::start(FlightRig::start);
+    let sid = cur_sid(&lane.ps);
+    let (first, first_answer) = std::sync::mpsc::sync_channel(1);
+    let (second, second_answer) = std::sync::mpsc::sync_channel(1);
+    assert!(enqueue_selection_via(panics_on_audio_one, sid, PART, 1, Some(HELD_SUB), false, Some(first)));
+    assert!(enqueue_selection_via(panics_on_audio_one, sid, PART, 2, Some(HELD_SUB), false, Some(second)));
+    let wait = Duration::from_secs(5);
+    // The panicked request's sender dropped with the unwind: no answer, which a waiter reads as "not sent".
+    assert!(matches!(first_answer.recv_timeout(wait), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)));
+    // The one behind it was either released or served by a fresh worker; never left waiting.
+    assert!(!matches!(second_answer.recv_timeout(wait), Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+    let deadline = std::time::Instant::now() + wait;
+    while !selection_queue_idle() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(selection_queue_idle(), "the queue is not stuck behind a dead worker");
+    let put = put_selection(&plx_base::task::OffFrame::for_test(), sid, PART, HELD_AUDIO, HELD_SUB);
+    assert!(put.is_some(), "the next PUT gets a fresh worker and is answered");
+    lane.finish();
+}
+
 /// **An Original recovery that is refused** writes back the candidate's PUT: with nothing owed the
 /// refusal is a plain rejection and one restore (the candidate's audio, which the viewer never chose).
 #[test]

@@ -10653,6 +10653,17 @@ fn enqueue_selection(
     sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool,
     answer: Option<std::sync::mpsc::SyncSender<bool>>,
 ) -> bool {
+    enqueue_selection_via(run_queued_selection, sid, part, aud, sub, write_back, answer)
+}
+
+/// The type of what sends one dequeued request: [`run_queued_selection`] in production, a stand-in in
+/// the test that panics the send.
+type SelectionRunner = fn(&plx_base::task::OffFrame, &QueuedSelection) -> bool;
+
+fn enqueue_selection_via(
+    run: SelectionRunner, sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool,
+    answer: Option<std::sync::mpsc::SyncSender<bool>>,
+) -> bool {
     if part <= 0 {
         return false;
     }
@@ -10675,26 +10686,24 @@ fn enqueue_selection(
         !std::mem::replace(&mut queue.worker_running, true)
     };
     if spawn {
-        spawn_selection_worker();
+        spawn_selection_worker(run);
     }
     true
 }
 
-fn spawn_selection_worker() {
-    let spawned = plx_base::task::spawn_off_frame("put-selection", |off| loop {
-        let req = {
+fn spawn_selection_worker(run: SelectionRunner) {
+    let spawned = plx_base::task::spawn_off_frame("put-selection", move |off| {
+        // A panicking send must not strand the queue: `worker_running` would stay set and every waiter
+        // (and every later `put_selection`, so every later playback start) would wait on a thread that
+        // is gone. `catch_unwind` outside the loop, as the claim worker does; the request that panicked
+        // drops its sender with the unwind, and the waiters still queued are released below.
+        let drained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drain_selection_queue(off, run)));
+        if drained.is_err() {
+            crate::player::log("select streams: the selection worker panicked; its waiters are released");
             let mut queue = selection_queue();
-            let Some(req) = queue.pending.pop_front() else {
-                // Nothing left: retire under the same lock the push takes, so a racing
-                // `queue_put_selection` either pushed before this check or spawns a fresh worker.
-                queue.worker_running = false;
-                break;
-            };
-            req
-        };
-        let sent = run_queued_selection(off, &req);
-        if let Some(answer) = &req.answer {
-            let _ = answer.send(sent);
+            queue.worker_running = false;
+            // The next push starts a fresh worker for what is left; a waiter must not wait for this one.
+            queue.pending.retain(|req| req.answer.is_none());
         }
     });
     if !spawned {
@@ -10705,6 +10714,26 @@ fn spawn_selection_worker() {
         queue.worker_running = false;
         // A worker waiting for its answer must not wait for a thread that never started.
         queue.pending.retain(|req| req.answer.is_none());
+    }
+}
+
+/// The serial worker's loop: send what is queued, in order, and retire when nothing is left.
+fn drain_selection_queue(off: &plx_base::task::OffFrame, run: SelectionRunner) {
+    loop {
+        let req = {
+            let mut queue = selection_queue();
+            let Some(req) = queue.pending.pop_front() else {
+                // Nothing left: retire under the same lock the push takes, so a racing
+                // `queue_put_selection` either pushed before this check or spawns a fresh worker.
+                queue.worker_running = false;
+                return;
+            };
+            req
+        };
+        let sent = run(off, &req);
+        if let Some(answer) = &req.answer {
+            let _ = answer.send(sent);
+        }
     }
 }
 
