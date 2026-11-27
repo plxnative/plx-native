@@ -420,11 +420,11 @@ fn the_playing_item_carries_every_version_and_the_failure_view_lists_them() {
     let adapter = MetadataAdapter::default();
     let mut state = MetadataState::default();
     state.playing = Some(playing_item_from(SRV_A, "42", Some(&it)));
-    let v = view(&state, &adapter);
+    let v = MetadataView { state: &state, adapter: &adapter };
     assert_eq!(v.failed_versions(SRV_A, "42").map(<[_]>::len), Some(2));
     assert!(v.failed_versions(SRV_A, "43").is_none(), "another item's failure");
     state.playing = Some(playing_item_from(SRV_A, "42", Some(&one)));
-    assert!(view(&state, &adapter).failed_versions(SRV_A, "42").is_none(), "one file: nothing to pick");
+    assert!(MetadataView { state: &state, adapter: &adapter }.failed_versions(SRV_A, "42").is_none(), "one file: nothing to pick");
 }
 
 #[test]
