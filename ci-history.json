@@ -1,4 +1,4 @@
-{"updated":"2026-11-27T18:40:24Z",
+{"updated":"2026-11-27T18:41:01Z",
 "ci":[
 {"id":33248488089,"at":"2026-08-29T10:43:47Z","sha":"37a5160c4","title":"Merge branch 'abr-mode-flap' into main","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":111},"failed":["host checks (NOT a device gate)"]},
 {"id":33276894833,"at":"2026-08-29T21:45:48Z","sha":"87aae35ff","title":"ui: a control on video is a light film, and a capsule is not a stadium","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
@@ -6192,7 +6192,8 @@
 {"id":46042300164,"at":"2026-11-27T17:29:59Z","sha":"e8000023f","title":"Fix four docs the Form::map and track_rows changes made stale","pr":1597,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":333,"Linux simulator build + launch":407,"macOS tests against bundled FFmpeg and ASS":265,"Windows launcher syntax":21}},
 {"id":46043541636,"at":"2026-11-27T17:39:24Z","sha":"017fb89ce","title":"Shared track rows for the player and Detail","pr":1597,"conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":353,"Windows launcher syntax":19,"Linux simulator build + launch":325,"macOS tests against bundled FFmpeg and ASS":149}},
 {"id":46046247957,"at":"2026-11-27T18:01:05Z","sha":"2f7c25cd6","title":"Menus only through plx_ui::menu: delete the old doors (PR5)","pr":1598,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":324,"Linux simulator build + launch":332,"macOS simulator build + launch":323,"Windows launcher syntax":19}},
-{"id":46048181467,"at":"2026-11-27T18:16:14Z","sha":"54a6c08f3","title":"One size-class vocabulary: menu::Class, no bool constructor (PR5 review)","pr":1598,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":128,"macOS simulator build + launch":295,"Linux simulator build + launch":393,"Windows launcher syntax":19}}
+{"id":46048181467,"at":"2026-11-27T18:16:14Z","sha":"54a6c08f3","title":"One size-class vocabulary: menu::Class, no bool constructor (PR5 review)","pr":1598,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":128,"macOS simulator build + launch":295,"Linux simulator build + launch":393,"Windows launcher syntax":19}},
+{"id":46050286175,"at":"2026-11-27T18:32:53Z","sha":"83762c711","title":"Menus only through plx_ui::menu: delete the old doors","pr":1598,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":476,"macOS tests against bundled FFmpeg and ASS":269,"macOS simulator build + launch":370,"Windows launcher syntax":16}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
