@@ -1281,9 +1281,9 @@ impl LiveTvScreen {
         if elem == FILTER_ELEM && self.page.browsing() {
             if let Some(filter) = self.page.scope.filter() {
                 if let Some(pill) = self.page.filter_pill(cx.measure) {
-                    // where the page comes to rest, not where its glide has got to: the glass grows out of the control the page is
-                    // bringing home (`Stack` places a plain section at the live scroll whatever `At` says, so the target is read from it here)
-                    let anchor = [pill.x, pill.y - self.stack.target(), pill.w, pill.h].map(f32::to_bits);
+                    // the control as it is drawn now; the menu is handed where it is drawn on every frame after
+                    // (`Screen::opener_rect`), so the page moving under it moves the glass with it
+                    let anchor = [pill.x, pill.y - self.stack.scroll(), pill.w, pill.h].map(f32::to_bits);
                     let panel = ContentPanel::LiveTvFilter { chosen: filter, anchor, opener: (self.page.entry, FILTER_ELEM) };
                     fx.push(Fx::App(AppFx::Content(ContentReq::Panel(panel))));
                 }

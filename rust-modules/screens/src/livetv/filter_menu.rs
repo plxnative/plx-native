@@ -219,6 +219,11 @@ impl<H: AppLike<Memory = PageMemory>> Screen<H> for LiveTvFilterScreen {
         let (entry, elem) = self.arg.opener;
         Some((entry, Some(FocusKey { entry, elem })))
     }
+    /// The control's DRAWN plate, every frame (the page that carries it moves: focus on the pill brings the page home, a wheel
+    /// scrolls it): the glass grows out of, and drains back into, the pill where it stands (`Menu::track_opener`).
+    fn opener_rect(&mut self, drawn: plx_ui::Rect) {
+        self.menu.track_opener(plx_ui::widgets::focus_pill(drawn));
+    }
     // The menu's own (`plx_ui::menu_screen_methods!`): the opener is consumed by the morph, the droplet's hand-back, the compact
     // dim, the prewarm, the pointer hold, and the draw with its focus stops.
     plx_ui::menu_screen_methods!(H, "ltv.filter");

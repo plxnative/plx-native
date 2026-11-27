@@ -1892,24 +1892,24 @@ fn returning_home(screen: &mut LiveTvScreen, view: LiveTvView<'_>, frames: u32) 
     assert!(screen.stack.scroll() > 20.0 && screen.stack.target() < 1.0, "the page is mid-flight home: {} -> {}", screen.stack.scroll(), screen.stack.target());
 }
 
-/// **The filter menu grows out of the control where the page comes to rest**, not where it is mid-glide: pressed while the page
-/// is still returning home, the anchor is the control's place at the scroll's target, which the page is about to stand it at.
+/// **The filter menu opens on the control as it is drawn**, mid-glide or not (the menu then follows the control: `Screen::opener_rect`,
+/// graded in `filter_menu_tests`): a click after the page was wheeled hands the menu the pill where the reader sees it, not
+/// where the scroll was headed (the target) nor where it stood at the top. Red while the anchor was taken at the scroll's target.
 #[test]
-fn the_filter_menu_anchors_where_the_page_comes_to_rest_and_not_where_it_is_mid_flight() {
+fn the_filter_menu_opens_on_the_control_where_it_is_drawn_mid_glide() {
     let _guards = browse_guards();
     let (store, mut screen) = browse_fourteen();
     let view = store.view();
     returning_home(&mut screen, view, 3);
-    let live = Focusable::<TestHost>::place(&screen, &FILTER_ELEM, &cx(view, Some(FILTER_ELEM)), At::Drawn).expect("placed").rect;
+    let drawn = Focusable::<TestHost>::place(&screen, &FILTER_ELEM, &cx(view, Some(FILTER_ELEM)), At::Drawn).expect("placed").rect;
+    assert!(drawn.y < screen.page.header_row(&FixtureMeasure).plate(FILTER_ELEM).unwrap().y - 10.0, "premise: the page has not got home");
     let out = step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::PressCommit(PressId(3)));
     let anchor = out.iter().find_map(|s| match &s.fx {
         Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::LiveTvFilter { anchor, .. }))) => Some(anchor.map(f32::from_bits)),
         _ => None,
     }).expect("the press asks for the menu");
-    let plate = screen.page.header_row(&FixtureMeasure).plate(FILTER_ELEM).expect("the control's plate");
-    let rest = plx_ui::widgets::focus_pill(plate);
-    assert_eq!(anchor, [rest.x, rest.y - screen.stack.target(), rest.w, rest.h], "the control where the page rests");
-    assert!(anchor[1] > live.y + 10.0, "and not where it is drawn mid-glide: {anchor:?} against {live:?}");
+    let want = plx_ui::widgets::focus_pill(drawn);
+    assert_eq!(anchor, [want.x, want.y, want.w, want.h], "the control where it is drawn");
 }
 
 /// The text runs the lift pass paints for the filter control, as `(alpha, y)`.
