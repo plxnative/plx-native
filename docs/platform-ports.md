@@ -860,9 +860,12 @@ split by who reads it (critic M4):
 1. `tv::Services` (`plx_os::tv`, installed once by `run_application`) holds what LOWER layers read through the
    private `tv::port()` (F5):
    - `identity { probe_device, start_capability_probe, repair_native_video: Option<fn() -> Result<(), Failure>>,
-     device_files: Files, system_locale, sound_output }` (`repair_native_video` is optional: `None` is a platform
-     with nothing to repair, and the repair then answers `Failure::Unsupported`; `device_files` is the reader
-     `devcaps` parses through, `Files::NONE` for a platform with none);
+     packet_probe: Option<fn(Command) -> Status>, device_files: Files, system_locale, sound_output }`
+     (`repair_native_video` is optional: `None` is a platform with nothing to repair, and the repair then answers
+     `Failure::Unsupported`; `packet_probe` (`plx_os::tv::packet_probe`) is too: `None` is a platform without the
+     packet-player probe, which answers `Unavailable`, and Settings > Diagnostics then shows no row for it; Tizen
+     states `esprobe::command`; `device_files` is the reader `devcaps` parses through, `Files::NONE` for a platform
+     with none);
    - `secure { seal, open, remove, mode }` (Target shape 4; until W2 `mode` is W3a's own once-set value);
    - `system { go_home, poll_home, deliver_toast }`;
    - `storage { authority }` (W8a): `Authority::Helper` (webOS: the LS2/DB8 storage helper is the canonical store of
@@ -2089,7 +2092,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 ### W12 (H, after W10 and W11). Tizen feed over esplusplayer (optional)
 - A Feed sink over `dlopen("libesplusplayer.so")` (T6), after Option B is chosen. Verify: struct layouts
   against the set's binary (report 2e), a device run on mock media. Risk: firmware-dependent ABI and
-  certificate policy; decided after W10 ships.
+  certificate policy. The packet-player probe settled both for one retail Tizen 9.0 set: its layouts are the build's, and it opens
+  without the Partner privilege (`docs/tizen.md`, "The packet player"). The port's design is there too.
 
 ### W13 (N). The macOS app and the Windows simulator as product platforms
 - A Keychain key store, and a URI driver over AVPlayer or a Feed sink over VideoToolbox ("A Mac playback

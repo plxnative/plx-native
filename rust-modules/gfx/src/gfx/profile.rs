@@ -124,6 +124,7 @@ mod imp {
         "dt.alt",
         "dt.bio",
         "dt.channel_entry",
+        "dt.item_menu",
         "dt.preplay",
         "dt.tracks",
         "dt.versions",
@@ -141,6 +142,7 @@ mod imp {
         "rc.ground",
         "rc.rows",
         "st.ground",
+        "wl.menu",
     ];
 
     /// Resolve a trigger's contents to a phase name, or explain why it is not one.
@@ -726,6 +728,18 @@ mod tests {
                 continue;
             }
             literals_after(text, "phase(\"", &mut called);
+            // A menu host passes its draw phase through `menu_screen_methods!(<host type>, "dt.…")`, which expands to
+            // `phase($phase, ..)`: the literal sits at the host's call site, so read the first string after the `(`.
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("menu_screen_methods!(") {
+                rest = &rest[at + "menu_screen_methods!(".len()..];
+                let args = &rest[..rest.find(')').unwrap_or(rest.len())];
+                if let Some(open) = args.find('"') {
+                    if let Some(len) = args[open + 1..].find('"') {
+                        called.insert(args[open + 1..open + 1 + len].to_string());
+                    }
+                }
+            }
             literals_after(text, "draw_span(\"", &mut called);
             named.push_str(text);
         }

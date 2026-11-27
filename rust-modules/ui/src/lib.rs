@@ -78,7 +78,10 @@ pub mod master_detail; // RESTRUCTURE (spec §10): reusable two-region focus/ret
 // `Screen` mounted through `app::bridge` rather than a `Popover` reached through `app.rs`'s key
 // ladders. Its deletion readout now borrows the Session owner's immutable publication;
 // no module-level deletion counter remains for a newly mounted screen to poll.
-pub mod page_stack; // the drill-in page stack Tracks and More share
+pub mod page_stack; // the drill-in page stack and the focus-stop functions the menus share
+#[cfg(test)]
+mod menu_tests; // every transition of `menu`, and the illegal combinations
+pub mod menu; // THE menu component: a table of rows in glass / sheet / flat card, its page stack and motion (grew out of page_stack)
 pub mod panel_motion; // the resize/page-slide spring of the in-player table popovers (Tracks, More)
 
 pub mod breadcrumb; // 'Films > Collections' crumb (PR5)
@@ -543,6 +546,11 @@ pub mod draw_census {
         static CLIP: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
     }
     pub fn note_run(mut run: Run) {
+        // a speculative pass (the text prewarm's walk of a page no frame is drawing) draws nothing: its runs are
+        // not what a frame showed
+        if crate::rec::speculating() {
+            return;
+        }
         run.label = LABEL.with(|c| c.get());
         RUNS.with(|l| {
             if let Some(v) = l.borrow_mut().as_mut() {

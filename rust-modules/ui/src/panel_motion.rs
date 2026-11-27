@@ -241,6 +241,12 @@ impl PanelMotion {
         rect
     }
 
+    /// Forget the cached natural rect: something the layout reads besides the table changed (the opener the
+    /// panel is laid over moved), so the next [`Self::natural`] measures again whatever the table's revision.
+    pub fn forget_natural(&self) {
+        self.cache.set(None);
+    }
+
     /// Advance one frame toward `natural`. Player panels track the bottom and right anchors
     /// directly. Header popovers spring those edges too.
     pub fn step(&mut self, dt: f32, natural: Rect) {
@@ -313,7 +319,6 @@ impl PanelMotion {
     }
 
     /// Is a page slide running (as distinct from only the card resizing)?
-    #[cfg(any(test, feature = "test-support"))]
     pub fn sliding(&self) -> bool {
         self.slide.is_some()
     }

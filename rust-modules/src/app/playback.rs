@@ -213,17 +213,17 @@ pub(crate) fn retry_failed_playback(
     }
 }
 
-/// **The failure read-out's fix for Force Direct Play** — `FailureAction::PlayAutomatically`.
+/// **The failure read-out's fix for Force or Disabled Direct Play** — `FailureAction::PlayAutomatically`.
 ///
-/// A PERSISTENT switch, deliberately, not a one-shot: Force is what made this play fail, and it
-/// would make the next unsupported file fail the same way. The preference moves to Auto now (the
+/// A PERSISTENT switch, deliberately, not a one-shot: Force (or Disabled) is what made this play
+/// fail, and it would make the next unsupported file fail the same way. The preference moves to Auto now (the
 /// in-memory value every later resolve reads) and is saved on the storage worker behind it, both
 /// by the one write door (`route::choose`, `How::Optimistic`), as the SEATED profile's own pick: it
 /// resets that profile's Direct Play mode and no other's, and with nobody seated the door refuses
 /// the save and the pick stands live only. The frame may not block on storage,
 /// the cell is published ONCE, and a failed save is logged by the door while the pick stands for
 /// this session. The retry resolves under Auto explicitly rather than inheriting the failed
-/// attempt's Force, which a plain retry keeps on purpose.
+/// attempt's Force or Disabled, which a plain retry keeps on purpose.
 pub(crate) fn play_automatically(
     ps: &mut plx_media::route::PlaybackSession,
     pa: &mut plx_media::player::adapter::PlayerAdapter,
@@ -683,8 +683,10 @@ pub(crate) fn drain_uri_track_fallbacks(ps: &mut plx_media::route::PlaybackSessi
 /// policy is the route's and not this file's.
 ///
 /// **This is where a track pick is also REMEMBERED** (the `memo` the panel built from the picked
-/// row): the `*_pick` commits write the show's track memory when, and only when, the route
-/// accepted the pick, an episode is playing and the seat is the viewer's. A subtitle OK that
+/// row): the `*_pick` commits write the show's track memory for a pick the route applied
+/// natively or in place at once, and for one that rides a server rebuild when its claim is accepted
+/// (never when the server refuses it, #1522), and only while an episode is playing and the seat is
+/// the viewer's. A subtitle OK that
 /// changes nothing (the menu closed on the row already shown) commits without a memo and writes
 /// nothing; the same holds for an OK on the Forced only row that already holds the mode
 /// (`TrackCommit::SubtitleForcedOnly`'s `changed`), which recommits what is on screen. No other door writes it:
