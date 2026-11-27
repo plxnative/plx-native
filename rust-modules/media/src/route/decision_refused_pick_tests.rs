@@ -332,7 +332,7 @@ fn a_native_pick_after_a_refused_claim_wins() {
 }
 
 /// **An Original recovery that is refused** writes back the candidate's PUT: with nothing owed the
-/// refusal is a plain rejection and one restore.
+/// refusal is a plain rejection and one restore (the candidate's audio, which the viewer never chose).
 #[test]
 fn a_refused_original_recovery_puts_the_previous_selection_back() {
     let mut lane = Lane::start(FlightRig::start);
@@ -350,9 +350,11 @@ fn a_refused_original_recovery_puts_the_previous_selection_back() {
     plx_base::task::drain_workers_for_test();
     let puts = lane.puts();
     assert!(!puts.is_empty(), "the recovery wrote the candidate's selection: {puts:?}");
-    assert_eq!(lane.selection(), Some((Some(HELD_AUDIO), Some(HELD_SUB))), "the server's selection after the refusal: {puts:?}");
-    // The candidate repeats what the server held, so nothing changed and nothing is written back.
-    assert_eq!(puts.len(), 1, "a restore of an unchanged selection would be a pointless write: {puts:?}");
+    assert_eq!(puts.len(), 2, "the candidate's PUT, then its undoing: {puts:?}");
+    assert_eq!(param(&puts[0], "audioStreamID"), Some("42"), "{}", puts[0]);
+    assert_eq!(param(&puts[1], "audioStreamID"), Some("36014"), "the earlier audio goes back: {}", puts[1]);
+    assert_eq!(param(&puts[1], "subtitleStreamID"), None, "the subtitle was not changed: {}", puts[1]);
+    assert_eq!(lane.selection(), Some((Some(HELD_AUDIO), Some(HELD_SUB))), "the value the server holds again");
     lane.finish();
 }
 
