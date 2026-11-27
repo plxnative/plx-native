@@ -1143,6 +1143,9 @@ pub struct FailureContext {
 /// * On a composition no backend can carry a rung for (no Feed, a URI provider that certifies no converted output;
 ///   [`FailureContext::quality_carriable`]) [`ChangeQuality`](FailureAction::ChangeQuality) is not offered either: the More menu
 ///   withholds the ladder there, so the button would open onto nothing.
+/// * [`ChangeTracks`](FailureAction::ChangeTracks) is offered wherever a retry can play the pick (not forced, a request to
+///   resolve again, [`FailureContext::tracks_available`]); it comes after the rung and before *Back*, so under Disabled
+///   a refusal reads *Play automatically*, *Change quality*, *Audio & Subtitles*, *Back*, and the focus seats on the fix.
 /// * A file with no video track and an unrepairable sandbox get nothing but *Back*.
 pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureAction> {
     use FailureAction as A;
@@ -3373,6 +3376,9 @@ mod tests {
             let at = format!("{kind:?} {cx:?}: {row:?}");
             assert_eq!(row.last(), Some(&A::Back), "{at}");
             assert_eq!(row.iter().filter(|a| **a == A::Back).count(), 1, "{at}");
+            if row.contains(&A::PlayAutomatically) {
+                assert_eq!(row.first(), Some(&A::PlayAutomatically), "the fix leads, where focus seats — {at}");
+            }
             if cx.forced {
                 assert!(!row.contains(&A::ChangeQuality), "Force overrides every rung — {at}");
                 assert!(!row.contains(&A::ChangeTracks), "the forced row is the fix and a retry only — {at}");
@@ -3445,6 +3451,12 @@ mod tests {
         // Live TV (no rung to pick) under Disabled: the sentence says "set to Auto", so the row can act on it.
         let live = FailureContext { quality_carriable: false, ..cx };
         assert_eq!(failure_actions(FailureKind::DecisionRefused, live), [A::PlayAutomatically, A::Back]);
+        // With tracks to pick from, the fix still leads and the pick follows the rung.
+        let with_tracks = FailureContext { tracks_available: true, ..cx };
+        assert_eq!(failure_actions(FailureKind::DecisionRefused, with_tracks),
+            [A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back]);
+        assert_eq!(failure_actions(FailureKind::PlaybackInterrupted, with_tracks),
+            [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back], "a stall offers no saved-setting flip");
         // Nothing to retry (a URL play), or a failure Auto cannot touch: no switch offered.
         assert_eq!(failure_actions(FailureKind::DecisionRefused, FailureContext { can_retry: false, ..cx }), [A::Back]);
         assert!(!failure_actions(FailureKind::TunersBusy, cx).contains(&A::PlayAutomatically));
