@@ -2,7 +2,7 @@
 
 `PLATFORM=tizen` builds PlxNative for a Samsung Tizen television as a **hosted library**: a shared object, `libplx.so`, that a small
 .NET application (`tizen/host/PlxHost/`) loads and drives through the C functions its header exports (`plx_host_*`). The design is `docs/platform-ports.md`
-("Target shape", W9); this page is how to build, check, install and read what comes out. Nothing here is verified on a retail set.
+("Target shape", W9); this page is how to build, check, install and read what comes out. Except where a section names the retail tester's report (discussion #1460), nothing here is verified on a retail set.
 
 ## Scope of the MVP
 
@@ -735,9 +735,11 @@ and posted the log and a photo of the row reading `64 passed, 0 failed`. The log
 | `aac`, `ac3`, `eac3`, `pcm_s16le` alone | PASS: prepared in 64-101 ms, advancing about 508 ms after `start` |
 | `first-frame` | never raised, in any scenario (as on the emulator) |
 
-Every video run logged repeated `buffer video underrun` notes. They are expected: the clips are seconds long and fed only as far as
-the library asks. So the Feed port's open questions are answered for this set. The packet player opens without the Partner privilege,
-and its armv7 layouts are the build's. It takes every codec the Feed engine sends, HEVC Main 10 with HDR10 and AV1 included. Pause,
+The video runs logged `buffer video underrun` notes: 16 in `h264-clock`, three each in `h264+aac` and `hevc10-hdr10`, one each in
+`hevc`, `av1` and `vp9`. Their cause is not determined. The probe feeds a 2 s horizon ahead of the clock (`FEED_AHEAD_MS`), and every
+run passed regardless. So most of the Feed port's open questions are answered for this set. The packet player opens without the
+Partner privilege, and its armv7 layouts are the build's. Every codec the probe sends is accepted: H.264, HEVC, HEVC Main 10 with
+HDR10, AV1, VP9, AAC, AC3, EAC3 and PCM. Opus, which the Feed engine also sends, was not probed, and neither was undecoded DTS. Pause,
 seek and EOS behave as on the emulator. PCM prepares and plays, so the TrueHD and DTS plan below holds. No first-picture callback
 comes, so the sink cannot wait for one. Still not measured: whether the panel showed a picture (the row runs under the opaque Settings
 page), whether anything was heard, and Dolby Vision.
@@ -775,12 +777,12 @@ page), whether anything was heard, and Dolby Vision.
 **What the tester's log answered** ("On a retail set", above):
 - a retail Tizen 9.0 set opens `libesplusplayer.so`, with sizes equal to this build's armv7 structs;
 - create and open succeed without the Partner privilege;
-- it accepts HEVC Main 10 with HDR10 and AV1, and AAC, AC3, EAC3 and PCM on their own;
+- it accepts HEVC Main 10 with HDR10 and AV1, and AAC, AC3, EAC3 and PCM on their own (Opus and undecoded DTS were not probed);
 - `first_video_decoding_done` does not fire;
 - the clock, pause, seek and EOS work as on the emulator;
 - the public push family is present.
 
-Not measured anywhere yet: Dolby Vision, a picture on the plane, sound out of the speakers.
+Not measured anywhere yet: Dolby Vision, Opus, a picture on the plane, sound out of the speakers.
 
 ## Known gaps seen on the emulator (2026-11-21)
 
