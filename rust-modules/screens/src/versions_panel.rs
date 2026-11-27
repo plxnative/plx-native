@@ -119,7 +119,7 @@ impl VersionsPanelScreen {
             Event::ReplaceRoot { slide: None },
             &mut |page| {
                 page.is_none().then(|| {
-                    let form = Form::new().section(plx_appkit::version_list::section(versions, VersionRow, |v| v.id, checked, unavailable));
+                    let form = Form::new().section(plx_appkit::version_list::section(plx_appkit::version_list::title(), versions, VersionRow, |v| v.id, checked, unavailable));
                     Page::root(form).initial(Some(VersionRow(opening as u16)))
                 })
             },

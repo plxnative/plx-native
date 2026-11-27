@@ -709,7 +709,7 @@ fn build_season(rk: &str, mark: PosterMark, face: Option<&watchlist::Face>) -> I
 fn build_versions(rk: &str, versions: &[MediaVersion], checked: Option<plx_plex::plex::MediaId>, can_play: bool) -> ItemForm {
     // without a playback driver every row is disabled and says why (the standalone panel's rule)
     let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
-    Form::new().section(plx_appkit::version_list::section(versions, ItemRow::Version, |v| Action::SelectVersion {
+    Form::new().section(plx_appkit::version_list::section("", versions, ItemRow::Version, |v| Action::SelectVersion {
         rk: rk.to_string(),
         media: v.id,
     }, checked, unavailable))
