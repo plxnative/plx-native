@@ -1,4 +1,4 @@
-{"updated":"2026-11-26T23:52:37Z",
+{"updated":"2026-11-26T23:59:59Z",
 "ci":[
 {"id":33181037225,"at":"2026-08-28T14:36:41Z","sha":"3d06fbe09","title":"lab: add remote command bridge for cloud TVs","jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"pr":null,"conclusion":"success","attempt":1},
 {"id":33192163307,"at":"2026-08-28T16:54:18Z","sha":"d56cf1a71","title":"docs: what a rented webOS 10.3.1 set said, and the bug it found","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6094,7 +6094,8 @@
 {"id":45910307978,"at":"2026-11-26T23:20:04Z","sha":"5c837e5aa","title":"ui: the Resume pill's rail takes the min-width slack, not its ends","pr":1581,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":235,"Windows launcher syntax":18,"Linux simulator build + launch":302,"macOS tests against bundled FFmpeg and ASS":153}},
 {"id":45910684604,"at":"2026-11-26T23:23:44Z","sha":"cf8bd26b8","title":"Live TV: the number-entry panel is glass over the app's pages","pr":1580,"conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":349,"Linux simulator build + launch":377,"macOS tests against bundled FFmpeg and ASS":200,"Windows launcher syntax":21}},
 {"id":45911930811,"at":"2026-11-26T23:36:25Z","sha":"1e8cff3d2","title":"ui: the Resume pill's rail takes the min-width slack, not its ends","pr":1581,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":247,"macOS simulator build + launch":305,"Linux simulator build + launch":337,"Windows launcher syntax":20}},
-{"id":45912720271,"at":"2026-11-26T23:44:43Z","sha":"d32cd9013","title":"Live TV: pins and anchors re-recorded on the combined head","pr":1578,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":22,"macOS tests against bundled FFmpeg and ASS":216,"Linux simulator build + launch":327,"macOS simulator build + launch":243}}
+{"id":45912720271,"at":"2026-11-26T23:44:43Z","sha":"d32cd9013","title":"Live TV: pins and anchors re-recorded on the combined head","pr":1578,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":22,"macOS tests against bundled FFmpeg and ASS":216,"Linux simulator build + launch":327,"macOS simulator build + launch":243}},
+{"id":45913579512,"at":"2026-11-26T23:53:43Z","sha":"eee4a9247","title":"Live TV: record the CI-measured binary size of the combined head (20,084,880)","pr":1578,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":332,"Linux simulator build + launch":363,"Windows launcher syntax":18,"macOS tests against bundled FFmpeg and ASS":183}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
