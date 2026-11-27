@@ -31,7 +31,7 @@ pub enum MatchState {
     Unavailable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchReport {
     pub state: MatchState,
     pub delta_ms: Option<i64>,

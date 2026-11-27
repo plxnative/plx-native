@@ -365,9 +365,11 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `address_parse`, `catalog_parse` (the registry index), `catalog_verify` (the signed index: no input is accepted
   under the shipped keys; the fuzzer's bytes are also signed with the data layer's TEST ONLY keys to reach what
   follows the signature check), `catalog_cache` (its cache record, verified again), `ws_frame` (the
-  WebSocket codec, `plx_net::ws`: the server's upgrade answer and frames, split at any byte) and `owp_json`
+  WebSocket codec, `plx_net::ws`: the server's upgrade answer and frames, split at any byte), `owp_json`
   (the Open Watch Party reader, `plx_owp::json`: the scan keeps the length, and the visitor marks the same strings
-  and numbers as the scan). Each target
+  and numbers as the scan) and `owp_party` (the Open Watch Party session, `plx_owp::party`: calls and answers to
+  its open effects, some with dead IDs; one `Done` per call, every `Open` closed, one command per lane, no effect
+  on a dead ID, and no deadline left once `close` has run and every open effect has its answer). Each target
   asserts only what its code promises (no panic, the documented bounds, round trips) and a crash fails the
   run, with the input in `fuzz/artifacts/<target>/`. The package is a top-level `fuzz/` with its own
   `[workspace]`, so no shipped `Cargo.toml` names it and no shipped build changes; it depends on the layer
@@ -377,7 +379,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   (the shared crates are exactly the shipped versions), builds with the nightly named by `FUZZ_TOOLCHAIN`
   (default `nightly`; CI names a dated one; `cargo install cargo-fuzz --locked` once) in
   `rust-modules/target-fuzz` (3.1 GiB after a cold build of the first eight targets, plus 83 MiB for
-  `ws_frame` and 49 MiB for `owp_json`; `make disk` lists it), generates the seeds from
+  `ws_frame`, 49 MiB for `owp_json` and 50 MiB for `owp_party`; `make disk` lists it), generates the seeds from
   the fixtures, the examples and the icons the repository already has plus a dictionary from the published
   schemas, and runs the targets one after another. A corpus is thousands of tiny files read and written all
   run long: on a slow or shared disk (the external one a lane may sit on) set `FUZZ_WORK=<dir>` to move seeds,

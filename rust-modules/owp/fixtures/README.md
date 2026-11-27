@@ -1,8 +1,9 @@
 # Open Watch Party fixtures
 
 Copied unchanged from [edde746/openwatchparty](https://github.com/edde746/openwatchparty) at revision
-`d8c3c2abc753c0486c955f39e020258c166b93d8`, under the Apache License 2.0 in `LICENSE`. The tests in `src/vectors.rs` read them;
-`relays.json` is also the public relay list the crate embeds.
+`d8c3c2abc753c0486c955f39e020258c166b93d8`, under the Apache License 2.0 in `LICENSE`. The tests in `src/vectors.rs` read them, except
+`vectors/party.json`, which `src/party_trace.rs` runs against `plx_owp::party`; `relays.json` is also the
+public relay list the crate embeds.
 
 | file | upstream path | sha256 |
 |---|---|---|
@@ -59,6 +60,7 @@ Copied unchanged from [edde746/openwatchparty](https://github.com/edde746/openwa
 | `vectors/matching.json` | `conformance/vectors/matching.json` | `ea716f0a5a955c33b1fd380b4d034a9ec420fd11dc1f0d69ba0fa5ce4cd7539a` |
 | `vectors/media-check.json` | `conformance/vectors/media-check.json` | `c20ac0be6676e073f2b88f0475e0335862db88ee4361961ff0f4e746842f2a11` |
 | `vectors/names.json` | `conformance/vectors/names.json` | `9193de5a447f3cba67f2aaffb48efbe1932df17030f14bce1bf2b8dd72eb7bf2` |
+| `vectors/party.json` | `conformance/vectors/party.json` | `6363e2f5695252d347753c0f896b9a7df03627272717c54fe7bb711fbee2e918` |
 | `vectors/reconcile.json` | `conformance/vectors/reconcile.json` | `7c90f69d5418df51faebd0aba076e36f5c0e36db1274ccbd964617440bf85970` |
 | `vectors/relay-list.json` | `conformance/vectors/relay-list.json` | `d8f962bbb6e129ce2a71dcc2e893090c0a913475e04a877a276bbc77e930686e` |
 | `vectors/room-check.json` | `conformance/vectors/room-check.json` | `6b903bc22e8f861d924e57b8508e79b3924a1d72050f65867617308537498b70` |

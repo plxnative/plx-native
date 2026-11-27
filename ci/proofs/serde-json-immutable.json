@@ -499,7 +499,7 @@
         ],
         "edition": "2021",
         "lib": "owp/src/lib.rs",
-        "lib_sha256": "8247e3c97cb30a89245c07d0d9c0311161f3f36a1c8b968d1ddf61d2baa340be"
+        "lib_sha256": "8163fcb5e204e1d7580c2b60ef87a84378ca8d2aae9fa4e03d47ccae71c2b024"
       },
       "platform-tizen/Cargo.toml": {
         "dependency": [
@@ -515,7 +515,7 @@
         ],
         "edition": "2021",
         "lib": "platform-tizen/src/lib.rs",
-        "lib_sha256": "30030a190ee69386ef8350243062ef0f06bb4f791e462703eeb0ed97268362c3"
+        "lib_sha256": "52da15ea0ffa323d678279db4c2b99c66940a8bdc636eac1a5553dcafffa8a32"
       },
       "platform-webos/Cargo.toml": {
         "dependency": [
@@ -653,7 +653,7 @@
         ],
         "edition": "2021",
         "lib": "ui/src/lib.rs",
-        "lib_sha256": "63ae890c60ee92b4ff1f20405883cad9537ce30e24b18eed09a97cf7d27b8dad"
+        "lib_sha256": "2b17b7305f154a193b5625b71a12057e26b6f2398aab9ebbb672fb32c23aa071"
       }
     },
     "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"

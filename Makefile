@@ -1621,11 +1621,11 @@ DISK_TREE = $(if $(CARGO_TARGET_DIR),$(if $(filter /%,$(CARGO_TARGET_DIR)),$(CAR
 DISK_NEED =
 test-fast test-crate: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_FAST_TDIR)
 test-hostsim test-host-interface: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_HOSTSIM_TDIR)
-# The fuzz tree (ASan + coverage, release with debuginfo, ten binaries): 3.1 GiB measured after a cold build
-# of the first eight; the ninth, `ws_frame`, adds 83 MiB, and the tenth, `owp_json`, 49 MiB with `plx_owp`
-# (measured on Linux x86_64).
+# The fuzz tree (ASan + coverage, release with debuginfo, eleven binaries): 3.1 GiB measured after a cold build
+# of the first eight; the ninth, `ws_frame`, adds 83 MiB, the tenth, `owp_json`, 49 MiB with `plx_owp`, and the
+# eleventh, `owp_party`, 50 MiB (measured on Linux x86_64).
 fuzz-hud: DISK_TREE = $(CURDIR)/rust-modules/$(FUZZ_TDIR)
-fuzz-hud: DISK_NEED = 3.3
+fuzz-hud: DISK_NEED = 3.4
 check-replay sim-macos: DISK_TREE = $(abspath $(SIM_TDIR)$(if $(LAB),-lab,))
 sim-linux: DISK_TREE = $(abspath $(SIM_LINUX_TDIR_ENV))
 screenshots-sim: DISK_TREE = $(abspath $(SHOT_TDIR))

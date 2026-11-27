@@ -9,6 +9,7 @@ pub const PROBE_BUDGET_MS: i64 = 60_000;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Candidate {
     pub id: String,
+    pub reference: String,
     pub duration_ms: Option<i64>,
     pub size_bytes: Option<i64>,
     pub oshash: Option<String>,

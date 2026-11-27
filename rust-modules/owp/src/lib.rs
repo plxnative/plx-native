@@ -4,6 +4,7 @@ pub mod json;
 pub mod matching;
 pub mod media;
 pub mod message;
+pub mod party;
 pub mod reconcile;
 pub mod relays;
 pub mod room;
@@ -12,3 +13,6 @@ pub mod timeline;
 
 #[cfg(test)]
 mod vectors;
+
+#[cfg(test)]
+mod party_trace;

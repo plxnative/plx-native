@@ -1,6 +1,6 @@
 # The `cargo fuzz` package over every parser a HUD package or the registry reaches (PR16 of the
 # player-HUD plugin series; docs/hud-plugins.md, "Trust and safety"), over the WebSocket codec
-# (`plx_net::ws`) and over the Open Watch Party reader (`plx_owp::json`). It ships nothing and changes no
+# (`plx_net::ws`) and over Open Watch Party: its reader (`plx_owp::json`) and its session (`plx_owp::party`). It ships nothing and changes no
 # shipped build.
 #
 # WHERE IT LIVES. A top-level `fuzz/`, with a `[workspace]` of its own: it is not a member of the
@@ -10,7 +10,7 @@
 # tree (`ci/check-module-layers.py`, `ci/check-deps.sh`, `ci/check-list-caps.py`) and its binaries
 # would need an `exclude`; here they cannot see it.
 #
-# WHAT IT FUZZES. The parsers of `plx_appkit` (`hud_format`), `plx_data` (`hudpacks`), `plx_net` (`ws`) and `plx_owp` (`json`),
+# WHAT IT FUZZES. The parsers of `plx_appkit` (`hud_format`), `plx_data` (`hudpacks`), `plx_net` (`ws`) and `plx_owp` (`json`), and one state machine, `plx_owp::party`,
 # built in the host-simulator configuration: `sim`, which selects the host configuration of the layers below. The
 # television's own LS2, glib and ACB declarations are compiled in every build, `sim` included; a host executable
 # links only because nothing here references them and the linker drops them (`simulators.yml` guards that for the
@@ -27,7 +27,7 @@ name = "plxnative-fuzz"
 version = "0.0.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-description = "Fuzz targets over the HUD package, bundle, SVG, address and registry-index parsers, the WebSocket codec and the Open Watch Party reader. Not shipped."
+description = "Fuzz targets over the HUD package, bundle, SVG, address and registry-index parsers, the WebSocket codec, and the Open Watch Party reader and session. Not shipped."
 repository = "https://github.com/GLinnik21/plx-native"
 publish = false
 build = "build.rs"
@@ -121,6 +121,13 @@ bench = false
 [[bin]]
 name = "owp_json"
 path = "fuzz_targets/owp_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "owp_party"
+path = "fuzz_targets/owp_party.rs"
 test = false
 doc = false
 bench = false

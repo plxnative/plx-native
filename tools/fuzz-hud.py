@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build and run the `cargo fuzz` package over the HUD package and registry parsers, the WebSocket codec and the
-Open Watch Party reader (`fuzz/`).
+Open Watch Party reader and session (`fuzz/`).
 
     python3 tools/fuzz-hud.py list
     python3 tools/fuzz-hud.py seed                    # fuzz/seeds/: seed corpora and dictionaries, from files in the tree
@@ -73,6 +73,7 @@ TARGETS = {
     "catalog_cache": ("catalog", 65536),
     "ws_frame": ("ws", 20000),
     "owp_json": ("owp", 70000),
+    "owp_party": ("owp", 4096),
 }
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -380,6 +381,9 @@ def write_seeds():
 
     for name, data in owp_seeds().items():
         put(seeds / "owp_json", name, data)
+
+    for name, data in {"zeros": bytes(64), "ramp": bytes(range(256)), "steps": bytes([0, 1] + [0, 0, 2, 1, 3, 0] * 20)}.items():
+        put(seeds / "owp_party", name, data)
 
     words = schema_words()
     dicts = seeds / "dict"

@@ -236,6 +236,7 @@ fn matching(input: &Json) -> Json {
         .iter()
         .map(|entry| Candidate {
             id: text_of(entry, "id").unwrap_or_default(),
+            reference: text_of(entry, "id").unwrap_or_default(),
             duration_ms: entry.get("durationMs").and_then(Json::as_int),
             size_bytes: entry.get("sizeBytes").and_then(Json::as_int),
             oshash: text_of(entry, "oshash"),
@@ -291,6 +292,7 @@ fn every_vendored_table_has_a_runner() {
         .collect();
     vendored.sort();
     let mut run: Vec<String> = RUNNERS.iter().map(|(name, _)| (*name).to_owned()).collect();
+    run.push("party".to_owned());
     run.sort();
     assert_eq!(vendored, run);
 }
