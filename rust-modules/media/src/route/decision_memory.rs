@@ -813,6 +813,12 @@ pub fn begin_recovery(
     let refused = match ps.failure.as_ref() {
         None => Refused::NoFailure,
         Some(failure) if !crate::player::recovery_offered(failure, live, recovery) => Refused::NotOffered(recovery.action()),
+        Some(failure)
+            if matches!(recovery, crate::player::Recovery::PickVersion(media)
+                if Some(*media) == attempt_version(ps) && crate::player::version_repeat_refused(failure)) =>
+        {
+            Refused::SameVersion
+        }
         Some(_) => {
             if let crate::player::Recovery::PickTracks(pick) = recovery {
                 hold_pick_for_retry(ps, pick);

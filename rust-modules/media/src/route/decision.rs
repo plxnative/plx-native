@@ -12817,7 +12817,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             selection_known,
             carried_selection,
             held_pick: None,
-            // The landing is not the proof: the first decoded frame of it is (`on_decoded_frame`).
+            // The landing is not the proof: the attempt playing is (`remember_version_that_played`, from the app's per-frame step).
             version_on_trial: s.version_on_trial.take(),
             // Negative = an external sidecar the client draws itself (`sub_render_ordinal`'s own
             // convention); `None` (Off) never sets `sub_sid` either, so this reads `false` for it.

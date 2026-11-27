@@ -4549,7 +4549,10 @@ pub(crate) fn open_failed_versions(ps: &plx_media::route::PlaybackSession, ancho
         rk: plx_media::route::cur_rk(ps),
         anchor,
         opener: None,
-        source: plx_screens::versions_panel::Source::Failed { attempted: plx_media::route::attempt_version(ps) },
+        source: plx_screens::versions_panel::Source::Failed {
+            attempted: plx_media::route::attempt_version(ps),
+            repeat_refused: plx_media::route::failure(ps).is_some_and(plx_media::player::version_repeat_refused),
+        },
     });
     present_once(d, arg, Style::PlayerPanel { survives_failure: true });
 }

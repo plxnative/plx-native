@@ -257,3 +257,23 @@ fn a_picked_version_that_never_plays_is_not_remembered() {
     assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
     tidy();
 }
+
+/// **A refusal repeats, so picking the file that just failed is refused at the door** (`Refused::SameVersion`): the row
+/// withholds *Try again* there, and *Select Version* of the same file would be that retry. Another file is accepted, and a
+/// transient failure keeps the same file selectable (it is *Try again* there).
+#[test]
+fn a_refusal_does_not_take_the_same_version_again_but_a_stall_does() {
+    use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery, Refused};
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    seed_request_for_test(&mut ps, "10");
+    ps.request.as_mut().expect("seeded").version = Some(MediaId(3086));
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
+    let offers = FrozenOffers { can_retry: true, quality_carriable: true };
+    record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::DecisionRefused, DirectPlayMode::Auto, offers));
+    assert!(matches!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))), Err(Refused::SameVersion)),
+        "the file the refused request named repeats it");
+    assert!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3082))).is_ok(), "another file is a different request");
+    record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Auto, offers));
+    assert!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))).is_ok(), "a stall may be tried again, on the same file too");
+}

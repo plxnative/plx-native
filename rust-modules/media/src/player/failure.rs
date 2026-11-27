@@ -285,8 +285,9 @@ pub enum Recovery {
     /// *Try again*.
     PickTracks(plx_data::metadata::PreplayPick),
     /// A row of *Select Version*: the same request on another file of the item. The new attempt asks for this
-    /// version, and the version is remembered for the profile ([`crate::route::choose_version`]) only once a frame of it
-    /// has been decoded, never when it is asked for: a version that fails must not become what Play starts next time.
+    /// version, and the version is remembered for the profile ([`crate::route::choose_version`]) only once the attempt is
+    /// playing (`remember_version_that_played`, from the app's per-frame step), never when it is asked for: a version that
+    /// fails must not become what Play starts next time.
     PickVersion(plx_plex::plex::MediaId),
 }
 
@@ -335,6 +336,19 @@ pub enum Refused {
     NoFailure,
     /// The failure's row does not offer this control (now).
     NotOffered(super::FailureAction),
+    /// A *Select Version* pick of the file the failed attempt already asked for, on a failure whose row withholds
+    /// *Try again* (a refusal repeats): it would be that very retry through another door.
+    SameVersion,
+}
+
+/// **Would picking the file the failed attempt ran repeat its request, where the row withholds *Try again*?** A refusal
+/// (a non-transient kind) answers the same request the same way, so the row has no *Try again*; a *Select Version* of the
+/// file that just failed is that retry, so [`crate::route::begin_recovery`] refuses it and the list shows that row
+/// disabled. A transient failure keeps it selectable (it IS *Try again* there). Read off the row's own table, so the two
+/// cannot disagree.
+pub fn version_repeat_refused(failure: &PlaybackFailure) -> bool {
+    let none = LiveOffers { repair_idle: false, tracks_available: false, versions_available: false };
+    !super::failure_actions(failure, none).contains(&super::FailureAction::TryAgain)
 }
 
 /// Does `failure`'s row, with `live`, offer `recovery`? The ONE answer is the row's own table, so a recovery is

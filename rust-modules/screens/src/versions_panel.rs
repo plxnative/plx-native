@@ -69,8 +69,9 @@ pub struct VersionsArg {
 pub enum Source {
     Page,
     /// `attempted` is the file the failed attempt asked for (`None`: it asked for none, so the one that plays unasked
-    /// wears the check mark).
-    Failed { attempted: Option<MediaId> },
+    /// wears the check mark). `repeat_refused` is `player::version_repeat_refused` of the failure: the checked file's row
+    /// is then disabled, since choosing it would repeat a request the read-out withholds *Try again* for.
+    Failed { attempted: Option<MediaId>, repeat_refused: bool },
 }
 
 impl LogicalState for VersionsArg {
@@ -131,12 +132,16 @@ impl VersionsPanelScreen {
         let host = host_of(&arg);
         let mut menu = Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE);
         let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
+        let refused = match arg.source {
+            Source::Failed { repeat_refused: true, .. } => checked,
+            _ => None,
+        };
         let opening = checked.and_then(|id| versions.iter().position(|v| v.id == id)).unwrap_or(0);
         menu.step(
             Event::ReplaceRoot { slide: None },
             &mut |page| {
                 page.is_none().then(|| {
-                    let form = Form::new().section(plx_appkit::version_list::section(plx_appkit::version_list::title(), versions, VersionRow, |v| v.id, checked, unavailable));
+                    let form = Form::new().section(plx_appkit::version_list::section(plx_appkit::version_list::title(), versions, VersionRow, |v| v.id, checked, refused, unavailable));
                     Page::root(form).initial(Some(VersionRow(opening as u16)))
                 })
             },
@@ -511,7 +516,7 @@ pub(crate) mod tests {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
         let arg = VersionsArg {
             host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None,
-            source: Source::Failed { attempted: Some(sample[1].id) },
+            source: Source::Failed { attempted: Some(sample[1].id), repeat_refused: false },
         };
         assert!(matches!(host_of(&arg), plx_ui::menu::Host::Video { .. }), "the read-out's panel stands over the video plane");
         let mut p = VersionsPanelScreen::new(EntryId(3), arg, &sample, Some(sample[1].id), true);
@@ -527,6 +532,38 @@ pub(crate) mod tests {
             _ => None,
         }).collect();
         assert_eq!(asked, [Recovery::PickVersion(sample[0].id)], "the door is asked to play that file");
+    }
+
+    /// **On a refusal the file that just failed is a disabled row**: choosing it would repeat the request the read-out
+    /// withholds *Try again* for, so it wears the check mark and answers no press (and the panel stays up), while the other
+    /// file asks the recovery door. On a stall (`repeat_refused: false`) every row presses.
+    #[test]
+    fn on_a_refusal_the_failed_file_is_disabled_and_another_file_still_asks() {
+        use crate::registry::PlayerReq;
+        let sample = plx_appkit::version_list::sample();
+        let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
+        let panel = |repeat_refused| VersionsPanelScreen::new(
+            EntryId(3),
+            VersionsArg {
+                host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None,
+                source: Source::Failed { attempted: Some(sample[1].id), repeat_refused },
+            },
+            &sample, Some(sample[1].id), true);
+        let drive = |p: &mut VersionsPanelScreen, key: u32| {
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+            <VersionsPanelScreen as Machine<HostFixture>>::step(p, &ScreenEvent::Activate(key), &cx(), &mut fx);
+            out.into_iter().map(|e| e.fx).collect::<Vec<_>>()
+        };
+        let asked = |fx: &[Fx<HostFixture>]| fx.iter().any(|f| matches!(f, Fx::App(AppFx::Player(PlayerReq::Recover(_)))));
+        let mut refused = panel(true);
+        let rows: Vec<_> = refused.form().table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
+        assert_eq!((rows[0].disabled, rows[1].disabled), (false, true), "only the failed file's row is disabled");
+        assert!(drive(&mut refused, 1).is_empty(), "OK on it does nothing and the panel stays up");
+        assert!(asked(&drive(&mut refused, 0)), "the other file asks the recovery door");
+        let mut stall = panel(false);
+        assert!(asked(&drive(&mut stall, 1)), "on a stall the same file is a retry and presses");
     }
 
     /// A platform that composed no playback driver opens the same list with every row disabled and the

@@ -882,7 +882,7 @@ fn versions_of<'a>(
             let page = versions_page(meta, arg);
             (page.map_or(&[][..], crate::detail::hero_versions), page.and_then(crate::detail::taken_version))
         }
-        crate::versions_panel::Source::Failed { attempted } => {
+        crate::versions_panel::Source::Failed { attempted, .. } => {
             let versions = meta.failed_versions(arg.sid, &arg.rk).unwrap_or(&[]);
             (versions, plx_media::route::taken_version(versions, attempted))
         }
