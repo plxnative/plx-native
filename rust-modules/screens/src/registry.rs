@@ -3783,8 +3783,8 @@ mod a11y_coverage_tests {
         }
     }
 
-    /// How many leaf arms the table has: 24 flat `AppArg` arms, 5 `ContentArg`, 23 `SettingsPage` and
-    /// `FirstRunConsent`. A new arm fails [`coverage`] to compile, and then this to pass until the census
+    /// How many leaf arms the table has: the length of the census `every_arm()` builds, one entry per leaf arm of
+    /// [`coverage`]. A new arm fails [`coverage`] to compile, and then this to pass until the census
     /// below holds it too.
     const ARMS: usize = 54;
 

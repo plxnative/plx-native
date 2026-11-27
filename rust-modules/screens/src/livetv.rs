@@ -519,8 +519,8 @@ impl time_grid::Content for Faces<'_> {
     }
 }
 
-/// What a sync was made from: the store's revision, the scope, and the start of the window (only while the Guide
-/// shows: What's on does not rebuild every thirty minutes).
+/// What a sync was made from: the store's revision, the scope, and, while a clock-dependent page shows, its anchor: the
+/// Guide's window start or Browse's end of the local day. What's on has none, so it does not rebuild every thirty minutes.
 type SyncKey = (u32, Scope, Option<i64>);
 
 struct Page {
@@ -1319,7 +1319,7 @@ impl LiveTvScreen {
             if !self.page.scope.same_page(scope) {
                 self.page.scope = scope;
                 // a page chosen opens on the live window (the board it leaves, if any, is dropped with its window)
-                self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s));
+                self.resync(cx);
                 self.reach(fx);
                 fx.invalidate(Provenance::Input);
             }
@@ -1335,6 +1335,11 @@ impl LiveTvScreen {
         true
     }
 
+    /// Follow the store, the clock and the zone: [`Page::sync`] with what the frame holds.
+    fn resync<H: LiveTvLike>(&mut self, cx: &Cx<'_, H>) -> bool {
+        self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s))
+    }
+
     /// **The filter menu chose** ([`AppMsg::LiveTvFilterPicked`]): the one place Browse's filter changes. The set is rebuilt at once
     /// for it, the focus stays on the control (the menu hands it back there), and the store is told what the new filter reads
     /// ahead to ([`Self::reach`]). A pick while Browse is not showing (the page was left under the menu) is spent.
@@ -1342,7 +1347,7 @@ impl LiveTvScreen {
         let Scope::Browse(current) = self.page.scope else { return };
         if current == filter { return; }
         self.page.scope = Scope::Browse(filter);
-        self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s));
+        self.resync(cx);
         self.reach(fx);
         fx.invalidate(Provenance::Input);
     }
@@ -1457,7 +1462,7 @@ impl LiveTvScreen {
     /// row it belongs to, On now's poster or the Channels shelf's tile; on the Guide its row's cell. `None` for a
     /// channel the lineup no longer lists.
     fn left_elem<H: LiveTvLike>(&mut self, left: &(plx_plex::plex::ServerId, String, String), cx: &Cx<'_, H>) -> Option<u32> {
-        self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s));
+        self.resync(cx);
         let index = H::livetv(cx).channels.iter().position(|c| c.sid == left.0 && c.dvr == left.1 && c.channel == left.2)?;
         // On the Guide the channel's own row: the cell of what was airing (the one the reader pressed), else its
         // first. That row's page is the one showing when focus lands.
@@ -1611,10 +1616,10 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         let held = self.held(cx);
         let rebuilt = match ev {
-            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s)),
+            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.resync(cx),
             ScreenEvent::StoreChanged(ord, _) if *ord == StoreId::LiveTv.ord() => {
                 self.page.synced = None;
-                self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s))
+                self.resync(cx)
             }
             // the board's page follows the focus, before the stack lays out for it
             ScreenEvent::FocusMoved { to, .. } if to.entry == self.page.entry => {

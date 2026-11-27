@@ -63,10 +63,6 @@ impl Filter {
         }
     }
 
-    pub fn of_code(code: u32) -> Option<Filter> {
-        Self::ALL.get(code as usize).copied()
-    }
-
     /// Does the filter narrow the grid's whole (what is on now)? Only then does the header read "shown of total".
     pub const fn narrows(self) -> bool {
         matches!(self, Filter::JustStarted | Filter::EndingSoon)

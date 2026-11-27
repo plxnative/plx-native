@@ -228,7 +228,6 @@ fn a_channel_with_an_airing_and_a_later_card_seats_the_airing() {
 
 #[test]
 fn filter_codes_round_trip_and_the_default_is_on_now() {
-    for f in Filter::ALL { assert_eq!(Filter::of_code(f.code()), Some(f)); }
-    assert_eq!(Filter::of_code(4), None);
+    for (row, f) in Filter::ALL.into_iter().enumerate() { assert_eq!(f.code() as usize, row); }
     assert_eq!(Filter::default(), Filter::OnNow);
 }
