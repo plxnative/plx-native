@@ -14,7 +14,7 @@ use std::convert::Infallible;
 use plx_machine::machine::{Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine, MachineId, NavOp};
 use plx_ui::a11y::{A11y, A11yPath, Role};
 use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
-use plx_ui::menu::{Event, Menu, Out, Page};
+use plx_ui::menu::{Event, GrowWidth, Menu, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::table::Row;
 use plx_ui::Rect;
@@ -101,7 +101,7 @@ pub struct LiveTvFilterScreen {
 /// The menu for `arg`, opened on the filter chosen.
 pub fn new(entry: EntryId, arg: LiveTvFilterArg) -> LiveTvFilterScreen {
     let [x, y, w, h] = arg.anchor.map(f32::from_bits);
-    let mut menu = Menu::from_header_pill(Rect::new(x, y, w, h), crate::registry::BAND);
+    let mut menu = Menu::from_header_pill(Rect::new(x, y, w, h), crate::registry::BAND, GrowWidth::Catch);
     menu.step(Event::ReplaceRoot { slide: None }, &mut root(arg.chosen));
     LiveTvFilterScreen { entry, arg, chosen: arg.chosen, menu, opened: false }
 }

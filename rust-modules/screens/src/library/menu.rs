@@ -15,7 +15,7 @@ use plx_machine::machine::{
     LogicalState, Machine, MachineId, NavOp,
 };
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::menu::{Class, Event, GrowWidth, Host, Menu, Morph, Out, Page};
+use plx_ui::menu::{Event, GrowWidth, Menu, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::form::{Binding, Form, FormSection, FormTable, RowKey, RowKind};
 use plx_appkit::source_list::{self, SrcTarget, Tail};
@@ -579,8 +579,7 @@ impl LibraryMenu {
             LibraryMenuKind::Sources => GrowWidth::Names { ceiling: plx_ui::page_header::TEXT_X1 - 96.0 },
             _ => GrowWidth::Catch,
         };
-        let host = Host::Grows { pill: pill_of(&arg), clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill, width };
-        let menu = Menu::new(host, Class::Action, crate::registry::BAND);
+        let menu = Menu::from_header_pill(pill_of(&arg), crate::registry::BAND, width);
         Self {
             entry,
             arg,
