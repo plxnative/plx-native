@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-27T16:03:16Z",
+ "generated": "2026-11-27T16:04:18Z",
  "metrics": [
   {
    "change30_pct": 50.7,
    "change7_pct": 43.7,
    "d30": 203,
-   "delta30": 103,
-   "delta7": 93,
+   "delta30": 103.0,
+   "delta7": 93.0,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 55,
-   "now": 306,
+   "now": 306.0,
    "prev7": 213,
    "shown": true,
    "state": "worse",
@@ -340,18 +340,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 13.6,
-   "change7_pct": -1.4,
+   "change30_pct": 13.7,
+   "change7_pct": -1.3,
    "d30": 368,
-   "delta30": 50.0,
-   "delta7": -6.0,
+   "delta30": 50.5,
+   "delta7": -5.5,
    "group": "ci",
    "id": "pr_wait",
    "kind": "wait",
    "label": "PR CI wait",
    "n_now": 200,
    "n_prev": 163,
-   "now": 418.0,
+   "now": 418.5,
    "prev7": 424,
    "shown": true,
    "state": "flat",
@@ -361,18 +361,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 19.7,
-   "change7_pct": 3.1,
+   "change30_pct": 19.6,
+   "change7_pct": 2.9,
    "d30": 352,
-   "delta30": 69.5,
-   "delta7": 12.5,
+   "delta30": 69,
+   "delta7": 12,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 72,
+   "n_now": 73,
    "n_prev": 71,
-   "now": 421.5,
+   "now": 421,
    "prev7": 409,
    "shown": true,
    "state": "flat",
@@ -604,18 +604,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 34.7,
-   "change7_pct": 2.3,
+   "change30_pct": 33.8,
+   "change7_pct": 1.6,
    "d30": 265.0,
-   "delta30": 92.0,
-   "delta7": 8,
+   "delta30": 89.5,
+   "delta7": 5.5,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 55,
-   "now": 357,
+   "now": 354.5,
    "prev7": 349,
    "shown": true,
    "state": "flat",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 33.5,
-   "change7_pct": 3.6,
+   "change30_pct": 32.4,
+   "change7_pct": 2.7,
    "d30": 171.5,
-   "delta30": 57.5,
-   "delta7": 8,
+   "delta30": 55.5,
+   "delta7": 6.0,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 55,
-   "now": 229,
+   "now": 227.0,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -820,14 +820,14 @@
    "change7_pct": -5.0,
    "d30": 18.0,
    "delta30": 1.0,
-   "delta7": -1,
+   "delta7": -1.0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 67,
+   "n_now": 68,
    "n_prev": 55,
-   "now": 19,
+   "now": 19.0,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -926,11 +926,6 @@
    "change_pct": 43.7,
    "commits": [
     {
-     "pr": 1581,
-     "sha": "1e8cff3d2",
-     "title": "ui: the Resume pill's rail takes the min-width slack, not its ends"
-    },
-    {
      "pr": 1578,
      "sha": "ada31c221",
      "title": "Live TV: the Guide"
@@ -974,6 +969,11 @@
      "pr": 1594,
      "sha": "7e7ccc35c",
      "title": "Live TV Browse follow-ups: one far-span truth, one header-menu constructor, menus follow their control"
+    },
+    {
+     "pr": 1593,
+     "sha": "14785c8fb",
+     "title": "Player Tracks and More menus on plx_ui::menu"
     }
    ],
    "from": 213,
@@ -981,16 +981,11 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-27",
    "threshold_pct": 20.0,
-   "to": 306
+   "to": 306.0
   },
   {
    "change_pct": 23.4,
    "commits": [
-    {
-     "pr": 1581,
-     "sha": "1e8cff3d2",
-     "title": "ui: the Resume pill's rail takes the min-width slack, not its ends"
-    },
     {
      "pr": 1578,
      "sha": "ada31c221",
@@ -1035,6 +1030,11 @@
      "pr": 1594,
      "sha": "7e7ccc35c",
      "title": "Live TV Browse follow-ups: one far-span truth, one header-menu constructor, menus follow their control"
+    },
+    {
+     "pr": 1593,
+     "sha": "14785c8fb",
+     "title": "Player Tracks and More menus on plx_ui::menu"
     }
    ],
    "from": 211.5,
@@ -1069,7 +1069,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 357
+   "now": 354.5
   },
   {
    "group": "ci",
