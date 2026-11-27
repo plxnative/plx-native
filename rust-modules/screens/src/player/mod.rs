@@ -5563,6 +5563,7 @@ mod scrub_ownership_tests {
     /// table's own property test.
     #[test]
     fn the_failure_table_never_outgrows_the_read_outs_row() {
+        assert_eq!(plx_media::player::FAILURE_ROW_SLOTS, plx_ui::widgets::STATUS_ROW_MAX, "the table's cap is the row's slots");
         for (kind, cx, row) in plx_media::player::every_failure_row() {
             assert!(
                 row.len() <= plx_ui::widgets::STATUS_ROW_MAX,

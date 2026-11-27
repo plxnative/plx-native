@@ -1102,7 +1102,7 @@ pub enum FailureAction {
     /// *Select Version*: the item's versions (its files), as the Detail hero's list shows them, over the failure
     /// screen; a pick plays that version again ([`Recovery::PickVersion`]). Another file is another request, so it is
     /// offered for a refusal and a stall alike, wherever a retry can happen and the item has more than one file
-    /// ([`LiveOffers::versions_available`]).
+    /// ([`LiveOffers::versions_available`]) and the row has a slot left for it ([`FAILURE_ROW_SLOTS`]).
     SelectVersion,
     /// Review the sandbox repair (the confirmation `Player.repair` guards).
     Repair,
@@ -1146,10 +1146,14 @@ pub enum FailureAction {
 ///   ([`FailureKind::NoQualifiedBackend`]) gets *Back* alone, since nothing about the request changes that,
 ///   unless Force is on, where the Force arm's fix (switching to Auto, which lets a URI qualification in)
 ///   leads.
+/// * [`SelectVersion`](FailureAction::SelectVersion) is offered wherever a retry can happen and the failed item has more
+///   than one file ([`LiveOffers::versions_available`]), after the track picker and before *Back*, but only while the row
+///   has a slot left ([`FAILURE_ROW_SLOTS`]): a row already holding *Try again* (or *Play automatically*), a rung and the
+///   track picker goes without it, since a fifth pill is wider than the screen in some languages.
 /// * A file with no video track and an unrepairable sandbox get nothing but *Back*.
 ///
 /// It reads the captured [`PlaybackFailure`] (the cause, the settings in force and the offers its attempt made, all
-/// frozen at capture) and the two inputs that move while a failure stands ([`LiveOffers`]: the repair and the tracks).
+/// frozen at capture) and the three inputs that move while a failure stands ([`LiveOffers`]: the repair, the tracks and the versions).
 pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<FailureAction> {
     use FailureAction as A;
     use FailureKind as K;
@@ -1180,7 +1184,7 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
                     v.push(A::TryAgain);
                 }
                 // Force asks for the original of whichever file plays: another file may be one this TV can play as it is.
-                if live.versions_available && kind != K::NoQualifiedBackend {
+                if live.versions_available && kind != K::NoQualifiedBackend && room_for_version(&v) {
                     v.push(A::SelectVersion);
                 }
             }
@@ -1221,7 +1225,7 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
                     v.push(A::ChangeTracks);
                 }
                 // Another file of the item is another request, which a refusal of this one does not repeat.
-                if live.versions_available {
+                if live.versions_available && room_for_version(&v) {
                     v.push(A::SelectVersion);
                 }
             }
@@ -1229,6 +1233,18 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
     }
     v.push(A::Back);
     v
+}
+
+/// **The read-out's row has this many slots** (`plx_ui::widgets::STATUS_ROW_MAX`, the UI's to name; `screens::player`'s
+/// `the_failure_table_never_outgrows_the_read_outs_row` holds the two equal). The table may never offer more controls.
+pub const FAILURE_ROW_SLOTS: usize = 4;
+
+/// Is there a slot left for *Select Version* after the controls `row` already holds, with *Back* still to come? It is
+/// the last control offered before *Back*, so a row that is already full of the fixes the viewer has had longer (Try
+/// again, a rung, the track picker) keeps them and goes without it, rather than the read-out growing a fifth pill:
+/// five controls do not fit the screen's width in every language (Belarusian, German and Hungarian measured over).
+fn room_for_version(row: &[FailureAction]) -> bool {
+    row.len() + 2 <= FAILURE_ROW_SLOTS
 }
 
 /// **Does the failed item have tracks the picker can show?** The one question behind
@@ -3647,6 +3663,7 @@ mod tests {
         for (kind, cx, row) in rows() {
             let at = format!("{kind:?} {cx:?}: {row:?}");
             assert_eq!(row.last(), Some(&A::Back), "{at}");
+            assert!(row.len() <= FAILURE_ROW_SLOTS, "the row has {FAILURE_ROW_SLOTS} slots — {at}");
             assert_eq!(row.iter().filter(|a| **a == A::Back).count(), 1, "{at}");
             if row.contains(&A::PlayAutomatically) {
                 assert_eq!(row.first(), Some(&A::PlayAutomatically), "the fix leads, where focus seats — {at}");
@@ -3789,19 +3806,25 @@ mod tests {
     /// other file would play was a dead end). Another file is another request, so it is offered for a refusal and a
     /// stall alike, and under Force (which asks for the original of whichever file plays); not where a retry cannot
     /// happen, where the file has no picture or the TV's sandbox is the cause, where a server's stop ended the
-    /// playback, where no backend plays anything, or for a single-version item. It comes after *Audio & Subtitles*
-    /// and before *Back*.
+    /// playback, where no backend plays anything, for a single-version item, or where the row is already full
+    /// ([`FAILURE_ROW_SLOTS`]). It comes after *Audio & Subtitles* and before *Back*.
     #[test]
     fn a_failed_item_with_two_versions_offers_select_version() {
         use FailureAction as A;
         use FailureKind as K;
         let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true, versions_available: true };
-        assert_eq!(actions(K::PlaybackInterrupted, cx), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::SelectVersion, A::Back]);
         assert_eq!(actions(K::DecisionRefused, cx), [A::ChangeQuality, A::ChangeTracks, A::SelectVersion, A::Back],
             "a refusal repeats for the same file, not for another");
         assert_eq!(actions(K::DecisionRefused, Cx { quality_carriable: false, tracks_available: false, ..cx }), [A::SelectVersion, A::Back]);
+        assert_eq!(actions(K::PlaybackInterrupted, Cx { tracks_available: false, ..cx }), [A::TryAgain, A::ChangeQuality, A::SelectVersion, A::Back]);
+        assert_eq!(actions(K::PlaybackInterrupted, Cx { quality_carriable: false, ..cx }), [A::TryAgain, A::ChangeTracks, A::SelectVersion, A::Back]);
+        // The row is full (the read-out has four slots, and five pills do not fit the screen in every language): the
+        // controls the viewer has always had keep their places and Select Version is the one that is not offered.
+        assert_eq!(actions(K::PlaybackInterrupted, cx), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back],
+            "a stall's full row has no slot for it");
         assert_eq!(actions(K::DecisionRefused, Cx { direct_play_disabled: true, ..cx }),
-            [A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::SelectVersion, A::Back]);
+            [A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back], "nor does the Disabled refusal's");
+        assert_eq!(actions(K::MediaSource, Cx { direct_play_disabled: true, ..cx }), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]);
         assert_eq!(actions(K::PlaybackPolicy, Cx { forced: true, ..cx }), [A::PlayAutomatically, A::SelectVersion, A::Back]);
         assert_eq!(actions(K::MediaSource, Cx { forced: true, ..cx }), [A::PlayAutomatically, A::TryAgain, A::SelectVersion, A::Back]);
         // where it does not apply

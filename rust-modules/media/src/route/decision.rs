@@ -32,6 +32,7 @@ use super::track_memory::{SubMode, TrackContext};
 // says what is remembered about it; every public name keeps its `route::` path.
 #[path = "decision_memory.rs"]
 mod memory;
+pub use memory::{remember_version_that_played, version_on_trial_pending};
 pub use memory::{attempt_version, begin_recovery, commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
 pub use memory::{
     commit_audio_pick,commit_forced_only_and_sidecar, commit_forced_only_pick, commit_subtitle_and_sidecar, commit_subtitle_pick,
@@ -475,8 +476,8 @@ pub struct PlaybackSession {
     /// for the item it was held on.
     held_pick: Option<HeldPick>,
     /// **The version the viewer picked on the failure screen, not yet proven to play** (`Recovery::PickVersion`):
-    /// `(server, ratingKey, media)`. It is remembered for the profile ([`choose_version`]) by the first decoded frame
-    /// that plays it ([`on_decoded_frame`], which takes it), never when it is asked for, so a version that fails does not
+    /// `(server, ratingKey, media)`. It is remembered for the profile ([`choose_version`]) once the attempt
+    /// that asked for it is playing, on either backend ([`remember_version_that_played`], which takes it), never when it is asked for, so a version that fails does not
     /// become what Play starts next time. Set only by [`retry_current_play`] once its request was accepted. It survives
     /// retries and the landing (a refused or failed attempt leaves it for the next one of the same request), and ends
     /// where the request it belongs to does: a fresh, non-retry request and a [`StopKind::Visit`].

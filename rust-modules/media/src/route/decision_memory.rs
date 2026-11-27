@@ -687,14 +687,21 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     rematch_subtitle_with_names(ps);
     confirm_resume_presented(ps);
     send_parked_write_back(ps);
-    remember_version_that_played(ps);
 }
 
-/// **A version picked on the failure screen is remembered once a frame of it is decoded** (`Recovery::PickVersion`), not
-/// when it is asked for ([`PlaybackSession::version_on_trial`]): a version that fails must not become what Play starts
-/// next time. Taken whatever the outcome, so it writes once; only while the request in force still asks for exactly that
-/// version of that item. Every frame after the first finds nothing and takes no lock.
-fn remember_version_that_played(ps: &mut PlaybackSession) {
+/// Is a version picked on the failure screen still waiting to be proven by a picture ([`remember_version_that_played`])?
+/// The per-frame caller asks this before the (dearer) question whether a picture is playing.
+pub fn version_on_trial_pending(ps: &PlaybackSession) -> bool {
+    ps.version_on_trial.is_some()
+}
+
+/// **A version picked on the failure screen is remembered once the attempt that asked for it is playing**
+/// (`Recovery::PickVersion`), not when it is asked for ([`PlaybackSession::version_on_trial`]): a version that fails must
+/// not become what Play starts next time. The caller is the app's per-frame step, on the state both backends derive
+/// (`player::is_playing`: the Feed's presented frame, the URI service's Playing), so a URI set remembers it too; the
+/// Feed-only [`on_decoded_frame`] would never have seen one. Taken whatever the outcome, so it writes once; only while
+/// the request in force still asks for exactly that version of that item.
+pub fn remember_version_that_played(ps: &mut PlaybackSession) {
     let Some((sid, rk, media)) = ps.version_on_trial.take() else { return };
     let current = ps.request.as_ref().is_some_and(|r| r.sid == sid && r.rk == rk && r.version == Some(media));
     if current {
@@ -789,7 +796,7 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
 /// the failure that stands, and this decides whether it may be done and what it changes about the retry.
 ///
 /// * No failure stands, or its row does not offer the recovery's control (`player::failure_actions`, the table the row
-///   is drawn from, with `live` its two live inputs): refused, logged, nothing touched. A recovery is never defaulted
+///   is drawn from, with `live` its three live inputs): refused, logged, nothing touched. A recovery is never defaulted
 ///   into a retry the row never offered.
 /// * A track pick is held on the session BEFORE the retry starts ([`hold_pick_for_retry`]): the retry consumes it, a
 ///   retry that is refused or cancelled leaves it held for *Try again*, and the panel keeps reading it.

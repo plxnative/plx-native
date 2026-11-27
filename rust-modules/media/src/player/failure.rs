@@ -10,9 +10,10 @@
 //!   request and composition made ([`FrozenOffers`]: whether it can be resolved again, whether a Quality rung
 //!   can be carried). None of them changes while a failure stands: a new request, a landing and a stop each
 //!   clear the value, and a different failtest arm is a different failure.
-//! * **Live beside it** ([`LiveOffers`]): the two inputs that DO change while a failure stands. The sandbox
+//! * **Live beside it** ([`LiveOffers`]): the three inputs that DO change while a failure stands. The sandbox
 //!   repair becomes busy once started (so *Repair* leaves the row without a new failure), and the item's
-//!   tracks can land after the failure (so *Audio & Subtitles* appears without one). They are read per frame
+//!   tracks and versions can land after the failure (so *Audio & Subtitles* and *Select Version* appear without
+//!   one). They are read per frame
 //!   by [`live_offers`] and passed beside the value to [`failure_actions`](super::failure_actions).
 //! * **One refinement**: a server's stop note for the same playback that arrives after the failure was
 //!   captured as something weaker ([`observe_failure`] applies it through [`crate::route::refine_failure`]).
@@ -76,7 +77,7 @@ pub struct FrozenOffers {
     pub quality_carriable: bool,
 }
 
-/// The two inputs of the action row that change while a failure stands (see the module doc), passed beside the
+/// The three inputs of the action row that change while a failure stands (see the module doc), passed beside the
 /// value rather than frozen into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LiveOffers {

@@ -197,10 +197,10 @@ fn a_request_carries_the_remembered_version_and_remembers_a_named_one() {
 }
 
 /// **Select Version on the failure read-out** (`Recovery::PickVersion`): the retry asks for the picked file, and the
-/// pick is remembered by the first frame that decodes it, not when it is asked for. A version that fails must not
+/// pick is remembered once it is playing (either backend), not when it is asked for. A version that fails must not
 /// become what Play starts next time.
 #[test]
-fn a_version_picked_on_the_failure_screen_is_remembered_by_its_first_decoded_frame() {
+fn a_version_picked_on_the_failure_screen_is_remembered_once_it_plays() {
     use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery};
     use std::time::Duration;
     let (_g, _session, sid) = seated();
@@ -219,11 +219,12 @@ fn a_version_picked_on_the_failure_screen_is_remembered_by_its_first_decoded_fra
     assert_eq!(attempt_version(&ps), Some(MediaId(3086)), "the attempt asks for the picked file");
     assert_eq!(chosen_version(sid, "10"), None, "asking for a version remembers nothing");
 
-    // Its first decoded frame remembers it, once.
-    on_decoded_frame(&mut ps);
-    assert_eq!(chosen_version(sid, "10"), Some(MediaId(3086)), "a frame of it decoded: that is the file Play starts next");
+    // Playing remembers it, once.
+    remember_version_that_played(&mut ps);
+    assert_eq!(chosen_version(sid, "10"), Some(MediaId(3086)), "it played: that is the file Play starts next");
     assert!(choose_version(sid, "10", MediaId(3082)));
-    on_decoded_frame(&mut ps);
+    assert!(!version_on_trial_pending(&ps));
+    remember_version_that_played(&mut ps);
     assert_eq!(chosen_version(sid, "10"), Some(MediaId(3082)), "the trial is spent: later frames write nothing");
     // The retry's resolve is withdrawn before its worker lands, the way the request test above does it, so no stop for
     // it can reach a later test's server.
@@ -250,7 +251,7 @@ fn a_picked_version_that_never_plays_is_not_remembered() {
     assert!(retry_current_play(&mut ps, &mut meta, 0, overrides));
     // The request in force is now another file of the item (the viewer picked again, or Try again named none).
     ps.request.as_mut().expect("in force").version = Some(MediaId(3082));
-    on_decoded_frame(&mut ps);
+    remember_version_that_played(&mut ps);
     assert_eq!(chosen_version(sid, "10"), None, "the file that was asked for never played");
     cancel_play(&mut ps);
     assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
