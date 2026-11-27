@@ -320,15 +320,97 @@ fn the_now_line_stands_at_the_wall_time_on_the_axis() {
     assert!(near(moved.1.x - line.1.x, 1_392.0 / 90.0), "15.47 px a minute");
 }
 
+/// Every aired-time shade of a frame, as `(rect, left radius, right radius)` in draw order: the fills of exactly the
+/// shade's colour (nothing else on the board is that translucent black).
+fn shades(g: &TimeGrid, now: i64) -> Vec<(Rect, f32, f32)> {
+    let fills = crate::draw_census::capture_rrects(|| g.draw(Painter::recording(), &Fixed, now, Some(0), WORDS, &Faces, None));
+    fills.into_iter()
+        .filter(|(_, _, _, col)| col.iter().zip(theme::GUIDE_AIRED_SHADE).all(|(a, b)| near(*a, b)))
+        .map(|(r, rl, rr, _)| (r, rl, rr))
+        .collect()
+}
+
+/// A rect inside another, to a hair.
+fn within(inner: Rect, outer: Rect) -> bool {
+    inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01
+        && inner.x + inner.w <= outer.x + outer.w + 0.01 && inner.y + inner.h <= outer.y + outer.h + 0.01
+}
+
+/// Every cell of the page showing, as the board places it.
+fn page_cells(g: &TimeGrid) -> Vec<Rect> {
+    g.shown().flat_map(|row| (0..g.cells(row)).map(move |index| g.rect(cell(row, index)))).collect()
+}
+
 #[test]
-fn time_already_aired_is_shaded_from_the_axis_edge_to_the_now_line() {
+fn the_aired_shade_stays_inside_the_cells_and_never_touches_a_gap() {
+    let g = board();
+    let cells = page_cells(&g);
+    for minutes in [10, 30, 50, 90, 120] {
+        let shades = shades(&g, START + minutes * MIN);
+        assert!(!shades.is_empty(), "{minutes} min in: something has aired");
+        for (shade, ..) in &shades {
+            // inside one cell: so not in the 8 px between two rows, not between two cells, and not left of the first
+            assert!(cells.iter().any(|c| within(*shade, *c)), "{minutes} min in: the shade {shade:?} stands outside every cell");
+            assert!(near(shade.h, 100.0), "{minutes} min in: a shade is a cell tall, not a board tall");
+        }
+    }
+}
+
+#[test]
+fn a_cell_the_now_line_cuts_is_shaded_to_the_line_square_on_the_right_and_round_on_the_left() {
     let g = board();
     let now = START + 30 * MIN;
-    let (_, inks) = paint(&g, now, None);
-    let shade = inks.iter().find(|(tag, _, a)| *tag == 2 && near(*a, 0.22)).expect("the shade");
-    assert!(near(shade.1.x, 432.0));
-    assert!(near(shade.1.x + shade.1.w, AXIS.x_of(now)));
-    assert!(near(shade.1.y, 292.0));
+    let shades = shades(&g, now);
+    // row 0's first programme runs 0..45 min: aired up to minute 30
+    let cut = g.rect(cell(0, 0));
+    let shade = shades.iter().find(|(r, ..)| near(r.y, cut.y) && near(r.x, cut.x)).expect("the cut cell's shade");
+    assert!(near(shade.0.x + shade.0.w, AXIS.x_of(now)), "it ends exactly at the now line");
+    assert!(near(shade.0.h, cut.h));
+    assert!(near(shade.1, 10.0), "the left side takes the cell's radius");
+    assert!(near(shade.2, 0.0), "the right side is square where the line cuts");
+    // a cell that began before the window and runs on past now is cut the same way, from the axis' left edge
+    let long = g.rect(cell(1, 0));
+    let shade = shades.iter().find(|(r, ..)| near(r.y, long.y)).expect("row 1's shade");
+    assert!(near(shade.0.x, 432.0) && near(shade.0.x + shade.0.w, AXIS.x_of(now)));
+    assert!(near(shade.1, 10.0) && near(shade.2, 0.0));
+    // the programme that begins at the line has nothing aired
+    let next = g.rect(cell(0, 1));
+    assert!(!shades.iter().any(|(r, ..)| near(r.y, next.y) && r.x >= next.x - 0.01), "no shade on a cell the line has not reached");
+}
+
+#[test]
+fn a_cell_wholly_aired_is_shaded_whole_and_round_on_both_sides() {
+    let g = board();
+    // rows 3..: a programme 0..30 min, then 30..90; at minute 40 the first is over
+    let shades = shades(&g, START + 40 * MIN);
+    let aired = g.rect(cell(3, 0));
+    let shade = shades.iter().find(|(r, ..)| near(r.y, aired.y) && near(r.x, aired.x)).expect("the aired cell's shade");
+    assert!(near(shade.0.w, aired.w) && near(shade.0.h, aired.h), "the shade is the cell");
+    assert!(near(shade.1, 10.0) && near(shade.2, 10.0), "round on both sides");
+    // and the one the line cuts, in the same row, is square on its right
+    let cut = g.rect(cell(3, 1));
+    let shade = shades.iter().find(|(r, ..)| near(r.y, cut.y) && near(r.x, cut.x)).expect("the cut cell's shade");
+    assert!(near(shade.1, 10.0) && near(shade.2, 0.0));
+}
+
+#[test]
+fn a_window_wholly_aired_shades_every_cell_whole() {
+    let g = board();
+    let shades = shades(&g, START + 200 * MIN);
+    let cells: Vec<Rect> = page_cells(&g).into_iter().filter(|c| c.w > 0.0).collect();
+    assert_eq!(shades.len(), cells.len(), "one shade a cell");
+    for cell in cells {
+        let shade = shades.iter().find(|(r, ..)| near(r.x, cell.x) && near(r.y, cell.y)).expect("a shade for the cell");
+        assert!(near(shade.0.w, cell.w) && near(shade.1, 10.0) && near(shade.2, 10.0));
+    }
+}
+
+#[test]
+fn nothing_is_shaded_while_the_window_is_wholly_ahead_of_now() {
+    let g = TimeGrid::new(Axis::new(START + 1_800, 5_400, 1_800), vec![vec![span(30, 90)], vec![]], 0);
+    assert!(shades(&g, START + 10 * MIN).is_empty());
+    // not even at the instant the window opens
+    assert!(shades(&g, START + 30 * MIN).is_empty());
 }
 
 #[test]
