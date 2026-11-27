@@ -6,9 +6,11 @@
 //! [`CELL_GAP`]. The now line and its chip are drawn only while now is in the window, and the chip hides the ruler
 //! label it would cover. **The time already aired is shaded cell by cell**, not as one block over the board: each
 //! programme that began before now is shaded from its left edge to the now line (or to its own right edge, when it is
-//! over), in that cell's own corners (round on the left, round on the right only when the whole cell has aired, square
-//! where the now line cuts it), so no ink stands outside a cell, in the gaps between rows and cells or at the board's
-//! edge. A window that is wholly past is shaded whole, cell by cell.
+//! over), in that cell's own outline, so no ink stands outside a cell, in the gaps between rows and cells or at the
+//! board's edge. The shape comes from the cell's one placed rect, never from a width or radii of the shade's own: a
+//! cell wholly aired is shaded by its own rounded rect, and a cell the now line cuts (at most one a row) by a flat
+//! shade left of the line under the shared rounded clip of the cell's rect, so the corners are the cell's wherever the
+//! line falls, a corner zone or a sliver included. A window that is wholly past is shaded whole, cell by cell.
 //!
 //! **Why this is a widget of its own.** Nothing else here lays things out along a TIME axis: a card shelf
 //! ([`cards`](crate::cards)) and the poster grid are lattices of equal cells, and an [`HStack`](crate::hstack)
@@ -40,7 +42,7 @@ use plx_machine::machine::Measure;
 
 use crate::fmt;
 use crate::label::HAlign;
-use crate::screen::Dir;
+use crate::screen::{ClipScope, Dir};
 use crate::text_view::TextView;
 use crate::{card_shadow_params, theme, Painter, Rect};
 
@@ -512,17 +514,27 @@ impl TimeGrid {
     }
 
     /// **The shade over a cell's aired part**, from its left edge to the now line (`now_x`) or to its own right edge, if
-    /// that comes first; none for a cell the line has not reached (the window still ahead of now). It takes the cell's
-    /// left corners, and its right ones only when the whole cell has aired: where the line cuts the cell the right side
-    /// stays square. Drawn right after the cell, so the cell's text is shaded too and the now line and chip, drawn
-    /// last, stand over it.
+    /// that comes first; none for a cell the line has not reached (the window still ahead of now). It takes its shape
+    /// from the cell's one placed rect and never from its own width: a cell wholly aired is shaded by the cell's own
+    /// rounded rect, and a cell the line cuts (at most one a row) by a flat shade left of the line under the rounded
+    /// clip of the cell's rect ([`ClipScope::open_rounded_in`]), so the shade has the cell's corners wherever the line
+    /// falls, a corner zone or a sliver included. Drawn right after the cell, so the cell's text is shaded too and the
+    /// now line and chip, drawn last, stand over it.
     fn draw_aired(p: Painter, rect: Rect, now_x: f32) {
         let right = (rect.x + rect.w).min(now_x);
         if right <= rect.x {
             return;
         }
-        let over = now_x >= rect.x + rect.w;
-        p.rrect(Rect::new(rect.x, rect.y, right - rect.x, rect.h), CELL_RADIUS, if over { CELL_RADIUS } else { 0.0 }, theme::GUIDE_AIRED_SHADE);
+        if now_x >= rect.x + rect.w {
+            // the whole cell has aired: the shade is the cell's own rounded rect
+            p.rrect(rect, CELL_RADIUS, CELL_RADIUS, theme::GUIDE_AIRED_SHADE);
+            return;
+        }
+        // the line cuts the cell: a flat shade left of it, cut by the cell's own rounded outline (the shared rounded
+        // clip), so wherever the line falls, in a corner zone included, the shade has the cell's corners and no
+        // radius of its own to disagree with them
+        let _cell = ClipScope::open_rounded_in(p, rect, CELL_RADIUS);
+        p.rrect(Rect::new(rect.x, rect.y, right - rect.x, rect.h), 0.0, 0.0, theme::GUIDE_AIRED_SHADE);
     }
 
     #[allow(clippy::too_many_arguments)]

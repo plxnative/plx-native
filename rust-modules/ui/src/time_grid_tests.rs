@@ -352,7 +352,8 @@ fn own_cover(r: Rect, rl: f32, rr: f32, x: f32, y: f32) -> f32 {
 /// What a fill leaves on a point: its own corners, times the rounded clip it was drawn under (the shared
 /// `rclip_cover` mask, the one the GPU's masked rect program is graded against).
 fn cover(f: &RRectFill, x: f32, y: f32) -> f32 {
-    let own = own_cover(f.rect, f.rl, f.rr, x, y);
+    // a fill with no radius at either side is a plain quad (`draw_rrect`'s flat path): no antialiased edge of its own
+    let own = if f.rl < 0.5 && f.rr < 0.5 { 1.0 } else { own_cover(f.rect, f.rl, f.rr, x, y) };
     let clip = f.round.map_or(1.0, |(r, radius)| {
         plx_gfx::gfx::rclip_cover([x, y], plx_gfx::gfx::RClip { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h, radius })
     });
@@ -437,24 +438,29 @@ fn assert_the_shade_is_the_cell_left_of_the_line(shades: &[RRectFill], cell_rect
     }
 }
 
-#[test]
-fn the_shade_is_the_cells_outline_left_of_the_line_whatever_corner_the_line_is_in() {
+/// The line `inset` px inside a cell's edge, for 1..=9 px, for programmes that begin and end in the window and one that
+/// begins before it: `edge` says which side of the cell the line is `inset` px inside of.
+fn grade_the_line_near(edge: fn(Rect, f32) -> f32) {
     let g = board();
-    // row 0: programme one runs 0..45 min (432 .. its end less the gap), programme two 45..90; row 1 begins before the window
-    for (row, index) in [(0usize, 0usize), (0, 1), (3, 1)] {
+    for (row, index) in [(0usize, 0usize), (0, 1), (1, 0), (3, 0), (3, 1)] {
         let rect = g.rect(cell(row, index));
-        let span = g.span(cell(row, index)).unwrap();
         for inset in 1..=9 {
-            let inset = inset as f32;
-            // the line `inset` px inside the cell's left edge, and `inset` px inside its right edge
-            for now_x in [rect.x + inset, rect.x + rect.w - inset] {
-                let now = START + ((now_x - AXIS_X0) * 5_400.0 / 1_392.0).round() as i64;
-                let at = AXIS.x_of(now);
-                let shades = shades(&g, now);
-                assert_the_shade_is_the_cell_left_of_the_line(&shades, rect, at, &format!("row {row} cell {index} (span {span:?}), line at {at} for {inset} px in"));
-            }
+            let want_x = edge(rect, inset as f32);
+            let now = START + ((want_x - AXIS_X0) * 5_400.0 / 1_392.0).round() as i64;
+            let at = AXIS.x_of(now);
+            assert_the_shade_is_the_cell_left_of_the_line(&shades(&g, now), rect, at, &format!("row {row} cell {index}, line at {at}, {inset} px in"));
         }
     }
+}
+
+#[test]
+fn a_line_within_ten_px_of_a_cells_start_shades_the_cells_own_corners_not_a_sliver_with_its_own() {
+    grade_the_line_near(|rect, inset| rect.x + inset);
+}
+
+#[test]
+fn a_line_within_ten_px_of_a_cells_end_leaves_the_cells_rounded_right_corners_alone() {
+    grade_the_line_near(|rect, inset| rect.x + rect.w - inset);
 }
 
 #[test]
