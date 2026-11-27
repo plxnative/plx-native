@@ -1116,7 +1116,12 @@ something.
   `Plan::selection_sent` and `Plan::selection_fetched`), and `route::settle_start_selection`, which the app asks beside the failure's
   capture (`capture_failure`), drops it once `player::state` is Playing (the state both backends derive, the one
   `remember_version_that_played` reads) and settles it as a refused claim is (`FlightSelection::settle`, through the serial queue)
-  once the state is Error before that. A transient failure reverts too: the retry carries the pick and PUTs it again. The show's
+  once the state is Error before that. A transient failure reverts too. The value is then `TakenBack` (`StartPut`, one value,
+  two phases), and a retry that PUTs the pick again (a converting resolve) replaces it, while a retry that plays the pick
+  WITHOUT converting (a direct play PUTs nothing) gets it written again once it plays (`FlightSelection::replay`: one PUT of the
+  fields that differ, only when the playback is of the same Part, the pick is what plays and the server's value is not a newer
+  word); a play whose pick the server already holds sends nothing extra. A visit's stop (or a fresh request) clears it; a
+  replacement stop keeps it for its retry. The show's
   track memory is not touched by it. The memo half rides the claim: `PlayerControl::pending_memos` (beside
   `pending_user`, latest wins, merged on coalesce, taken into `claimed_user`, handed back on teardown)
   is written by `finish_route_action(Prepared)`, or at `install_claim_landing`'s `OriginalRecovery`

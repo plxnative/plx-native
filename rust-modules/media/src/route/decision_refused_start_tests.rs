@@ -204,6 +204,93 @@ fn a_retry_after_a_transient_revert_still_plays_the_pick() {
     lane.finish();
 }
 
+impl Lane {
+    /// The retry of a failed start that the viewer's pick survived into, planned as a DIRECT play: its resolve
+    /// converts nothing, so it PUTs nothing, and the pick (`sub_sid`) is drawn by the app. `fetched` is what the
+    /// server describes the Part as holding.
+    fn land_a_direct_retry(&mut self, sub_sid: i64) {
+        let sid = cur_sid(&self.ps);
+        apply_plan(
+            &mut self.ps,
+            Plan {
+                sid,
+                part_id: PART,
+                url: "https://example.invalid/part.mkv".into(),
+                sub_sid,
+                selection_fetched: Some(held()),
+                selection_sent: None,
+                ..Default::default()
+            },
+            "960001",
+        );
+    }
+
+    fn play(&mut self) {
+        self.ps.step_readout(crate::player::readout::ReadoutEvent::StateDerived(crate::player::PlaybackState::Playing));
+        assert!(crate::player::is_playing(&self.ps), "premise: a picture is presented");
+        self.frame();
+    }
+}
+
+/// **A revert must not strand a pick the retry plays without converting.** A start burns subtitle 88 and PUTs it,
+/// fails before a picture, and the pick is written back (55). The retry is a direct play: it PUTs nothing and
+/// draws 88 itself. The first picture of a landing that plays what was taken back puts it on the server again, so
+/// the next cold start of the movie (no show memory to fall back on) plans from 88 and not 55.
+#[test]
+fn a_direct_play_retry_that_plays_puts_the_pick_back() {
+    let mut lane = Lane::start();
+    lane.land_the_pick(false);
+    note_engine_failure(&mut lane.ps, crate::player::RuntimeFailure::PlaybackInterrupted, 0);
+    lane.frame();
+    lane.wait_for_puts(2);
+    lane.land_a_direct_retry(BURN_SUB);
+    lane.frame();
+    plx_base::task::drain_workers_for_test();
+    assert_eq!(lane.puts().len(), 2, "nothing is written while the retry is still opening: {:?}", lane.puts());
+
+    lane.play();
+    lane.wait_for_puts(3);
+    plx_base::task::drain_workers_for_test();
+    let puts = lane.puts();
+    assert_eq!(puts.len(), 3, "pick, revert, pick again: {puts:?}");
+    assert_eq!(param(&puts[2], "subtitleStreamID"), Some("88"), "{}", puts[2]);
+    assert_eq!(param(&puts[2], "audioStreamID"), None, "the audio never moved: {}", puts[2]);
+    assert_eq!(lane.selection(), Some((Some(HELD_AUDIO), Some(BURN_SUB))));
+
+    // Once: a later frame, or a later failure, writes nothing more.
+    lane.frame();
+    note_engine_failure(&mut lane.ps, crate::player::RuntimeFailure::PlaybackInterrupted, 0);
+    lane.frame();
+    plx_base::task::drain_workers_for_test();
+    assert_eq!(lane.puts().len(), 3, "{:?}", lane.puts());
+    lane.finish();
+}
+
+/// **Nothing extra for a play whose pick the server already holds**, and nothing for a retry that plays something
+/// else than the pick that was taken back: the viewer's own newer choice is not ours to overwrite.
+#[test]
+fn a_play_that_matches_the_server_sends_nothing_extra() {
+    // a normal start: its PUT is proven by the picture
+    let mut lane = Lane::start();
+    lane.land_the_pick(false);
+    lane.play();
+    plx_base::task::drain_workers_for_test();
+    assert_eq!(lane.puts().len(), 1, "only the start's own PUT: {:?}", lane.puts());
+    lane.finish();
+
+    // a retry that plays another subtitle than the one taken back
+    let mut lane = Lane::start();
+    lane.land_the_pick(false);
+    note_engine_failure(&mut lane.ps, crate::player::RuntimeFailure::PlaybackInterrupted, 0);
+    lane.frame();
+    lane.wait_for_puts(2);
+    lane.land_a_direct_retry(HELD_SUB);
+    lane.play();
+    plx_base::task::drain_workers_for_test();
+    assert_eq!(lane.puts().len(), 2, "the retry plays what the server holds: {:?}", lane.puts());
+    lane.finish();
+}
+
 /// **The real resolve, end to end.** A 720p re-encode of an item whose server selection is English audio and
 /// subtitle 9, started with subtitles Off: `build_stream` PUTs the selection (audio kept, subtitle Off) before its
 /// `/decision`, the server refuses the conversion, and the REFUSED plan still carries what the landing needs (the
