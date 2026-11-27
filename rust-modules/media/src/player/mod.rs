@@ -1536,7 +1536,10 @@ fn playing_subscription(ps: &crate::route::PlaybackSession) -> plx_plex::plex::s
 /// user-facing sentence or firmware error string is parsed to decide it.
 fn with_forced_playback_context(mut shape: ErrorShape, forced: bool) -> ErrorShape {
     if !forced { return shape; }
-    if shape.kind == FailureKind::DecisionRefused {
+    // `NoQualifiedBackend` under Force is the same refusal: a URI qualification is not possible under
+    // Force (`pms_uri_possible = !forced && ..`), so on a build without a Feed the policy is what left
+    // no backend, and switching to Auto is the fix, not "this TV can't".
+    if matches!(shape.kind, FailureKind::DecisionRefused | FailureKind::NoQualifiedBackend) {
         shape.kind = FailureKind::PlaybackPolicy;
         shape.caption = plx_os::i18n::msg::widgets_failure_forced_playback_c();
         shape.panel = plx_os::i18n::msg::widgets_panel_forced_playback();
@@ -3457,6 +3460,11 @@ mod tests {
         assert_ne!(none.caption, msg::widgets_failure_open_c());
         assert!(!none.panel.contains("server refused"), "{}", none.panel);
 
+        // Under Force a build with no Feed has no backend BECAUSE of Force (`pms_uri_possible` needs
+        // `!forced`), so Auto could play it: the Force policy's read-out, not "this TV can't".
+        let none_forced = shape_of(V::NoQualifiedBackend, DirectPlayMode::Forced);
+        assert_eq!(none_forced.kind, FailureKind::PlaybackPolicy);
+        assert_eq!(none_forced.caption, msg::widgets_failure_forced_playback_c());
         // Force's refusal stays the force policy's (the session's mode is what converts it), and without the
         // mode it is still a decision refusal, as before.
         let forced = shape_of(V::Forced(ForcedFailure::Video), DirectPlayMode::Forced);
