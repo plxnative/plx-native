@@ -468,7 +468,7 @@ pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_
     // (`UriDriver::delivers_captions`) has the app draw the embedded track at `ordinal`.
     ps.cur_sub_client_drawable = app_draws && stream_id > 0 && ordinal >= 0;
     ps.cur_memory_note = false;
-    queue_session_selection(ps);
+    queue_session_subtitle(ps);
     if let Some(memo) = memo.filter(|_| changed) {
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }

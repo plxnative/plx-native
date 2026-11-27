@@ -55,6 +55,9 @@ impl Lane {
         ps.cur_show_rk = SHOW.into();
         ps.server_selection = Some(ServerSelection { part_id: PART, audio: Some(HELD_AUDIO), subtitle: Some(HELD_SUB) });
         ps.cur_sub_sid = HELD_SUB;
+        ps.cur_audio = Some(eac3(HELD_AUDIO, 1));
+        // What is shown is what the reducer last applied: a refused claim restores it.
+        commit_in_place_route_projection(&ps, false);
         Lane { ps, rig, session }
     }
 
@@ -415,6 +418,106 @@ fn an_accepted_rebuild_does_not_overwrite_a_newer_native_audio_pick() {
         Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(japanese_eac3()), None)),
         "the older conversion's memo was superseded"
     );
+    lane.finish();
+}
+
+/// **One ordered channel.** A claim worker's PUT is queued behind what the serial selection worker holds
+/// (a refused claim's restore, an in-place pick) and the worker waits for it: sent directly it could
+/// overtake the restore queued before it, and the server would end on the pick the restore was undoing.
+#[test]
+fn a_claim_workers_put_waits_behind_a_queued_restore() {
+    let lane = Lane::start(FlightRig::start);
+    let sid = cur_sid(&lane.ps);
+    lane.rig.hold_answers();
+    // The serial worker is busy with an earlier PUT (held at the server), the restore waits behind it.
+    assert!(queue_selection(sid, PART, 36_015, Some(HELD_SUB), false));
+    lane.wait_for_puts(1);
+    assert!(queue_selection(sid, PART, HELD_AUDIO, None, false), "the restore");
+    let claim = std::thread::spawn(move || {
+        put_selection(&plx_base::task::OffFrame::for_test(), sid, PART, 36_017, HELD_SUB)
+    });
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    while selection_queue().pending.len() < 2 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    lane.rig.release_answers();
+    assert!(claim.join().expect("the claim worker").is_some(), "the PUT was answered");
+    lane.wait_for_puts(3);
+    let audio: Vec<_> = lane.puts().iter().map(|p| param(p, "audioStreamID").unwrap_or("-").to_owned()).collect();
+    assert_eq!(audio, ["36015", "36014", "36017"], "the restore is sent before the claim's PUT: {:?}", lane.puts());
+    lane.finish();
+}
+
+/// A refused rebuild with a second rebuild pick queued behind it: the restore is sent first and the
+/// server ends on the second pick, which is what `server_selection` says it holds.
+#[test]
+fn a_second_rebuild_pick_queued_behind_a_refused_one_ends_the_server_on_it() {
+    let mut lane = Lane::start(FlightRig::start);
+    lane.rig.refuse_decisions(1);
+    assert!(commit_audio_pick(&mut lane.ps, eac3(36_016, 2), Some(japanese_eac3())));
+    let action = claim_route_action().expect("claim");
+    assert!(matches!(
+        execute_retranscode_claim(&mut lane.ps, &action, OFFSET_SECS, -1, 0),
+        RetranscodeClaimDispatch::Pending
+    ));
+    let (action, tail) = lane.await_landing();
+    assert!(is_rejected(&tail), "{tail:?}");
+    lane.settle(&action, tail);
+    // The refusal queued its restore; the viewer's next pick is claimed at once, while it may still be
+    // on its way to the server.
+    let spanish = AudioMemo { lang: "spa".into(), ..japanese_eac3() };
+    assert!(commit_audio_pick(&mut lane.ps, eac3(36_017, 3), Some(spanish.clone())));
+    assert!(lane.fly(), "the second pick's rebuild is accepted");
+    plx_base::task::drain_workers_for_test();
+
+    let audio: Vec<_> = lane.puts().iter().map(|p| param(p, "audioStreamID").unwrap_or("-").to_owned()).collect();
+    assert_eq!(audio, ["36016", "36014", "36017"], "pick, its restore, then the second pick: {:?}", lane.puts());
+    assert_eq!(lane.selection(), Some((Some(36_017), Some(HELD_SUB))), "what the server holds");
+    assert_eq!(
+        lane.remembered(),
+        Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(spanish), None)),
+        "only the pick the server accepted is remembered"
+    );
+    lane.finish();
+}
+
+/// **An in-place subtitle PUT names the subtitle only.** Burn C flies, audio N waits for its claim, an
+/// in-place Off is PUT: were that PUT to repeat the pending audio, the server would hold N with no claim
+/// to undo it, and N's claim would capture it as the earlier selection and restore nothing when refused.
+#[test]
+fn an_in_place_subtitle_put_does_not_write_a_pending_audio_pick() {
+    let mut lane = Lane::start(FlightRig::start);
+    lane.rig.hold_answers();
+    lane.burn_pick();
+    let action = claim_route_action().expect("claim");
+    assert!(matches!(
+        execute_retranscode_claim(&mut lane.ps, &action, OFFSET_SECS, -1, 0),
+        RetranscodeClaimDispatch::Pending
+    ));
+    lane.wait_for_puts(1);
+    assert!(commit_audio_pick(&mut lane.ps, eac3(36_016, 2), Some(japanese_eac3())));
+    commit_subtitle_pick(&mut lane.ps, -1, 0, false, Some(SubtitleMemo::Off));
+    lane.rig.release_answers();
+    let (action, tail) = lane.await_landing();
+    lane.settle(&action, tail);
+    if pending_route_start().is_some() {
+        let _frame = plx_base::task::FrameScope::enter();
+        settle_pending_native_start(&mut lane.ps, RouteStartResult::Started);
+    }
+    lane.wait_for_puts(2);
+    assert_eq!(param(&lane.puts()[1], "audioStreamID"), None, "the in-place PUT names no audio: {:?}", lane.puts());
+    assert_eq!(param(&lane.puts()[1], "subtitleStreamID"), Some("0"));
+    assert_eq!(lane.selection().map(|s| s.0), Some(Some(HELD_AUDIO)), "the server still holds the earlier audio");
+
+    // The audio pick's own claim is refused and puts the earlier audio back.
+    lane.rig.refuse_decisions(1);
+    assert!(!lane.fly(), "refused");
+    plx_base::task::drain_workers_for_test();
+    let puts = lane.puts();
+    let last = puts.last().expect("a PUT");
+    assert_eq!(param(last, "audioStreamID"), Some("36014"), "the refused audio goes back: {puts:?}");
+    assert_eq!(param(last, "subtitleStreamID"), None, "{puts:?}");
+    assert_eq!(lane.selection(), Some((Some(HELD_AUDIO), Some(0))));
     lane.finish();
 }
 

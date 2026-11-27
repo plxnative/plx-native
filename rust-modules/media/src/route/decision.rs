@@ -10499,14 +10499,22 @@ pub(super) fn forced_server_decision(
 /// Returns what the server now holds because of it ([`ServerSelection::put`]) when it answered success,
 /// `None` when nothing was sent or it did not: the report a flight's worker posts with its landing
 /// ([`FlightSelection`]) and the resolve posts on its plan.
+///
+/// **Every selection PUT goes out on the ONE serial channel.** This one is queued behind whatever the
+/// serial selection worker holds (a refused claim's restore, an in-place pick) and the calling worker
+/// waits for its answer, so a PUT queued earlier is always sent first and PMS ends on the newest one;
+/// sent directly it could overtake a restore queued before it, and the encode would carry the refused
+/// pick the restore was putting back. The `_off` proof is that the wait is on a worker, never the frame.
 pub(super) fn put_selection(
     _off: &plx_base::task::OffFrame, sid: ServerId, part: i64, aud: i64, sub: i64,
 ) -> Option<ServerSelection> {
-    if part <= 0 {
+    let (answer, answered) = std::sync::mpsc::sync_channel(1);
+    if !enqueue_selection(sid, part, aud, Some(sub), false, Some(answer)) {
         return None;
     }
-    let c = plx_plex::plex::client_for(sid)?;
-    send_selection(c, part, aud, Some(sub)).then(|| ServerSelection::put(part, aud, Some(sub)))
+    // The worker answers every request it takes; a request dropped unsent (a worker that never started,
+    // a panicked one) drops its sender and reads as a PUT that did not happen.
+    answered.recv().unwrap_or(false).then(|| ServerSelection::put(part, aud, Some(sub)))
 }
 
 /// The PUT itself, on a client the CALLER chose: [`put_selection`] resolves it per call, the queue
@@ -10540,6 +10548,8 @@ struct QueuedSelection {
     instance_gen: u32,
     grant_epoch: u32,
     write_back: bool,
+    /// A caller that waits for the PUT's result ([`put_selection`], the claim and resolve workers).
+    answer: Option<std::sync::mpsc::SyncSender<bool>>,
 }
 
 /// `Some` when `queued` may still be sent on `c`: the slot holds the same client incarnation and the
@@ -10549,19 +10559,20 @@ fn credential_unchanged(queued: &QueuedSelection, c: &plx_plex::plex::Client) ->
     c.instance_gen() == queued.instance_gen && c.grant_epoch() == queued.grant_epoch
 }
 
-/// Run one dequeued request: the PUT, unless the credential changed since it was queued.
-fn run_queued_selection(_off: &plx_base::task::OffFrame, req: &QueuedSelection) {
+/// Run one dequeued request: the PUT, unless the credential changed since it was queued. `true` when
+/// the server answered success.
+fn run_queued_selection(_off: &plx_base::task::OffFrame, req: &QueuedSelection) -> bool {
     let Some(c) = plx_plex::plex::client_for(req.sid) else {
-        return;
+        return false;
     };
     if !credential_unchanged(req, c) {
         crate::player::log("select streams: dropped (credential changed since queued)");
         if req.write_back {
             crate::player::log("track-memory: write-back dropped (profile changed)");
         }
-        return;
+        return false;
     }
-    send_selection(c, req.part, req.aud, req.sub);
+    send_selection(c, req.part, req.aud, req.sub)
 }
 
 /// The pending selection PUTs and whether a worker is draining them. One lock covers both, so the
@@ -10614,6 +10625,17 @@ pub(super) fn queue_session_selection(ps: &mut PlaybackSession) {
     }
 }
 
+/// [`queue_session_selection`] for a SUBTITLE pick: it names the subtitle only. The session's audio can
+/// be a pick whose rebuild has not been claimed yet (it waits in `pending_user`), and a PUT that
+/// repeated it would write that pending pick to the server with no claim to settle or undo it (the
+/// wire drops `audioStreamID` for 0, so PMS keeps the audio it has).
+pub(super) fn queue_session_subtitle(ps: &mut PlaybackSession) {
+    let (part, sub) = (cur_part_id(ps), cur_sub_sid(ps));
+    if queue_selection(cur_sid(ps), part, 0, Some(sub), false) {
+        note_queued_selection(ps, ServerSelection::put(part, 0, Some(sub)));
+    }
+}
+
 /// Record a selection PUT the serial worker was handed ([`queue_session_selection`] and the
 /// write-back).
 pub(super) fn note_queued_selection(ps: &mut PlaybackSession, put: ServerSelection) {
@@ -10624,6 +10646,13 @@ pub(super) fn note_queued_selection(ps: &mut PlaybackSession, put: ServerSelecti
 /// identity is captured HERE, on the thread that knows who is asking, and checked again when the
 /// worker runs the request (W11).
 pub(super) fn queue_selection(sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool) -> bool {
+    enqueue_selection(sid, part, aud, sub, write_back, None)
+}
+
+fn enqueue_selection(
+    sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool,
+    answer: Option<std::sync::mpsc::SyncSender<bool>>,
+) -> bool {
     if part <= 0 {
         return false;
     }
@@ -10638,6 +10667,7 @@ pub(super) fn queue_selection(sid: ServerId, part: i64, aud: i64, sub: Option<i6
         instance_gen: c.instance_gen(),
         grant_epoch: c.grant_epoch(),
         write_back,
+        answer,
     };
     let spawn = {
         let mut queue = selection_queue();
@@ -10662,13 +10692,19 @@ fn spawn_selection_worker() {
             };
             req
         };
-        run_queued_selection(off, &req);
+        let sent = run_queued_selection(off, &req);
+        if let Some(answer) = &req.answer {
+            let _ = answer.send(sent);
+        }
     });
     if !spawned {
         // The OS refused the thread. Drop the running flag so a later `queue_put_selection` gets a
         // chance to retry, rather than leaving every future selection stranded in the queue behind
         // a flag nobody will ever clear.
-        selection_queue().worker_running = false;
+        let mut queue = selection_queue();
+        queue.worker_running = false;
+        // A worker waiting for its answer must not wait for a thread that never started.
+        queue.pending.retain(|req| req.answer.is_none());
     }
 }
 
@@ -15093,7 +15129,7 @@ fn commit_subtitle_selection_inner(
         // from `app/playback.rs::commit_track` inside the run-loop's `FrameScope`, so this PUT runs
         // on the serial selection worker instead of blocking the frame thread.
         if put {
-            queue_session_selection(ps);
+            queue_session_subtitle(ps);
         }
     }
     if in_place {
