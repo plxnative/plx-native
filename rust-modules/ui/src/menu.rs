@@ -332,6 +332,9 @@ pub struct MenuCore {
     mount: Mount,
     class: Class,
     motion: PanelMotion,
+    /// The widest a growing panel may be, when its rows are USER-NAMED text (a list of libraries): as wide as
+    /// its widest row up to this, so a name is read whole. `None`: [`MENU_MAX_W`], the localization catch.
+    width_ceiling: Option<f32>,
 }
 
 /// `size` over `pill`, clear of `clear_y` when there is one.
@@ -369,7 +372,7 @@ impl MenuCore {
             Host::Sheet { anchor } => Mount::Sheet { anchor },
             Host::Video { anchor, placement } => Mount::Video { anchor, placement, side: std::cell::Cell::new(popover::Side::Above) },
         };
-        Self { mount, class, motion }
+        Self { mount, class, motion, width_ceiling: None }
     }
 
     /// **What the menu stands on: the ONE derivation**, by an exhaustive `match` on the mount (a fifth host
@@ -405,7 +408,11 @@ impl MenuCore {
         let h = table.measured_height();
         match &self.mount {
             Mount::Grows { pill, clear_y, .. } => {
-                grow_over(*pill, *clear_y, (table.menu_panel_width_from(measure, *pill), h.clamp(120.0, crate::consts::SAFE.h)))
+                let w = match self.width_ceiling {
+                    Some(ceiling) => table.menu_panel_width_to(measure, *pill, ceiling),
+                    None => table.menu_panel_width_from(measure, *pill),
+                };
+                grow_over(*pill, *clear_y, (w, h.clamp(120.0, crate::consts::SAFE.h)))
             }
             Mount::BesideGlass { anchor } => beside(rect_of(*anchor), table.menu_panel_width(measure), h),
             Mount::Sheet { anchor } => popover::under_or_above_fit(rect_of(*anchor), table.menu_panel_width(measure), h),
@@ -554,6 +561,11 @@ pub struct Menu<P: Copy, Id, A> {
     core: MenuCore,
     form: FormTable<Id, A, P>,
     stack: PageStack<P, Id>,
+    /// What a [`Event::Refresh`] does when the row the cursor stood on is gone from the rebuilt page: land on
+    /// its nearest survivor (`false`, the default), or OPEN the page afresh on its initial row (`true`: an
+    /// action menu must never slide onto a neighbour that may be destructive, *Sign out* once *Change profile*
+    /// is hidden).
+    afresh: bool,
 }
 
 impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
@@ -563,7 +575,21 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         let mut form = FormTable::new(band);
         form.table.compact = class.compact();
         form.table.min_panel_w = host.width_floor();
-        Self { core: MenuCore::new(host, class), form, stack: PageStack::new() }
+        Self { core: MenuCore::new(host, class), form, stack: PageStack::new(), afresh: false }
+    }
+
+    /// A rebuild that loses the row under the cursor opens the page afresh on its initial row instead of
+    /// sliding onto a neighbour (see [`Menu`]'s `afresh`).
+    pub fn opening_afresh(mut self) -> Self {
+        self.afresh = true;
+        self
+    }
+
+    /// A growing glass whose rows are user-named text is as wide as its widest row up to `ceiling`
+    /// ([`TableView::menu_panel_width_to`]), never narrower than its pill.
+    pub fn with_width_ceiling(mut self, ceiling: f32) -> Self {
+        self.core.width_ceiling = Some(ceiling);
+        self
     }
 
     // ---- what is derived ------------------------------------------------------------------------
@@ -574,6 +600,12 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
             stack: if self.stack.is_empty() { Stack::Root } else { Stack::Paged(self.stack.len()) },
             motion: self.core.motion_kind(),
         }
+    }
+
+    /// The pages pushed over the root, outermost first, each with the row that opened it and the scroll it was
+    /// left at (for a host whose replay canon writes them).
+    pub fn pages(&self) -> impl Iterator<Item = &page_stack::Saved<P, Id>> {
+        self.stack.iter()
     }
 
     /// How many pages are pushed over the root.
@@ -658,6 +690,11 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     #[cfg(test)]
     pub(crate) fn glass_opener(&self) -> Option<Rect> {
         self.core.glass().and_then(Popover::opener)
+    }
+
+    /// The growing glass, for the tests that hold its morph to the scrim's clock (`None`: a host that does not grow).
+    pub fn glass(&self) -> Option<&Popover> {
+        self.core.glass()
     }
 
     /// The form of the page showing.
@@ -898,7 +935,11 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         }
         let Some(built) = build(self.stack.top()) else { return };
         let held = keep.or_else(|| self.form.selected_id().cloned());
-        self.form.set_sliding(built.form, held.as_ref());
+        if self.afresh && !held.as_ref().is_some_and(|id| built.form.contains(id)) {
+            self.form.open(built.form, built.initial.as_ref());
+        } else {
+            self.form.set_sliding(built.form, held.as_ref());
+        }
         self.form.table.set_title((!self.stack.is_empty()).then_some(built.title));
     }
 }

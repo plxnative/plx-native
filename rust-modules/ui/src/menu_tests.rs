@@ -593,3 +593,62 @@ fn keyed_maps_back_left_right_and_passes_the_rest() {
     assert_eq!(k(Key::Left, Down, false, Some(1)), "pass", "a LEFT the engine moved focus with is not ours");
     assert_eq!(k(Key::Up, Down, true, Some(1)), "pass");
 }
+
+/// A rebuild that takes the focused row away lands on its nearest survivor, unless the menu is built to open afresh
+/// (an action menu: the neighbour that slides into the vacated place may be a destructive row).
+#[test]
+fn a_rebuild_that_loses_the_focused_row_opens_afresh_only_when_the_menu_says_so() {
+    let page = |ids: &[Id]| {
+        let mut sec = FormSection::new("");
+        for id in ids {
+            sec = sec.item(*id, RowKind::Choice, "x", Row::new("row"));
+        }
+        Page::root(Form::new().section(sec)).initial(Some(ids[0]))
+    };
+    let all = [Id::Leaf(0), Id::Leaf(1), Id::Leaf(2), Id::Leaf(3)];
+    let fewer = [Id::Leaf(0), Id::Leaf(1), Id::Leaf(3)];
+    for (afresh, want) in [(false, Id::Leaf(3)), (true, Id::Leaf(0))] {
+        let mut m = Mn::new(grows(), Class::Action, crate::table_screen::BAND_BASE);
+        if afresh {
+            m = m.opening_afresh();
+        }
+        m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(|| page(&all)));
+        step(&mut m, Event::Focused(Id::Leaf(2).key().0));
+        assert_eq!(m.form().selected_id(), Some(&Id::Leaf(2)), "rig");
+        m.step(Event::Refresh { keep: None }, &mut |p| p.is_none().then(|| page(&fewer)));
+        assert_eq!(m.form().selected_id(), Some(&want), "afresh: {afresh}");
+    }
+}
+
+/// A growing glass over USER-NAMED rows is as wide as its widest row up to the host's ceiling; by default it is held
+/// to the localization catch (`MENU_MAX_W`).
+#[test]
+fn a_width_ceiling_lets_a_list_of_names_grow_past_the_localization_catch() {
+    let long = || {
+        Page::root(Form::new().section(
+            FormSection::new("").item(Id::Go, RowKind::Button, "go", Row::new("A library name that is far too long ".repeat(4))),
+        ))
+    };
+    let build = |m: &mut Mn| m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(long));
+    let mut capped = Mn::new(grows(), Class::Action, crate::table_screen::BAND_BASE);
+    build(&mut capped);
+    let mut wide = Mn::new(grows(), Class::Action, crate::table_screen::BAND_BASE).with_width_ceiling(crate::consts::SAFE.w);
+    build(&mut wide);
+    assert!(capped.panel_rect(&M).w <= crate::table::MENU_MAX_W, "{:?}", capped.panel_rect(&M));
+    assert!(wide.panel_rect(&M).w > crate::table::MENU_MAX_W, "{:?}", wide.panel_rect(&M));
+    assert!(wide.panel_rect(&M).w <= crate::consts::SAFE.w);
+}
+
+/// The pages pushed over the root are readable (for a host whose replay canon writes them), and only a growing host
+/// has a glass.
+#[test]
+fn the_pushed_pages_and_the_glass_are_readable() {
+    let mut m = menu(grows(), Class::Action);
+    assert_eq!(m.pages().count(), 0);
+    assert!(m.glass().is_some());
+    step(&mut m, Event::Ok(Id::Go.key().0));
+    let saved: Vec<_> = m.pages().map(|s| (s.page, s.return_id)).collect();
+    assert_eq!(saved, [(Pg::One, Id::Go)], "the page pushed and the row that opened it");
+    let sheet = menu(Host::Sheet { anchor: anchor() }, Class::Action);
+    assert!(sheet.glass().is_none());
+}

@@ -496,12 +496,14 @@ fn the_sort_filter_pill_is_the_lifts_alone_after_the_panel_and_the_glass_consume
     #[derive(Default)]
     struct Tally { ordered: u32, fading: u32, consumed: u32, lifted: u32, back_on_page: u32 }
     let mut tally = Tally::default();
+    let was_lifted = std::cell::Cell::new(false);
     let mut fell = Vec::new();
     let mut check = |w: &mut World, leg: &str, n: u32| {
         let (pills, pill_at, last_row, rows_alpha, lifted, owed) = frame(w);
         let owed = if lifted { owed.unwrap_or(1.0) } else { 1.0 };
         assert!(pills.len() <= 1, "{leg} frame {n}: the pill is drawn at most once (the lift is its only copy): {pills:?}");
         assert_eq!(!pills.is_empty(), owed > 0.0, "{leg} frame {n}: drawn iff the glass leaves any of it (alpha {owed}, drawn {pills:?})");
+        let mount_frame = lifted && !was_lifted.replace(lifted);
         if lifted { tally.lifted += 1 } else if !pills.is_empty() { tally.back_on_page += 1 }
         if let Some(&alpha) = pills.first() {
             assert!((alpha - owed).abs() < 1e-3, "{leg} frame {n}: the lift paints it at the morph's alpha ({alpha} vs {owed})");
@@ -510,7 +512,11 @@ fn the_sort_filter_pill_is_the_lifts_alone_after_the_panel_and_the_glass_consume
                 assert!(at > row, "{leg} frame {n}: the pill's run ({at}) comes after the panel's rows (..={row})");
                 tally.ordered += 1;
             }
-            assert!(rows_alpha.is_none_or(|a| a < 0.5), "{leg} frame {n}: the pill is drawn beside visible rows ({rows_alpha:?})");
+            // The frame the menu mounts on also carries the text warm (`Screen::prepare`: the recording walk that queues the
+            // rows' strings for rasterising), whose runs are not drawn rows; the opener lift's first frame is that frame.
+            if !mount_frame {
+                assert!(rows_alpha.is_none_or(|a| a < 0.5), "{leg} frame {n}: the pill is drawn beside visible rows ({rows_alpha:?})");
+            }
         } else if lifted && rows_alpha.is_some_and(|a| a > 0.999) {
             tally.consumed += 1;
         }
