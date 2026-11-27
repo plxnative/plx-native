@@ -412,6 +412,7 @@ pub fn commit_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, memo: Op
         // The server was not asked for a conversion: nothing can refuse the pick.
         PickRoute::Applied => {
             if let Some(memo) = memo {
+                supersede_pick_memos(true, false);
                 remember_track_pick(ps, TrackPick::Audio(memo));
             }
         }
@@ -510,6 +511,7 @@ fn remember_subtitle_pick(ps: &PlaybackSession, memo: SubtitleMemo, rebuilds: bo
     if rebuilds {
         queue_pick_memos(PickMemos::subtitle(Some(memo)));
     } else {
+        supersede_pick_memos(false, true);
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }
 }

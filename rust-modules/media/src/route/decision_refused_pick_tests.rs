@@ -331,6 +331,93 @@ fn a_native_pick_after_a_refused_claim_wins() {
     lane.finish();
 }
 
+/// **The race, per field.** An in-place subtitle pick queued while a refused AUDIO rebuild flies carries
+/// the pending audio in its own PUT, so the selection the main thread holds has moved on both fields. The
+/// audio is still the refused pick's and is put back; the subtitle is the newer word and is kept.
+#[test]
+fn a_refused_audio_rebuild_is_undone_under_an_in_place_subtitle_pick() {
+    let mut lane = Lane::start(FlightRig::start);
+    lane.rig.refuse_decisions(1);
+    lane.rig.hold_answers();
+    let spanish = AudioMemo { lang: "spa".into(), ..japanese_eac3() };
+    assert!(commit_audio_pick(&mut lane.ps, eac3(36_016, 2), Some(spanish)));
+    let action = claim_route_action().expect("claim");
+    assert!(matches!(
+        execute_retranscode_claim(&mut lane.ps, &action, OFFSET_SECS, -1, 0),
+        RetranscodeClaimDispatch::Pending
+    ));
+    lane.wait_for_puts(1);
+    commit_subtitle_pick(&mut lane.ps, -1, 0, false, Some(SubtitleMemo::Off));
+    lane.rig.release_answers();
+    let (action, tail) = lane.await_landing();
+    assert!(is_rejected(&tail), "{tail:?}");
+    lane.settle(&action, tail);
+    lane.wait_for_puts(3);
+    plx_base::task::drain_workers_for_test();
+
+    let puts = lane.puts();
+    assert_eq!(puts.len(), 3, "the pick's PUT, the in-place PUT, the restore: {puts:?}");
+    assert_eq!(param(&puts[0], "audioStreamID"), Some("36016"), "{}", puts[0]);
+    assert_eq!(param(&puts[1], "subtitleStreamID"), Some("0"), "{}", puts[1]);
+    assert_eq!(param(&puts[2], "audioStreamID"), Some("36014"), "the refused audio goes back: {}", puts[2]);
+    assert_eq!(param(&puts[2], "subtitleStreamID"), None, "the newer subtitle is left alone: {}", puts[2]);
+    assert_eq!(lane.selection(), Some((Some(HELD_AUDIO), Some(0))), "the audio is the earlier one, the subtitle the viewer's Off");
+    assert_eq!(
+        lane.remembered(),
+        Some(TrackMemoryEntry::new(MACHINE, SHOW, None, Some(SubtitleMemo::Off))),
+        "the refused audio pick is not remembered, the applied Off is"
+    );
+    lane.finish();
+}
+
+/// **Newest pick wins in the memory too.** A subtitle applied in place while an older burn's claim flies
+/// is the viewer's latest choice: the burn's claim, accepted afterwards, must not overwrite it.
+#[test]
+fn an_accepted_rebuild_does_not_overwrite_a_newer_in_place_pick() {
+    let mut lane = Lane::start(FlightRig::start);
+    lane.rig.hold_answers();
+    lane.burn_pick();
+    let action = claim_route_action().expect("claim");
+    assert!(matches!(
+        execute_retranscode_claim(&mut lane.ps, &action, OFFSET_SECS, -1, 0),
+        RetranscodeClaimDispatch::Pending
+    ));
+    lane.wait_for_puts(1);
+    commit_subtitle_pick(&mut lane.ps, -1, 0, false, Some(SubtitleMemo::Off));
+    assert_eq!(lane.remembered(), Some(TrackMemoryEntry::new(MACHINE, SHOW, None, Some(SubtitleMemo::Off))), "Off applied at once");
+    lane.rig.release_answers();
+    let (action, tail) = lane.await_landing();
+    assert!(!is_rejected(&tail), "{tail:?}");
+    assert!(lane.settle(&action, tail), "the older burn was accepted");
+    assert_eq!(
+        lane.remembered(),
+        Some(TrackMemoryEntry::new(MACHINE, SHOW, None, Some(SubtitleMemo::Off))),
+        "the viewer's newer Off stays the show's memory"
+    );
+    lane.finish();
+}
+
+/// The same for audio, at the reducer: a rebuild pick still waiting for its claim is superseded by a
+/// native pick of the same half made before the claim, which writes at once.
+#[test]
+fn an_accepted_rebuild_does_not_overwrite_a_newer_native_audio_pick() {
+    let mut lane = Lane::start(FlightRig::start_direct);
+    let spanish = AudioMemo { lang: "spa".into(), codec: "dts".into(), ..japanese_eac3() };
+    let dts = CarriedAudio { codec: "dts".into(), channels: 6, ..eac3(36_016, 2) };
+    assert!(commit_audio_pick(&mut lane.ps, dts, Some(spanish)));
+    assert_eq!(lane.remembered(), None, "the conversion's pick waits for its claim");
+    assert!(commit_audio_pick(&mut lane.ps, eac3(36_017, 3), Some(japanese_eac3())));
+    assert_eq!(lane.remembered(), Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(japanese_eac3()), None)), "the native pick writes at once");
+    let action = claim_route_action().expect("claim");
+    assert!(finish_route_action(&mut lane.ps, &action, RouteApplyResult::Prepared));
+    assert_eq!(
+        lane.remembered(),
+        Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(japanese_eac3()), None)),
+        "the older conversion's memo was superseded"
+    );
+    lane.finish();
+}
+
 /// **An Original recovery that is refused** writes back the candidate's PUT: with nothing owed the
 /// refusal is a plain rejection and one restore (the candidate's audio, which the viewer never chose).
 #[test]

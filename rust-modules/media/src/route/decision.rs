@@ -3521,6 +3521,27 @@ pub(super) fn queue_pick_memos(memos: PickMemos) {
     control.pending_memos.merge(memos);
 }
 
+/// A pick applied at once (natively, or in place) writes its memo at the commit and is the newest word
+/// for its half: an older rebuild's memo for the same half, queued or carried by the claim in flight,
+/// must not overwrite it when that claim lands accepted (the base remembered the newest pick).
+pub(super) fn supersede_pick_memos(audio: bool, subtitle: bool) {
+    let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    if audio {
+        control.pending_memos.audio = None;
+    }
+    if subtitle {
+        control.pending_memos.subtitle = None;
+    }
+    if let Some((.., memos)) = control.claimed_user.as_mut() {
+        if audio {
+            memos.audio = None;
+        }
+        if subtitle {
+            memos.subtitle = None;
+        }
+    }
+}
+
 /// Settle the memos the claim `serial` carried: write them when the server agreed (the claim is
 /// accepted, [`finish_route_action`]'s `Prepared`, or an Original trial it started), drop them when it
 /// did not. Nothing for another claim's serial.
@@ -12482,9 +12503,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     // What the server holds of this Part: the fetched item's selected streams, then the PUTs the plan
     // sent (its resolve worker returned them on the plan, the only way back to this owner).
     let server_selection = plan
-        .playing
-        .as_ref()
-        .and_then(|item| ServerSelection::fetched(plan.part_id, item))
+        .selection_fetched
         .map(|fetched| plan.selection_sent.map_or(fetched, |put| ServerSelection::after(Some(fetched), put)))
         .or(plan.selection_sent);
     // **The start of a playback is what spends the viewer's pick, and only a playable plan of the viewer's

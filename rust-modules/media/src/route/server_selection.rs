@@ -11,9 +11,10 @@
 //! **One value, one writer.** [`PlaybackSession::server_selection`](super::PlaybackSession) is
 //! written by exactly these steps, all of them naming a PUT the server answered (or, for the serial
 //! queue, accepted into its FIFO):
-//!   * the landing's own start, from the fetched item's `selected` streams ([`ServerSelection::fetched`],
-//!     which IS the server's state before any PUT of this session) then the plan's PUTs
-//!     ([`ServerSelection::after`]);
+//!   * the landing's own start, from the fetched item's `selected` streams as the resolve read them
+//!     BEFORE any local pick rewrote the flags (`Plan::selection_fetched`, [`ServerSelection::fetched`];
+//!     an item taken from the detail page's cache carries the flags of the fetch that produced it)
+//!     then the plan's PUTs ([`ServerSelection::after`]);
 //!   * a claim flight's landing ([`FlightSelection::settle`]), for the PUTs its worker sent;
 //!   * a queued selection ([`ServerSelection::after`] at the queue site; the serial worker has no way
 //!     back to its owner, so a PUT it fails stays recorded: the value then claims a pair the server
@@ -93,26 +94,50 @@ pub(super) struct FlightSelection {
     pub(super) sent: Option<ServerSelection>,
 }
 
+/// Whether a field was written by someone else since the claim captured it: the value is known, differs
+/// from what the claim captured (`before`), and is not the claim's own (`sent`). An in-place pick
+/// queued while the claim flew repeats the claim's pending audio, which is NOT a newer word.
+fn written_since(before: Option<i64>, sent: Option<i64>, current: Option<i64>) -> bool {
+    current.is_some() && current != before && current != sent
+}
+
 impl FlightSelection {
-    /// Take a claim's landing into the one value. An ACCEPTED claim moves the server's selection to
-    /// what its PUTs wrote; a REFUSED one writes the earlier selection back (through the serial
-    /// queue, so a PUT queued since is ordered with it).
+    /// Take a claim's landing into the one value, field by field. An ACCEPTED claim moves the server's
+    /// selection to what its PUTs wrote; a REFUSED one writes the earlier selection back (through the
+    /// serial queue, so a PUT queued since is ordered with it).
     ///
-    /// Nothing moves when the main thread has written the selection since the claim captured it (an
-    /// in-place pick queued its own PUT while the flight flew): that PUT is the newer word, and a
-    /// restore of the older value would undo it.
+    /// A field the main thread has written since the claim captured the selection (an in-place pick
+    /// queued its own PUT while the flight flew) is the newer word and is left as it is: the claim's
+    /// value for it is neither restored nor recorded. The other field is settled as usual, so a refused
+    /// audio rebuild is still undone under an in-place subtitle pick, whose PUT carries the pending audio.
     pub(super) fn settle(&self, ps: &mut PlaybackSession, accepted: bool) {
         let Some(sent) = self.sent else { return };
-        if ps.server_selection != self.before {
+        if ps.server_selection.is_some_and(|c| c.part_id != sent.part_id) {
             return;
         }
+        let current = ps.server_selection;
+        let (cur_audio, cur_sub) = current.map_or((None, None), |c| (c.audio, c.subtitle));
+        let (before_audio, before_sub) = self.before.map_or((None, None), |b| (b.audio, b.subtitle));
+        let audio_newer = written_since(before_audio, sent.audio, cur_audio);
+        let sub_newer = written_since(before_sub, sent.subtitle, cur_sub);
         if accepted {
-            ps.server_selection = Some(ServerSelection::after(self.before, sent));
+            ps.server_selection = Some(ServerSelection {
+                part_id: sent.part_id,
+                audio: if audio_newer { cur_audio } else { sent.audio.or(cur_audio) },
+                subtitle: if sub_newer { cur_sub } else { sent.subtitle.or(cur_sub) },
+            });
             return;
         }
-        if let Some((audio, subtitle)) = self.before.and_then(|before| before.restore_of(&sent)) {
+        let owed = ServerSelection {
+            part_id: sent.part_id,
+            audio: sent.audio.filter(|_| !audio_newer),
+            subtitle: sent.subtitle.filter(|_| !sub_newer),
+        };
+        if let Some((audio, subtitle)) = self.before.and_then(|before| before.restore_of(&owed)) {
             crate::player::log("select streams: restoring the selection a refused rebuild had written");
-            queue_selection(self.sid, sent.part_id, audio, subtitle, false);
+            if queue_selection(self.sid, sent.part_id, audio, subtitle, false) {
+                ps.server_selection = Some(ServerSelection::after(current, ServerSelection::put(sent.part_id, audio, subtitle)));
+            }
         }
     }
 }
@@ -172,6 +197,18 @@ mod tests {
         let none = plx_data::metadata::PlayingItem::with_subs(Vec::new());
         assert_eq!(ServerSelection::fetched(7, &none), Some(sel(None, None)), "a Part with no streams knows nothing");
         assert_eq!(ServerSelection::fetched(0, &item), None);
+    }
+
+    #[test]
+    fn a_field_is_a_newer_word_only_when_it_is_neither_the_captured_nor_the_claims_value() {
+        // before 10, the claim sent 11: 10 (untouched), 11 (an in-place PUT repeating the pending pick)
+        // are not newer; 12 is; an unknown is not.
+        assert!(!written_since(Some(10), Some(11), Some(10)));
+        assert!(!written_since(Some(10), Some(11), Some(11)));
+        assert!(written_since(Some(10), Some(11), Some(12)));
+        assert!(!written_since(Some(10), Some(11), None));
+        // a field the claim did not send (None) is any known change
+        assert!(written_since(Some(55), None, Some(0)));
     }
 
     #[test]

@@ -1652,6 +1652,11 @@ pub struct Plan {
     /// adds to the fetched item's own selection to know what PMS holds
     /// ([`PlaybackSession::server_selection`](super::PlaybackSession)).
     pub(super) selection_sent: Option<super::server_selection::ServerSelection>,
+    /// The Part's selected streams as the item was FETCHED, captured before the viewer's pick
+    /// (`apply_picks`) and a retry's `subtitle_override` rewrote the flags: what PMS held before any
+    /// PUT of this resolve (an item taken from `ResolveEnv::cached_item` carries the flags of the
+    /// fetch that produced it).
+    pub(super) selection_fetched: Option<super::server_selection::ServerSelection>,
     /// Owned URI authorization. The URL remains in IO escrow and never becomes `url`.
     pub uri_original: Option<super::uri_preflight::KnownSource>,
     /// A separately certified URI locator for the actual accepted PMS output. Its resource
@@ -1967,6 +1972,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             }
             let media_index = plan.media_index;
             plan.playing = playing;
+            plan.selection_fetched = plan.playing.as_ref().and_then(|item| super::server_selection::ServerSelection::fetched(plan.part_id, item));
             plan.src_fps = plan.playing.as_ref().map_or(0.0, |p| p.video_fps);
             plan.playing_fresh = env.cached_item.is_none() && plan.playing.is_some();
             let src_kbps = match (env.version, played.as_ref()) {
