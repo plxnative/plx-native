@@ -522,3 +522,34 @@ fn a_live_entry_with_no_segment_yet_opens_as_media_and_starts_when_it_grows() {
         "three seconds behind the edge of the first read that holds the cushion");
     crate::aq::aq_destroy(&mut *aq);
 }
+
+/// A Live TV session's playlist only grows, and the cursor's tracker remembers a bounded tail of
+/// it on both ways a session is opened: a conversion's master, and the session's own media
+/// playlist as the entry. A library cursor's tracker still remembers every segment it handed on.
+#[test]
+fn a_live_cursor_remembers_a_bounded_tail_of_a_playlist_that_only_grows() {
+    const REFRESHES: u64 = 100;
+    for (entry, master, live) in [(LIVE_ENTRY, true, true), (LIVE_ENTRY, false, true), (LIBRARY_ENTRY, true, false)] {
+        // A master entry names its variant; a media entry is re-read under its own name.
+        let (first, again) = if master { ("start.m3u8", "media.m3u8") } else { ("start.m3u8", "start.m3u8") };
+        let mut replies = vec![(first, if master { MASTER.to_string() } else { media(12, "", false) })];
+        replies.extend((12..12 + REFRESHES).map(|count| (again, media(count, "", false))));
+        let mut net = net(replies, Arc::new(Observer::default()));
+        let mut aq = crate::aq::aq_new(1024);
+        let mut cursor = open(&mut aq, &mut net, entry);
+        assert_eq!(cursor.live, live, "{entry} master={master}");
+        // The first read hands on its pending segments (three from the live edge, all twelve from a
+        // library start) before the next refresh; every later refresh adds one.
+        let reads = REFRESHES - 1 + if live { 3 } else { 12 };
+        for _ in 0..reads {
+            hls_cursor_next(&mut cursor, &mut *aq, &mut net, None).unwrap().expect("a segment");
+        }
+        let remembered = cursor.tracker.remembered();
+        if live {
+            assert!((1..=64).contains(&remembered), "master={master}: {remembered} remembered");
+        } else {
+            assert_eq!(remembered as u64, 12 + REFRESHES - 1, "a library cursor keeps every segment");
+        }
+        crate::aq::aq_destroy(&mut *aq);
+    }
+}

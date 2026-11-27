@@ -398,15 +398,57 @@ pub struct Refresh {
     pub end_list: bool,
 }
 
+/// How many of its most recent segments a [`MediaTracker::live`] tracker remembers, to check a
+/// re-listed one against. PMS does not slide a Live TV session's playlist: it holds the media
+/// sequence at 0 and only appends (the `LIVE` fixture in this file's tests), so every refresh
+/// re-lists the whole session. A segment below this tail was already handed on and is passed over
+/// unchecked. 64 is about a minute of the one-second segments a tuner session cuts, well past any
+/// window a refresh re-reads.
+const LIVE_REPLAY_TAIL: u64 = 64;
+
+/// The media-playlist refresh tracker. A VOD (`Default`) tracker remembers every segment it has
+/// handed on; a [`MediaTracker::live`] one, for a Live TV session that has no end, remembers only
+/// a bounded tail.
 #[derive(Debug, Default)]
 pub struct MediaTracker {
     source: Option<Resource>,
     next_sequence: Option<u64>,
     seen: BTreeMap<u64, Segment>,
     ended: bool,
+    live: bool,
+    /// LIVE only: the first sequence this tracker handed on. Below it nothing was ever seen.
+    began_at: u64,
+    /// LIVE only: every segment from `began_at` up to this sequence was handed on and forgotten, so
+    /// a refresh that lists it again is passed over rather than checked or refused as unknown.
+    forgotten_below: u64,
 }
 
 impl MediaTracker {
+    /// A tracker for a live playlist (a Live TV session). Its replay memory is bounded: a segment
+    /// below the playlist's media sequence can never be listed again, and one more than
+    /// [`LIVE_REPLAY_TAIL`] segments behind the cursor was already handed on, so both are
+    /// forgotten, and one listed again in that forgotten range is passed over. A segment below the
+    /// sequence the tracker began at was never handed on, and is refused as
+    /// [`Error::UnknownOldSegment`] exactly as the VOD tracker refuses it. The memory a
+    /// session holds, and the work each refresh does on what it has already read, stay bounded
+    /// however long the channel is on, on a server that only ever grows the list, as PMS does (a
+    /// `Default` tracker keeps and re-checks every segment of the session). The refresh itself
+    /// still fetches and parses the whole list; on a server that keeps appending, that list
+    /// eventually reaches the playlist fetch's 1 MiB cap (`ff::hls_fetch_text`), which ends the read.
+    ///
+    /// Everything else that guards correctness is the VOD tracker's: a segment in the remembered
+    /// tail that changed is still [`Error::SegmentChanged`], a gap is still [`Error::SequenceGap`],
+    /// a source change still fails, and ENDLIST stays sticky.
+    pub fn live() -> Self {
+        Self { live: true, ..Self::default() }
+    }
+
+    /// How many segments this tracker remembers: the cursor tests read the live bound through it.
+    #[cfg(test)]
+    pub(crate) fn remembered(&self) -> usize {
+        self.seen.len()
+    }
+
     pub fn apply(&mut self, playlist: &MediaPlaylist) -> Result<Refresh, Error> {
         if self
             .source
@@ -416,7 +458,9 @@ impl MediaTracker {
             return Err(Error::RefreshSourceChanged);
         }
 
+        let first_apply = self.next_sequence.is_none();
         let mut expected = self.next_sequence.unwrap_or(playlist.media_sequence);
+        let began_at = expected;
         if playlist.media_sequence > expected {
             return Err(Error::SequenceGap {
                 expected,
@@ -429,6 +473,9 @@ impl MediaTracker {
         let mut additions = Vec::new();
         for segment in &playlist.segments {
             if segment.sequence < expected {
+                if self.live && (self.began_at..self.forgotten_below).contains(&segment.sequence) {
+                    continue;
+                }
                 match self.seen.get(&segment.sequence) {
                     Some(previous) if previous == segment => continue,
                     Some(_) => return Err(Error::SegmentChanged(segment.sequence)),
@@ -458,6 +505,16 @@ impl MediaTracker {
 
         for segment in &additions {
             self.seen.insert(segment.sequence, segment.clone());
+        }
+        if self.live {
+            if first_apply {
+                self.began_at = began_at;
+            }
+            // Below the window nothing can be listed again, and below the tail what is listed again
+            // was already handed on: keep the memory to the window's last LIVE_REPLAY_TAIL segments.
+            let floor = playlist.media_sequence.max(expected.saturating_sub(LIVE_REPLAY_TAIL));
+            self.seen = self.seen.split_off(&floor);
+            self.forgotten_below = self.forgotten_below.max(floor);
         }
         self.source.get_or_insert_with(|| playlist.source.clone());
         self.next_sequence = Some(expected);
@@ -1241,6 +1298,92 @@ mod tests {
         assert_eq!(media.preferred_start_index().unwrap(), 0);
         let media = parse_media(&at, empty).unwrap();
         assert_eq!((media.media_sequence, media.segments.len(), media.end_list), (0, 0, false));
+    }
+
+    /// A Live TV session's media playlist after `count` cuts, in [`LIVE`]'s shape: the media
+    /// sequence held at 0, one-second segments named from zero, no ENDLIST, and the list GROWING
+    /// refresh by refresh (PMS only appends to it for as long as the channel plays).
+    fn growing_live(count: usize) -> MediaPlaylist {
+        let mut text = String::from(
+            "#EXTM3U\n#EXT-X-VERSION:4\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXT-X-PROGRAM-DATE-TIME:2026-10-21T07:54:42.854397846Z\n",
+        );
+        for n in 0..count {
+            text.push_str("#EXTINF:1.000000, nodesc\n");
+            text.push_str(&format!("{n:05}.ts\n"));
+        }
+        parse_media(&source("/livetv/sessions/9b9fe727-0000/clientid/index.m3u8?offset=-1.000000"), &text)
+            .expect("the live session shape parses")
+    }
+
+    fn sequences(refresh: &Refresh) -> Vec<u64> {
+        refresh.new_segments.iter().map(|segment| segment.sequence).collect()
+    }
+
+    /// PMS never slides a Live TV session's playlist, so every refresh re-lists the whole session.
+    /// A live tracker remembers only the last [`LIVE_REPLAY_TAIL`] segments however long the list
+    /// grows, still hands each segment on exactly once, and still refuses a change inside that
+    /// tail. It used to keep, and re-check on every refresh, every segment of the session.
+    #[test]
+    fn a_live_tracker_over_a_list_that_only_grows_remembers_a_bounded_tail() {
+        let mut live = MediaTracker::live();
+        let mut handed = 0u64;
+        for count in 1..=500usize {
+            let refresh = live.apply(&growing_live(count)).unwrap();
+            assert_eq!(sequences(&refresh), vec![count as u64 - 1], "one new segment per refresh");
+            handed += refresh.new_segments.len() as u64;
+            assert!(live.seen.len() as u64 <= LIVE_REPLAY_TAIL, "{count} listed, {} remembered", live.seen.len());
+        }
+        assert_eq!((handed, live.next_sequence), (500, Some(500)), "every segment exactly once, in order");
+        // Re-reading the same 500 hands on nothing and refuses nothing.
+        assert!(live.apply(&growing_live(500)).unwrap().new_segments.is_empty());
+        // A segment inside the remembered tail that changed is still refused.
+        let mut changed = growing_live(501);
+        changed.segments[498].resource = changed.segments[499].resource.clone();
+        assert_eq!(live.apply(&changed), Err(Error::SegmentChanged(498)));
+    }
+
+    /// The bound is live-only: a VOD tracker keeps its whole replay memory, as before.
+    #[test]
+    fn a_vod_tracker_still_remembers_every_segment() {
+        let mut vod = MediaTracker::default();
+        for count in 1..=100usize {
+            vod.apply(&growing_live(count)).unwrap();
+        }
+        assert_eq!(vod.seen.len(), 100);
+    }
+
+    /// What the live tracker forgets is only what it handed on. A list that restarts below the
+    /// sequence the tracker began at (a restarted conversion) lists segments it never saw, and
+    /// both trackers refuse them as unknown rather than passing them over.
+    #[test]
+    fn a_live_tracker_refuses_a_restarted_list_below_where_it_began_as_the_vod_one_does() {
+        let names: Vec<String> = (100..110).map(|n| format!("{n:05}.ts")).collect();
+        let first: Vec<&str> = names.iter().map(String::as_str).collect();
+        for (kind, mut tracker) in [("live", MediaTracker::live()), ("vod", MediaTracker::default())] {
+            tracker.apply(&media("/session/index.m3u8", 100, &first, false)).unwrap();
+            let restarted = media("/session/index.m3u8", 0, &["00000.ts", "00001.ts"], false);
+            assert_eq!(tracker.apply(&restarted), Err(Error::UnknownOldSegment(0)), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_live_tracker_still_rejects_a_changed_segment_a_new_source_and_growth_after_end() {
+        let mut live = MediaTracker::live();
+        live.apply(&media("/session/index.m3u8", 10, &["00010.ts", "00011.ts"], false)).unwrap();
+        assert_eq!(
+            live.apply(&media("/session/index.m3u8", 11, &["changed.ts", "00012.ts"], false)),
+            Err(Error::SegmentChanged(11))
+        );
+        assert_eq!(
+            live.apply(&media("/other/index.m3u8", 12, &["00012.ts"], false)),
+            Err(Error::RefreshSourceChanged)
+        );
+        assert!(live.apply(&media("/session/index.m3u8", 11, &["00011.ts", "00012.ts"], true)).unwrap().end_list);
+        assert_eq!(
+            live.apply(&media("/session/index.m3u8", 12, &["00012.ts", "00013.ts"], true)),
+            Err(Error::SegmentAfterEndList(13))
+        );
     }
 
     #[test]

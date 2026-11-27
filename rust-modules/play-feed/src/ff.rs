@@ -5430,7 +5430,7 @@ pub fn hls_cursor_open(
             declared_bps: 0,
             auth,
             media: master_landed,
-            tracker: crate::hls::MediaTracker::default(),
+            tracker: crate::hls::MediaTracker::live(),
             pending: std::collections::VecDeque::new(),
             ended: false,
             target_duration_secs: 1,
@@ -5454,7 +5454,12 @@ pub fn hls_cursor_open(
         declared_bps: master.variant.bandwidth,
         auth,
         media: master.variant.resource,
-        tracker: crate::hls::MediaTracker::default(),
+        // A live session's conversion has no end either: its tracker's memory is bounded too.
+        tracker: if is_live_session_source(path) {
+            crate::hls::MediaTracker::live()
+        } else {
+            crate::hls::MediaTracker::default()
+        },
         pending: std::collections::VecDeque::new(),
         ended: false,
         target_duration_secs: 1,
