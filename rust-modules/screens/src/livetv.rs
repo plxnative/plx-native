@@ -314,10 +314,6 @@ impl Mode {
     }
 }
 
-/// **Where a Guide cell's words come from**: the channel's airing now, or one of its later programmes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CellSrc { Now, Later(usize) }
-
 /// **Where the Guide's window stands**: on the live half hour (it follows the clock as the half hour rolls over) or held
 /// `Ahead` of it at the half hour the reader scrolled to. It is the one state a shift changes, and the window's start
 /// follows from it and the clock alone: a held window never lies at or before the live one (the live window catching up to
@@ -362,40 +358,37 @@ impl Window {
 }
 
 /// **The Guide's board and what its cells are**: the [`Window`] it is laid over, the [`TimeGrid`] (one row a lineup
-/// channel, in the lineup's order, so a row is a channel's index) and, per row, the source of each of its cells. A row
-/// with no cell is a channel the guide has nothing for in the window (the grid's one unscheduled cell).
+/// channel, in the lineup's order, so a row is a channel's index) and, per row, the programme of each of its cells (its
+/// place in the channel's [`Airings`](plx_data::livetv::Airings)). A row with no cell is a channel the guide has nothing
+/// for in the window (the grid's one unscheduled cell).
 #[derive(Debug, PartialEq)]
 struct Board {
     window: Window,
     grid: TimeGrid,
-    cells: Vec<Vec<CellSrc>>,
+    cells: Vec<Vec<usize>>,
     /// The clock's instant at the frame this board was last synced at: what an unscheduled row's neighbour is
     /// entered by (the programme on now), which a move reads without a frame to ask.
     now: i64,
 }
 
 impl Board {
-    /// The board for `channels` over `window`, which starts at `start`, on page `page` (clamped): each channel's
-    /// airing now and its later programmes that stand in the window, in time order.
+    /// The board for `channels` over `window`, which starts at `start`, on page `page` (clamped): every programme of
+    /// each channel's guide row that stands in the window, in time order: one that has aired is a cell like any other
+    /// (the grid shades its aired part, which is all of it), and the grid clips what the window cuts.
     fn build(channels: &[Channel], window: Window, start: i64, now: i64, page: usize) -> Self {
         let axis = Axis::new(start, WINDOW_SECONDS, WINDOW_STEP_SECONDS);
-        fn push(axis: Axis, span: Span, src: CellSrc, spans: &mut Vec<Span>, cells: &mut Vec<CellSrc>) {
-            if axis.cell(span).is_some() {
-                spans.push(span);
-                cells.push(src);
-            }
-        }
         let (mut rows, mut cells) = (Vec::with_capacity(channels.len()), Vec::with_capacity(channels.len()));
         for channel in channels {
-            let (mut spans, mut srcs) = (Vec::new(), Vec::new());
-            if !channel.now.is_empty() {
-                push(axis, Span::new(channel.begins_at, channel.ends_at), CellSrc::Now, &mut spans, &mut srcs);
-            }
-            for (i, later) in channel.later.iter().enumerate() {
-                push(axis, Span::new(later.begins_at, later.ends_at), CellSrc::Later(i), &mut spans, &mut srcs);
+            let (mut spans, mut airings) = (Vec::new(), Vec::new());
+            for (i, airing) in channel.airings.all().iter().enumerate() {
+                let span = Span::new(airing.begins_at, airing.ends_at);
+                if axis.cell(span).is_some() {
+                    spans.push(span);
+                    airings.push(i);
+                }
             }
             rows.push(spans);
-            cells.push(srcs);
+            cells.push(airings);
         }
         Self { window, grid: TimeGrid::new(axis, rows, GUIDE_FIRST_ELEM).at_page(page), cells, now }
     }
@@ -406,26 +399,26 @@ impl Board {
     /// lands waits for it.
     fn has_more(&self, channels: &[Channel]) -> bool {
         let end = self.grid.axis().end();
-        channels.iter().any(|c| (!c.now.is_empty() && c.ends_at > end) || c.later.iter().any(|later| later.ends_at > end))
+        channels.iter().any(|c| c.airings.all().iter().any(|airing| airing.ends_at > end))
     }
 
     /// The cell's words: its programme's title, or the channel's name for the unscheduled cell.
     fn title<'a>(&self, channels: &'a [Channel], at: Cell) -> &'a str {
         let Some(channel) = channels.get(at.row) else { return "" };
         match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
-            Some(CellSrc::Now) => &channel.now,
-            Some(CellSrc::Later(i)) => channel.later.get(*i).map_or("", |later| later.title.as_str()),
+            Some(i) => channel.airings.all().get(*i).map_or("", |airing| airing.title.as_str()),
             None => &channel.name,
         }
     }
 
-    /// Does pressing the cell tune the channel? What is airing does, and so does the unscheduled cell; a later
-    /// programme does not. "Airing" is the wall time's, not the read's: a programme that has begun since the read is on.
+    /// Does pressing the cell tune the channel? What is airing does, and so does the unscheduled cell; a programme
+    /// that has not begun does not, and neither does one that has aired (the press is spent: there is nothing of it to
+    /// tune). "Airing" is the wall time's, not the read's: a programme that has begun since the read is on, and one that
+    /// has ended since is over, whichever of the guide row it stands in.
     fn tunes(&self, at: Cell, now: i64) -> bool {
         match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
             None => self.grid.is_unscheduled(at.row),
-            Some(CellSrc::Now) => true,
-            Some(CellSrc::Later(_)) => self.grid.span(at).is_some_and(|span| span.contains(now)),
+            Some(_) => self.grid.span(at).is_some_and(|span| span.contains(now)),
         }
     }
 }
@@ -566,7 +559,7 @@ impl Page {
         self.recent = view.recent.iter().filter_map(|r| lineup_index(view.channels, r)).collect();
         // Every channel stays reachable: one with no programme on that is not in Recent has no tile above, so
         // it is in the Channels shelf.
-        self.rest = (0..view.channels.len()).filter(|i| view.channels[*i].now.is_empty() && !self.recent.contains(i)).collect();
+        self.rest = (0..view.channels.len()).filter(|i| view.channels[*i].airings.on_air().is_none() && !self.recent.contains(i)).collect();
         // a rebuilt board keeps the page the reader was on
         let page = self.board().map_or(0, |board| board.grid.page());
         self.mode = match view.status {
@@ -654,7 +647,7 @@ impl Page {
         let Some(wall) = wall else { return 0 };
         self.recent.iter().chain(&self.airings).filter_map(|&i| view.channels.get(i))
             .fold(0xcbf2_9ce4_8422_2325_u64, |acc, c| {
-                (acc ^ fmt::phase(c.begins_at, c.ends_at, wall.unix_s()).stamp()).wrapping_mul(0x0100_0000_01b3)
+                (acc ^ fmt::phase(c.airings.begins_at(), c.airings.ends_at(), wall.unix_s()).stamp()).wrapping_mul(0x0100_0000_01b3)
             })
     }
 
@@ -769,8 +762,8 @@ impl Page {
 /// On now's one order, as indexes into `channels` (the lineup, in number order): the channels with a
 /// programme, the most recent start first; a tie keeps the lineup's order (the sort is stable).
 fn on_now_order(channels: &[Channel]) -> Vec<usize> {
-    let mut order: Vec<usize> = channels.iter().enumerate().filter_map(|(i, c)| (!c.now.is_empty()).then_some(i)).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(channels[i].begins_at));
+    let mut order: Vec<usize> = channels.iter().enumerate().filter_map(|(i, c)| c.airings.on_air().is_some().then_some(i)).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(channels[i].airings.begins_at()));
     order
 }
 
@@ -803,10 +796,11 @@ impl Cards<'_> {
     /// in progress) is the airing's phase.
     fn resume(&self, channel: &Channel) -> Option<Resume> {
         let w = self.wall?;
-        if !matches!(fmt::phase(channel.begins_at, channel.ends_at, w.unix_s()), AiringPhase::JustStarted { .. } | AiringPhase::Running { .. }) {
+        let (begins_at, ends_at) = (channel.airings.begins_at(), channel.airings.ends_at());
+        if !matches!(fmt::phase(begins_at, ends_at, w.unix_s()), AiringPhase::JustStarted { .. } | AiringPhase::Running { .. }) {
             return None;
         }
-        Some(Resume { frac: fmt::frac(channel.begins_at, channel.ends_at, w)?, left_ms: (channel.ends_at - w.unix_s()).max(0) * 1_000 })
+        Some(Resume { frac: fmt::frac(begins_at, ends_at, w)?, left_ms: (ends_at - w.unix_s()).max(0) * 1_000 })
     }
     /// The low bit of a card's element id: the plates (Recent's and the Channels shelf's, no channel is in both)
     /// are even, On now's posters odd.
@@ -829,9 +823,9 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
         Art::Poster(self.view.tiles.get(index).map(|tile| {
             let mut facts = tile_facts::of(tile);
             facts.owner = channel as *const _ as usize;
-            facts.title = &channel.now;
+            facts.title = channel.airings.now_title();
             facts.show_title = "";
-            facts.thumb = &channel.now_thumb;
+            facts.thumb = channel.airings.now_thumb();
             facts.still = "";
             facts.art = "";
             facts.resume = self.resume(channel);
@@ -849,11 +843,12 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
         match self.row {
             // "On now: <programme>" over when it started and how long is left; a channel with no
             // programme (every Channels plate) is its name alone.
-            Row::Plates if channel.now.is_empty() => captions::live_label(channel.name.clone(), None),
-            Row::Plates => captions::live_label(msg::browse_livetv_recent_on_now(&channel.now),
-                self.wall.and_then(|w| fmt::airing_line(Airing::Tile, channel.begins_at, channel.ends_at, w))),
+            Row::Plates if channel.airings.on_air().is_none() => captions::live_label(channel.name.clone(), None),
+            Row::Plates => captions::live_label(msg::browse_livetv_recent_on_now(channel.airings.now_title()),
+                self.wall.and_then(|w| fmt::airing_line(Airing::Tile, channel.airings.begins_at(), channel.airings.ends_at(), w))),
             // The programme over its channel, number first ("Ch 2009 · Station · 42m left").
-            Row::Now => airing_caption(channel.now.clone(), channel, self.wall.and_then(|w| fmt::left(channel.begins_at, channel.ends_at, w))),
+            Row::Now => airing_caption(channel.airings.now_title().to_owned(), channel,
+                self.wall.and_then(|w| fmt::left(channel.airings.begins_at(), channel.airings.ends_at(), w))),
         }
     }
 
@@ -874,10 +869,7 @@ impl BrowseCards<'_> {
     }
     /// The programme's words and art: its title and its thumb.
     fn programme<'c>(channel: &'c Channel, pick: Pick) -> (&'c str, &'c str) {
-        match pick.src {
-            CellSrc::Now => (&channel.now, &channel.now_thumb),
-            CellSrc::Later(n) => channel.later.get(n).map_or(("", ""), |later| (later.title.as_str(), later.thumb.as_str())),
-        }
+        channel.airings.all().get(pick.airing).map_or(("", ""), |airing| (airing.title.as_str(), airing.thumb.as_str()))
     }
     /// The amber bar: how much has aired, while the guide knows both ends and the programme is on.
     fn resume(&self, pick: Pick) -> Option<Resume> {
@@ -898,10 +890,7 @@ impl<H: LiveTvLike> CardSource<H> for BrowseCards<'_> {
             let (title, thumb) = Self::programme(channel, pick);
             let mut facts = tile_facts::of(tile);
             // a programme's own identity: its address stands for it as the channel's stood for the airing on now
-            facts.owner = match pick.src {
-                CellSrc::Now => channel as *const _ as usize,
-                CellSrc::Later(n) => &channel.later[n] as *const _ as usize,
-            };
+            facts.owner = &channel.airings.all()[pick.airing] as *const _ as usize;
             facts.title = title;
             facts.show_title = "";
             facts.thumb = thumb;
@@ -1263,7 +1252,7 @@ impl LiveTvScreen {
         let index = elem.checked_sub(FIRST_CARD_ELEM)? as usize / 2;
         let view = H::livetv(cx);
         let channel = view.channels.get(index)?;
-        if elem % 2 == 1 && channel.now.is_empty() { return None; }
+        if elem % 2 == 1 && channel.airings.on_air().is_none() { return None; }
         Some(Self::play(channel))
     }
 
@@ -1446,7 +1435,14 @@ impl LiveTvScreen {
         // first. That row's page is the one showing when focus lands.
         if let Some(board) = self.page.board() {
             let row = board.cells.get(index)?;
-            let at = Cell { row: index, index: row.iter().position(|src| *src == CellSrc::Now).unwrap_or(0) };
+            let on = H::livetv(cx).channels[index].airings.on_air_at();
+            // no cell of what was airing in this window (a window held ahead of it, or a gap in the guide): the cell the
+            // board lands on for a row it has no place in ([`TimeGrid::land`]), never merely the row's first, which may
+            // be a programme that has aired
+            let at = match on.and_then(|on| row.iter().position(|i| *i == on)) {
+                Some(index_in_row) => Cell { row: index, index: index_in_row },
+                None => board.grid.land(index, None, board.now)?,
+            };
             let elem = board.grid.elem(at)?;
             self.page.follow(elem);
             return Some(elem);
