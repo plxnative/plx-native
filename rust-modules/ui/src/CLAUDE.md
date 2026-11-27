@@ -701,10 +701,11 @@ tried first. None of it is reconstructable from the code without repeating the m
   opened mid-tune.
   Every other `panel_ground` user — the alerts, About, Track information, the person bio, the
   decision alert — keeps the pre-DS6 ground, the latched underlay field under the frost (the
-  Also-available sheet and the failure screen's pickers are `menu::Host::Sheet`s, which stand on it).
+  Also-available sheet is a `menu::Host::Sheet`, which stands on it; the failure screen's picker is a
+  `menu::Host::Video`: flat over the player, never on this ground).
   The choice is explicit at each call, `widgets::Ground::Menu` or `Ground::Sheet` (`panel_ground`'s
   last argument, `Popover::panel`'s too), and for a Detail host it is `ui::menu`'s, derived from the
-  host (`Host::surface`); there is no global switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
+  host (`Menu::surface`, one `match` over the `Host`); there is no global switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
   `gfx::draw_glass_frozen`, wearing a gradient face (`FROST_FACE`, `theme::MENU_GLASS_TOP/BOT`,
   .36/.44), the 1 px `theme::GLASS_RIM`, the lit top edge `GLASS_RIM_LIGHT` and `GlassRim::Menu`,
   then a soft shadow cut out around the panel's rounded shape. **It reads no framebuffer** (owner

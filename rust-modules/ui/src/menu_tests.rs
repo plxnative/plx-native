@@ -45,7 +45,7 @@ fn anchor() -> [u32; 4] {
 }
 
 fn grows() -> Host {
-    Host::Grows { pill: pill(), clear_y: None, fill: crate::theme::ACCENT }
+    Host::Grows { pill: pill(), clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill }
 }
 
 /// The root: a Nav row into page One, a plain action, a disabled one.
@@ -257,10 +257,11 @@ fn a_push_whose_page_cannot_be_built_leaves_the_menu_alone() {
 }
 
 #[test]
-fn a_pop_that_cannot_rebuild_the_page_beneath_keeps_the_page_showing() {
+fn a_pop_that_cannot_rebuild_any_page_beneath_keeps_the_page_showing_and_back_closes() {
     let mut m = menu(grows(), Class::Action);
     step(&mut m, Event::Ok(Id::Go.key().0));
-    assert_eq!(m.step(Event::Back, &mut |_| None), Out::Stay);
+    assert_eq!(m.step(Event::Left, &mut |_| None), Out::Stay, "LEFT never closes");
+    assert_eq!(m.step(Event::Back, &mut |_| None), Out::Dismiss, "no depth can be built: the menu has nowhere to stand");
     assert_eq!(m.depth(), 1);
 }
 
@@ -318,7 +319,6 @@ fn every_host_derives_exactly_one_ground_and_glass_never_stands_on_video() {
             Host::Sheet { .. } => Surface::Sheet,
             Host::Video { .. } => Surface::Flat,
         };
-        assert_eq!(host.surface(), want);
         assert_eq!(menu(host, Class::Action).surface(), want, "the menu derives it from its host");
     }
 }
@@ -356,7 +356,7 @@ fn the_width_floor_the_radius_and_the_dim_are_derived() {
 fn one_width_rule_for_every_host() {
     let wide = Rect::new(1200.0, 800.0, 400.0, 60.0);
     let hosts = [
-        Host::Grows { pill: wide, clear_y: None, fill: crate::theme::ACCENT },
+        Host::Grows { pill: wide, clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill },
         Host::BesideGlass { anchor: anchor() },
         Host::Sheet { anchor: anchor() },
         Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU },
@@ -391,21 +391,129 @@ fn rect_of(bits: [u32; 4]) -> Rect {
     Rect::new(x, y, w, h)
 }
 
+/// The depth alone is what the Detail hosts' recorded canon holds; `stack_canon` is the whole of
+/// `PageStack::canon` (the player's popovers'), byte for byte, so a host that moves over from one keeps its pins.
 #[test]
-fn the_stack_canon_is_the_depth_and_nothing_else() {
+fn the_canons_are_the_depth_alone_and_page_stacks_whole_stack_byte_for_byte() {
+    use crate::page_stack::PageStack;
+    use plx_machine::machine::Canon;
     let mut m = menu(grows(), Class::Action);
-    let bytes = |m: &Mn| {
-        let mut c = plx_machine::machine::Canon::default();
-        m.stack_canon(&mut c);
+    let depth = |m: &Mn| {
+        let mut c = Canon::default();
+        m.depth_canon(&mut c);
         c.finish()
     };
-    let mut want = plx_machine::machine::Canon::default();
+    let code = |p: Pg| match p {
+        Pg::One => 7,
+        Pg::Two => 9,
+    };
+    let key = |id: &Id| id.key().0;
+    let whole = |m: &Mn| {
+        let mut c = Canon::default();
+        m.stack_canon(&mut c, code, key);
+        c.finish()
+    };
+    let mut want = Canon::default();
     want.u32(0);
-    assert_eq!(bytes(&m), want.finish());
+    assert_eq!((depth(&m), whole(&m)), (want.finish(), want.finish()), "the root: the depth, no pages");
     step(&mut m, Event::Ok(Id::Go.key().0));
-    let mut want = plx_machine::machine::Canon::default();
-    want.u32(1);
-    assert_eq!(bytes(&m), want.finish());
+    step(&mut m, Event::Ok(Id::Deep.key().0));
+    let mut only_depth = Canon::default();
+    only_depth.u32(2);
+    assert_eq!(depth(&m), only_depth.finish());
+    // the same two pushes on a bare `PageStack`: the openers are Go (on the root) and Deep (on page One)
+    let mut stack: PageStack<Pg, Id> = PageStack::new();
+    stack.push(Pg::One, Id::Go, 0.0);
+    stack.push(Pg::Two, Id::Deep, 0.0);
+    let mut by_stack = Canon::default();
+    stack.canon(&mut by_stack, code, key);
+    assert_eq!(whole(&m), by_stack.finish(), "page codes and opener keys, in order");
+    assert_ne!(whole(&m), depth(&m));
+}
+
+/// **A page that can no longer be built is not stood on.** The pop keeps going down to the first depth that can,
+/// the root last, in one slide; BACK closes the menu when no depth can (the root's rows need the host's session).
+#[test]
+fn a_pop_keeps_going_down_to_a_buildable_page_and_back_closes_when_none_is() {
+    let mut m = menu(grows(), Class::Action);
+    step(&mut m, Event::Ok(Id::Go.key().0));
+    step(&mut m, Event::Ok(Id::Deep.key().0));
+    settle(&mut m);
+    assert_eq!((m.top(), m.depth()), (Some(Pg::Two), 2));
+    // page One (the one beneath) is gone: BACK lands on the root, not on nothing
+    let mut no_one = |p: Option<Pg>| match p {
+        Some(Pg::One) => None,
+        other => builder(false)(other),
+    };
+    assert_eq!(m.step(Event::Back, &mut no_one), Out::Moved);
+    assert_eq!((m.top(), m.depth(), m.header()), (None, 0, None), "down to the root in one pop");
+    assert_eq!(m.state().motion, Motion::Sliding, "one slide");
+    assert_eq!(at(&m), Some(Id::Go.key().0), "focus is on the row that opened the first page");
+    // nothing can be built: BACK has nowhere to stand and closes; the stack is left as it was
+    settle(&mut m);
+    step(&mut m, Event::Ok(Id::Go.key().0));
+    step(&mut m, Event::Ok(Id::Deep.key().0));
+    let mut nothing = |_: Option<Pg>| -> Option<Pgs> { None };
+    assert_eq!(m.step(Event::Back, &mut nothing), Out::Dismiss);
+    assert_eq!(m.depth(), 2, "nothing was popped");
+    assert_eq!(m.step(Event::Left, &mut nothing), Out::Stay, "LEFT is never a close");
+    assert_eq!(m.step(Event::PopTo(0), &mut nothing), Out::Stay);
+}
+
+/// A video host keeps the side of its opener the placer chose, so the card rises from it (a card hung above its
+/// opener rises from below), and every page after the first is laid out by the same rule.
+#[test]
+fn a_video_host_keeps_the_placed_side_for_its_rise() {
+    use crate::popover::{Placement, Side};
+    for (anchor, side) in [
+        ([100.0f32, 80.0, 200.0, 60.0], Side::Below),
+        ([100.0f32, 900.0, 200.0, 60.0], Side::Above),
+    ] {
+        let host = Host::Video { anchor: anchor.map(f32::to_bits), placement: Placement::UNDER_OR_ABOVE_FIT };
+        let m = menu(host, Class::Picker);
+        let rect = m.panel_rect(&M);
+        assert_eq!(m.core_side(), Some(side), "{anchor:?}");
+        let opener = Rect::new(anchor[0], anchor[1], anchor[2], anchor[3]);
+        match side {
+            Side::Below => assert!(rect.y >= opener.y + opener.h, "below the opener: {rect:?}"),
+            _ => assert!(rect.y + rect.h <= opener.y, "above the opener: {rect:?}"),
+        }
+    }
+}
+
+/// The failure screen's picker is the video host's: flat, the player's width floor and its dim, placed under or above
+/// its opener by the fit rule. Not a variant of its own (there is one video host).
+#[test]
+fn a_video_host_under_or_above_fit_is_the_sheets_placement_on_a_flat_card() {
+    use crate::popover::Placement;
+    let a = anchor();
+    let sheet = menu(Host::Sheet { anchor: a }, Class::Picker);
+    let video = menu(Host::Video { anchor: a, placement: Placement::UNDER_OR_ABOVE_FIT }, Class::Picker);
+    assert_eq!(video.surface(), Surface::Flat);
+    assert_eq!(video.form().table.min_panel_w, crate::theme::layout::PLAYER_MENU_MIN_W);
+    let (r_video, r_sheet) = (video.panel_rect(&M), sheet.panel_rect(&M));
+    assert_eq!((r_video.x, r_video.y), (r_sheet.x, r_sheet.y), "the same side and the same edge");
+    let scrim = video.scrim();
+    assert_eq!(scrim.alpha, crate::theme::underlay::DIM_SHEET);
+    assert_eq!(scrim.source, crate::screen::UnderlaySource::Flat, "the neutral ink: no artwork cast on the picture");
+}
+
+/// A growing glass with no pill to start from (the profile chip: its rect is read again every frame) opens by the
+/// fade-and-scale entrance, and follows the control from then on.
+#[test]
+fn a_pill_less_morph_opens_from_nothing_and_follows_the_opener() {
+    let fade = Host::Grows { pill: pill(), clear_y: None, fill: None, morph: Morph::Fade };
+    let mut m = menu(fade, Class::Action);
+    step(&mut m, Event::Opening);
+    assert_eq!(m.glass_opener(), None, "the morph has no rect to grow from");
+    let moved = Rect::new(1180.0, 700.0, 120.0, 60.0);
+    m.track_opener(moved);
+    assert_eq!(m.glass_opener(), Some(moved), "from here the control's drawn rect");
+    let r = m.panel_rect(&M);
+    assert_eq!((r.y, r.x + r.w), (moved.y, moved.x + moved.w), "and the panel is laid over it: top edges flush, hung from the near edge");
+    let mut from_pill = menu(grows(), Class::Action);
+    step(&mut from_pill, Event::Opening);
+    assert_eq!(from_pill.glass_opener(), Some(pill()), "a hero control's morph starts on its pill");
 }
 
 /// Text prewarm happens on EVERY page: a push and a pop each queue the strings of the page they show,

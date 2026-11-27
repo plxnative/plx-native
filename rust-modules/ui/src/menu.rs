@@ -1,9 +1,10 @@
 //! **`plx_ui::menu` — the one menu component**: the glass (or sheet, or flat card) a table of rows stands
 //! in, the stack of pages pushed into it, and the motion between them, as ONE machine the hosts
 //! (`screens::item_menu`, `versions_panel`, `preplay_panel`, `alt_sources`) take whole. It grew out of
-//! [`crate::page_stack`] (the push, the pop and the shared focus-stop functions live there still, for
-//! the menus that have not moved over) and replaces what every host wrote for itself: the push and
-//! the pop, BACK, the ground, the stop registration, the size class, the radius and the sizing.
+//! [`crate::page_stack`] and stands on the same pieces the player's popovers do ([`PageStack`], the
+//! focus-stop functions and [`page_stack::register_stops`], the ONE stop registration), and replaces what
+//! every host wrote for itself: the push and the pop, BACK, the ground, the stop registration, the size
+//! class, the radius, the sizing, and the glue between a screen's events and the machine ([`Menu::on_screen`]).
 //!
 //! `ui` may use only `base`, `machine`, `os` and `gfx` (`ci/module-layers.ini`), so the component takes
 //! FORMS and VALUES: a host builds its rows from its own data ([`Page`]), the menu never sees a
@@ -28,7 +29,7 @@
 //! | `Ok(key)` on no row | `Dismiss` | `Dismiss` |
 //! | `Ok(TITLE_KEY)` (a click on the header) | `Stay` | pop |
 //! | `Right(key)` | `Stay` unless the row is Nav, then push | same |
-//! | `Back` | `Dismiss` | pop |
+//! | `Back` | `Dismiss` | pop; `Dismiss` when no page beneath can be built (the root's rows need the host) |
 //! | `Left` | `Stay` | pop |
 //! | `PopTo(depth)` | `Stay` | pop to `depth` in one slide |
 //! | `ReplaceRoot { slide }` | rebuild the root | clear the stack, rebuild the root |
@@ -40,7 +41,16 @@
 //! LEFT pops and RIGHT enters a Nav row, as in the player's menus; BACK at the root is the only key
 //! that closes the menu from inside. Each transition takes a `build(Option<P>) -> Option<Page>`
 //! closure: `None` asks for the root, and the answer is `None` when that page can no longer be built
-//! (the root's rows need the host's session, which the component never holds).
+//! (the root's rows need the host's session, which the component never holds). A pop whose page beneath
+//! cannot be built keeps going down to the first depth that can, the root last.
+//!
+//! # The host's side
+//!
+//! A host implements [`HasMenu`], takes the six `Screen` methods the menu owns (the dim, the prewarm, the
+//! pointer hold, the draw, the morph's hand-over) from [`menu_screen_methods!`], and answers its `Machine::step`
+//! with [`Menu::on_screen`]: Mount, Closing, Tick, FocusMoved, Activate, PressCommit and the keys all become an
+//! [`Event`] in ONE place, with the answer ([`Glued`]) for the host to perform. What stays the host's is what
+//! only it knows: its rows ([`Page`]), and what a pick or a dismissal does.
 //!
 //! # Derived, never stored
 //!
@@ -55,7 +65,10 @@
 //! * a per-page size class: the class is a constructor argument of the menu, a [`Page`] has none, and
 //!   a page pushed into an action menu takes the menu's;
 //! * glass on video: [`Host::Video`] is the one host over the video plane and its surface is flat, in the
-//!   match that derives it (`docs/liquid-glass.md` §7).
+//!   match that derives it (`docs/liquid-glass.md` §7). It carries its placement ([`Placement`]), so the
+//!   player's menus ([`Placement::PLAYER_MENU`]), when they move onto this, and the failure screen's picker
+//!   ([`Placement::UNDER_OR_ABOVE_FIT`]) are one host, one width floor and one dim. Today the failure screen's
+//!   Audio & Subtitles picker is the one that stands on it.
 //!
 //! # Size
 //!
@@ -63,14 +76,16 @@
 //! [`Menu`] adds the forms and the stack, generic over the host's row id, action and page.
 use crate::form::{Activation, Form, FormTable};
 use crate::geom::IndexElem;
-use crate::page_stack::{leave_page, popover_groups, PageStack, PopoverPanel, TITLE_KEY};
+use crate::page_stack::{self, leave_page, popover_groups, PageStack, PopoverPanel, TITLE_KEY};
 use crate::panel_motion::PanelMotion;
 use crate::popover::{self, Placement, Popover};
-use crate::screen::{Activate, DrawFrame, GroupSpec, Hover, Scrim, Stop};
+use crate::screen::{Activate, DrawFrame, GroupSpec, Scrim};
 use crate::table::{TableView, MENU_MAX_W, MENU_MIN_W};
 use crate::widgets::{panel_ground, Ground};
 use crate::{theme, Rect};
-use plx_machine::machine::{Edge, EntryId, FocusKey, GroupId, Host as MachineHost, InputKind, Key, Measure};
+use plx_machine::machine::{
+    Cx, Edge, Effects, EntryId, FocusKey, GroupId, Handled, Host as MachineHost, InputKind, Key, Measure, ScreenEvent,
+};
 
 /// The ONE corner radius of a menu, whatever its host or class (it was 28, 24, 20 and a per-screen
 /// constant; the Detail hosts all stood on 20, which is the value the Library's menus already have).
@@ -113,17 +128,31 @@ pub enum Host {
     /// **Grows out of its control** (a hero control, a header pill): the glass is the control's own,
     /// morphing from `pill` and back into it (`Popover::morphing` + `open_from`), laid OVER it
     /// ([`popover::cover_opener`]; clear of `clear_y` when the panel fits below it). `Ground::Menu`.
-    /// `fill` is the control's focused face, which the close's blob whitens toward.
-    Grows { pill: Rect, clear_y: Option<f32>, fill: [f32; 4] },
+    /// `fill` is the control's focused face, which the close's blob whitens toward (`None`: the control
+    /// is itself glass, as the profile chip is). `morph` says where the morph starts ([`Morph`]).
+    Grows { pill: Rect, clear_y: Option<f32>, fill: Option<[f32; 4]>, morph: Morph },
     /// **Glass beside a card** (the tile's hold menu): fades in beside `anchor`, the card whole above
     /// the dim. `Ground::Menu`.
     BesideGlass { anchor: [u32; 4] },
-    /// **A sheet hung under or above its opener** (Also available, the failure screen's pickers): fades
-    /// and rises in, on the latched field. `Ground::Sheet`, never glass.
+    /// **A sheet hung under or above its opener** (Also available; a Detail page's Select Version or Audio &
+    /// Subtitles with no control to grow from): fades and rises in, on the latched field. `Ground::Sheet`,
+    /// never glass.
     Sheet { anchor: [u32; 4] },
-    /// **A card over the video plane** (the player's menus): flat, rising in, placed by `placement`.
-    /// The player stays flat over video (`docs/liquid-glass.md` §7).
+    /// **A card over the video plane** (the playback failure screen's Audio & Subtitles picker today; the player's menus
+    /// move onto it later): flat,
+    /// rising in from the side of its opener it took, placed by `placement`. The player stays flat over video
+    /// (`docs/liquid-glass.md` §7), with the player's width floor and the neutral dim that casts no artwork.
     Video { anchor: [u32; 4], placement: Placement },
+}
+
+/// **Where a growing glass starts its morph.** `FromPill` is the rect the host stood on when it opened
+/// (a hero control: it never moves while the menu is up); `Fade` is `Popover::open_from(None)`, the
+/// fade-and-scale entrance, for a control whose rect is read again every frame ([`Menu::track_opener`]:
+/// the profile chip rides the bar's tuck), so the morph starts and ends on where the control IS drawn.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Morph {
+    FromPill,
+    Fade,
 }
 
 /// What a menu stands on, derived from its [`Host`] by one `match`.
@@ -138,12 +167,14 @@ pub enum Surface {
 }
 
 impl Host {
-    /// The surface this host stands on.
-    pub const fn surface(&self) -> Surface {
+    /// **Where a growing host's panel of `size` stands**: OVER its pill ([`popover::cover_opener`]), clear of
+    /// `clear_y` when it fits below it ([`popover::cover_opener_clear`]). The one rule [`MenuCore`] lays a
+    /// [`Host::Grows`] out by, public so a host's own rule (the Detail hero's) is tested on the production
+    /// path and not on a copy. `None` for a host that does not grow.
+    pub fn grown(&self, size: (f32, f32)) -> Option<Rect> {
         match self {
-            Host::Grows { .. } | Host::BesideGlass { .. } => Surface::Glass,
-            Host::Sheet { .. } => Surface::Sheet,
-            Host::Video { .. } => Surface::Flat,
+            Host::Grows { pill, clear_y, .. } => Some(grow_over(*pill, *clear_y, size)),
+            _ => None,
         }
     }
 
@@ -274,6 +305,13 @@ pub fn keyed<K, Id>(kind: &InputKind<K>, focus: Option<u32>) -> Keyed<Id> {
     }
 }
 
+/// **The page builder of a menu with one page** (the version list, Also available): its root is installed by
+/// [`Event::ReplaceRoot`] / [`Event::Refresh`] from the host's own closure, and no push or pop ever asks for another
+/// (no row is a Nav row, and `P` is [`std::convert::Infallible`]), so every other step passes this.
+pub fn no_pages<Id, A>(_: Option<std::convert::Infallible>) -> Option<Page<Id, A, std::convert::Infallible>> {
+    None
+}
+
 /// What a step asks of the host.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Out<A> {
@@ -296,29 +334,47 @@ pub struct MenuCore {
     motion: PanelMotion,
 }
 
+/// `size` over `pill`, clear of `clear_y` when there is one.
+fn grow_over(pill: Rect, clear_y: Option<f32>, size: (f32, f32)) -> Rect {
+    match clear_y {
+        Some(y) => popover::cover_opener_clear(pill, size, crate::consts::SAFE, y),
+        None => popover::cover_opener(pill, size, crate::consts::SAFE),
+    }
+}
+
 /// A [`Host`] and the state that belongs to it alone: the glass of a [`Host::Grows`] is owned by that
 /// variant, so a morph without a popover cannot be built.
 enum Mount {
-    Grows { pill: Rect, clear_y: Option<f32>, glass: Popover },
+    Grows { pill: Rect, clear_y: Option<f32>, morph: Morph, glass: Popover },
     BesideGlass { anchor: [u32; 4] },
     Sheet { anchor: [u32; 4] },
-    Video { anchor: [u32; 4], placement: Placement },
+    /// `side` is the side of the anchor the layout chose, kept for the rise: a card hung above its opener
+    /// rises from it, and the entrance reads the side the placer took.
+    Video { anchor: [u32; 4], placement: Placement, side: std::cell::Cell<popover::Side> },
 }
 
 impl MenuCore {
     fn new(host: Host, class: Class) -> Self {
         let motion = if host.springs_all_edges() { PanelMotion::new().spring_all_edges() } else { PanelMotion::new() };
         let mount = match host {
-            Host::Grows { pill, clear_y, fill } => {
-                Mount::Grows { pill, clear_y, glass: Popover::new().morphing().opener_fill(fill) }
+            Host::Grows { pill, clear_y, fill, morph } => {
+                let glass = Popover::new().morphing();
+                let glass = match fill {
+                    Some(fill) => glass.opener_fill(fill),
+                    None => glass,
+                };
+                Mount::Grows { pill, clear_y, morph, glass }
             }
             Host::BesideGlass { anchor } => Mount::BesideGlass { anchor },
             Host::Sheet { anchor } => Mount::Sheet { anchor },
-            Host::Video { anchor, placement } => Mount::Video { anchor, placement },
+            Host::Video { anchor, placement } => Mount::Video { anchor, placement, side: std::cell::Cell::new(popover::Side::Above) },
         };
         Self { mount, class, motion }
     }
 
+    /// **What the menu stands on: the ONE derivation**, by an exhaustive `match` on the mount (a fifth host
+    /// does not compile until it says), read by [`Menu::surface`] and by the draw, which paints exactly the
+    /// ground this names.
     fn surface(&self) -> Surface {
         match self.mount {
             Mount::Grows { .. } | Mount::BesideGlass { .. } => Surface::Glass,
@@ -349,17 +405,15 @@ impl MenuCore {
         let h = table.measured_height();
         match &self.mount {
             Mount::Grows { pill, clear_y, .. } => {
-                let size = (table.menu_panel_width_from(measure, *pill), h.clamp(120.0, crate::consts::SAFE.h));
-                match clear_y {
-                    Some(y) => popover::cover_opener_clear(*pill, size, crate::consts::SAFE, *y),
-                    None => popover::cover_opener(*pill, size, crate::consts::SAFE),
-                }
+                grow_over(*pill, *clear_y, (table.menu_panel_width_from(measure, *pill), h.clamp(120.0, crate::consts::SAFE.h)))
             }
             Mount::BesideGlass { anchor } => beside(rect_of(*anchor), table.menu_panel_width(measure), h),
             Mount::Sheet { anchor } => popover::under_or_above_fit(rect_of(*anchor), table.menu_panel_width(measure), h),
-            Mount::Video { anchor, placement } => {
+            Mount::Video { anchor, placement, side } => {
                 let h = h.clamp(120.0, crate::consts::SCR_H - 2.0 * popover::PANEL_EDGE);
-                popover::anchor_panel(rect_of(*anchor), (table.menu_panel_width(measure), h), h, popover::PANEL_GAP, *placement).rect
+                let placed = popover::anchor_panel(rect_of(*anchor), (table.menu_panel_width(measure), h), h, popover::PANEL_GAP, *placement);
+                side.set(placed.side);
+                placed.rect
             }
         }
     }
@@ -404,76 +458,56 @@ impl MenuCore {
         let natural = self.natural(table, f.measure);
         let shown = self.motion.shown(natural);
         let appear = f.page_alpha;
-        let rise = |p: crate::Painter| p.alpha(appear).translate(0.0, Popover::RISE * (1.0 - appear));
+        // What the card stands on is the surface's alone (`Self::surface`): glass and sheet name their ground, flat
+        // paints none (the video plane is behind it).
+        let ground = match self.surface() {
+            Surface::Glass => Some(Ground::Menu),
+            Surface::Sheet => Some(Ground::Sheet),
+            Surface::Flat => None,
+        };
         match &self.mount {
             // The glass and the rows ride the MORPH (`Popover::panel` / `morph_rows`), not the container's
             // appear: the panel begins and ends as the control it grows from.
             Mount::Grows { glass, .. } => {
                 let m = glass.content_painter_on(f.painter.alpha(f.nav_page_alpha), 0.0);
-                glass.panel(m, shown, RADIUS, f.underlay, Ground::Menu);
+                if let Some(ground) = ground {
+                    glass.panel(m, shown, RADIUS, f.underlay, ground);
+                }
                 glass.morph_rows(m, shown, RADIUS, |m| self.motion.draw_rows(m, natural, table, f.measure));
             }
-            Mount::BesideGlass { .. } => {
-                let p = f.painter.alpha(appear);
-                panel_ground(p, shown, RADIUS, f.underlay, Ground::Menu);
-                self.motion.draw_rows(p, natural, table, f.measure);
-            }
-            Mount::Sheet { .. } => {
-                let p = rise(f.painter);
-                panel_ground(p, shown, RADIUS, f.underlay, Ground::Sheet);
-                self.motion.draw_rows(p, natural, table, f.measure);
-            }
-            Mount::Video { .. } => self.motion.draw(rise(f.painter), natural, RADIUS, table, f.measure),
-        }
-        self.stops(f, entry, natural, shown, table, key_at);
-    }
-
-    /// Every selectable row's stop (a hover parks, a click activates) and the header's pointer-only stop
-    /// (no hover focus, never in the D-pad column; a click pops). Only the ACTIVE page registers, where it
-    /// is drawn this frame: the slide's x offset, the animated card as the clip.
-    fn stops<H: MachineHost>(
-        &self,
-        f: &mut DrawFrame<'_, '_, H>,
-        entry: EntryId,
-        natural: Rect,
-        shown: Rect,
-        table: &TableView,
-        key_at: &dyn Fn(usize) -> Option<u32>,
-    ) where
-        H::Elem: IndexElem,
-    {
-        let p = f.painter.alpha(f.page_alpha);
-        let dx = self.motion.live_dx();
-        let moved = |r: Rect| Rect::new(r.x + dx, r.y, r.w, r.h);
-        for i in 0..table.n_rows() {
-            let Some(key) = key_at(i as usize) else { continue };
-            if let Some(row) = table.row_frame(natural, i) {
-                f.stop(
-                    p,
-                    Stop {
-                        key: FocusKey { entry, elem: H::Elem::of_index(key) },
-                        rect: moved(row),
-                        rest_rect: row,
-                        clip: shown,
-                        hover: Hover::Focus,
-                        activate: Activate::Immediate,
-                    },
-                );
+            mount => {
+                // beside a card the glass fades in where it stands; every other card rises into place, from the
+                // side of its opener it hangs on (a card over the opener's side the placer chose)
+                let p = match mount {
+                    Mount::Video { side, .. } => {
+                        let (dx, dy) = Popover::rise_offset(side.get(), Popover::RISE, appear);
+                        f.painter.alpha(appear).translate(dx, dy)
+                    }
+                    Mount::Sheet { .. } => f.painter.alpha(appear).translate(0.0, Popover::RISE * (1.0 - appear)),
+                    _ => f.painter.alpha(appear),
+                };
+                match ground {
+                    Some(ground) => {
+                        panel_ground(p, shown, RADIUS, f.underlay, ground);
+                        self.motion.draw_rows(p, natural, table, f.measure);
+                    }
+                    None => self.motion.draw(p, natural, RADIUS, table, f.measure),
+                }
             }
         }
-        if let Some(band) = table.title_rect(natural) {
-            f.stop(
-                p,
-                Stop {
-                    key: FocusKey { entry, elem: H::Elem::of_index(TITLE_KEY) },
-                    rect: moved(band),
-                    rest_rect: band,
-                    clip: shown,
-                    hover: Hover::Ignore,
-                    activate: Activate::Immediate,
-                },
-            );
-        }
+        // the stops: one registration for every popover (`page_stack::register_stops`), through the page's own
+        // alpha; only the ACTIVE page registers, where it is drawn this frame
+        page_stack::register_stops(
+            f,
+            entry,
+            f.painter.alpha(f.page_alpha),
+            Activate::Immediate,
+            table,
+            natural,
+            shown,
+            self.motion.live_dx(),
+            key_at,
+        );
     }
 }
 
@@ -588,10 +622,42 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         self.core.glass().is_some_and(Popover::handed_back)
     }
 
-    /// The stack's part of the host's replay canon: the depth, nothing else (what is pushed is the
-    /// host's own page ids, which its canon owns).
-    pub fn stack_canon(&self, c: &mut plx_machine::machine::Canon) {
+    /// The stack's part of the host's replay canon, whole: the depth, then each pushed page's stable `code`
+    /// and the key of the row that opened it. Byte for byte what `PageStack::canon` writes, the player's
+    /// popovers' own (so a host that moves over from one keeps its recorded canon).
+    pub fn stack_canon(&self, c: &mut plx_machine::machine::Canon, code: impl Fn(P) -> u32, key: impl Fn(&Id) -> u32) {
+        self.stack.canon(c, code, key);
+    }
+
+    /// The depth alone, for a host whose canon never wrote what is pushed (its own page ids are its canon's
+    /// business): the Detail hosts', whose recorded form is that.
+    pub fn depth_canon(&self, c: &mut plx_machine::machine::Canon) {
         c.u32(self.stack.len() as u32);
+    }
+
+    /// **Where the control the glass grows out of is drawn NOW**: a [`Host::Grows`] whose control moves while
+    /// the menu is up (the profile chip rides the bar's tuck) starts and ends its morph on the live rect, and
+    /// the panel is laid over it. Call before every draw; inert for a host that does not grow.
+    pub fn track_opener(&mut self, drawn: Rect) {
+        if let Mount::Grows { pill, glass, .. } = &mut self.core.mount {
+            *pill = drawn;
+            glass.track_opener(drawn);
+        }
+    }
+
+    /// The side of its opener a video host's card took (`None` for any other host).
+    #[cfg(test)]
+    pub(crate) fn core_side(&self) -> Option<popover::Side> {
+        match &self.core.mount {
+            Mount::Video { side, .. } => Some(side.get()),
+            _ => None,
+        }
+    }
+
+    /// The rect the glass is morphing from, if it has one.
+    #[cfg(test)]
+    pub(crate) fn glass_opener(&self) -> Option<Rect> {
+        self.core.glass().and_then(Popover::opener)
     }
 
     /// The form of the page showing.
@@ -685,8 +751,8 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     pub fn step(&mut self, ev: Event<'_, Id>, build: &mut Build<'_, P, Id, A>) -> Out<A> {
         match ev {
             Event::Opening => {
-                if let Mount::Grows { pill, glass, .. } = &mut self.core.mount {
-                    glass.open_from(Some(*pill));
+                if let Mount::Grows { pill, morph, glass, .. } = &mut self.core.mount {
+                    glass.open_from((*morph == Morph::FromPill).then_some(*pill));
                 }
                 Out::Stay
             }
@@ -708,13 +774,13 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
             }
             Event::Ok(key) => self.ok(key, false, build),
             Event::Right(key) => self.ok(key, true, build),
-            Event::Back => {
-                if self.stack.is_empty() {
-                    Out::Dismiss
-                } else {
-                    moved(self.pop_to(self.stack.len() - 1, build))
-                }
-            }
+            // BACK pops, and closes where there is nothing to pop to: at the root, and on a page whose every
+            // page beneath (the root too) can no longer be built, where the menu has nowhere to stand
+            Event::Back => match self.stack.len() {
+                0 => Out::Dismiss,
+                n if self.pop_to(n - 1, build) => Out::Moved,
+                _ => Out::Dismiss,
+            },
             Event::Left => match self.stack.len() {
                 0 => Out::Stay,
                 n => moved(self.pop_to(n - 1, build)),
@@ -778,12 +844,22 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     }
 
     /// **The ONE pop**: restore the page at `depth` (`0` = the root) with focus on the row that opened the
-    /// page above it and the scroll it was left at, sliding back. `false` when that page cannot be built:
-    /// the page showing stays.
+    /// page above it and the scroll it was left at, sliding back. A page that can no longer be built (its data
+    /// went) is not stood on: the pop keeps going down to the first depth that can, the root last; `false`
+    /// when none can, and the menu is left as it was (the host closes it).
     fn pop_to(&mut self, depth: usize, build: &mut Build<'_, P, Id, A>) -> bool {
-        let below = depth.checked_sub(1).and_then(|i| self.stack.page_at(i));
-        let Some(built) = build(below) else { return false };
-        let Some(saved) = self.stack.truncate(depth) else { return false };
+        let mut depth = depth.min(self.stack.len());
+        let (built, saved) = loop {
+            let below = depth.checked_sub(1).and_then(|i| self.stack.page_at(i));
+            if let Some(built) = build(below) {
+                break (built, self.stack.truncate(depth));
+            }
+            match depth {
+                0 => return false,
+                _ => depth -= 1,
+            }
+        };
+        let Some(saved) = saved else { return false };
         let leaving = leave_page(&mut self.form);
         self.form.restore(built.form, Some(&saved.return_id), saved.scroll);
         self.form.table.set_title((depth > 0).then_some(built.title));
@@ -825,6 +901,103 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         self.form.set_sliding(built.form, held.as_ref());
         self.form.table.set_title((!self.stack.is_empty()).then_some(built.title));
     }
+}
+
+// ---- the screen glue: what every host of a menu would otherwise write for itself -----------------------
+
+/// What [`Menu::on_screen`] made of a screen event: the menu's answer, the row key the event named (an OK or a
+/// click: the host reads the row a pick was on from it), and whether the event was consumed.
+pub struct Glued<A> {
+    pub out: Out<A>,
+    pub elem: Option<u32>,
+    pub handled: Handled,
+}
+
+impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
+    /// **The ONE adapter from a screen's events to the menu's** (Mount, Closing, Tick, FocusMoved, an OK or a
+    /// click, a pressed key): a host calls it first, performs [`Glued::out`] (a dismissal closes the surface, a
+    /// pick acts) and answers [`Glued::handled`]. `None` is an event that is not the menu's (a key it passes, any
+    /// other event): the host's own. The menu's focus is the engine's current key on `entry`; the Tick carries
+    /// it so the cursor follows a focus change the screen was not told about, and a moved focus damages the
+    /// frame, so no host can forget either.
+    pub fn on_screen<H: MachineHost>(
+        &mut self,
+        ev: &ScreenEvent<H>,
+        cx: &Cx<'_, H>,
+        entry: EntryId,
+        fx: &mut Effects<'_, H>,
+        build: &mut Build<'_, P, Id, A>,
+    ) -> Option<Glued<A>>
+    where
+        H::Elem: IndexElem,
+    {
+        let focus = cx.focus.current.filter(|key| key.entry == entry).and_then(|key| key.elem.index());
+        let (menu_ev, elem, handled) = match ev {
+            ScreenEvent::Mount => (Event::Opening, None, Handled::No),
+            ScreenEvent::Closing => (Event::Closing, None, Handled::No),
+            ScreenEvent::Tick(tick) => (Event::Tick { dt: tick.dt(), measure: cx.measure, focus }, None, Handled::No),
+            ScreenEvent::FocusMoved { to, .. } => {
+                fx.invalidate(plx_machine::present::Provenance::Input);
+                (Event::Focused(to.elem.index()?), None, Handled::Yes)
+            }
+            ScreenEvent::Activate(elem) => (Event::Ok(elem.index()?), elem.index(), Handled::Yes),
+            ScreenEvent::PressCommit(_) => {
+                let key = cx.focus.current.and_then(|key| key.elem.index());
+                match key {
+                    Some(key) => (Event::Ok(key), Some(key), Handled::Yes),
+                    None => return Some(Glued { out: Out::Stay, elem: None, handled: Handled::Yes }),
+                }
+            }
+            ScreenEvent::Input(input) => match keyed(&input.kind, focus) {
+                Keyed::Event(ev) => (ev, None, Handled::Yes),
+                Keyed::Swallow => return Some(Glued { out: Out::Stay, elem: None, handled: Handled::Yes }),
+                Keyed::Pass => return None,
+            },
+            _ => return None,
+        };
+        let out = self.step(menu_ev, build);
+        Some(Glued { out, elem, handled })
+    }
+}
+
+/// **A screen that is a menu's host**: the menu and the entry it registers its stops under. With
+/// [`menu_screen_methods!`] it is the whole of a host's `Screen` surface for the menu (the modal dim, the
+/// prewarm, the pointer hold, the draw and the morph's hand-over), so a host does not forward them one by
+/// one, and cannot forget one (an unforwarded `pointer_held` is a pointer that acts on a card in motion).
+pub trait HasMenu {
+    type Page: Copy;
+    type Row: PartialEq + Clone;
+    type Act: Clone;
+    fn menu(&self) -> &Menu<Self::Page, Self::Row, Self::Act>;
+    fn menu_entry(&self) -> EntryId;
+}
+
+/// The `Screen` methods a menu's host takes from the menu, in the `impl Screen<H> for Host` block
+/// (`H` the impl's host type parameter, `$phase` the draw's profile label): `opener_alpha`, `handed_back`,
+/// `scrim`, `prepare`, `pointer_held`, `draw`. The host implements [`HasMenu`].
+#[macro_export]
+macro_rules! menu_screen_methods {
+    ($H:ident, $phase:literal) => {
+        fn opener_alpha(&self) -> f32 {
+            $crate::menu::HasMenu::menu(self).opener_alpha()
+        }
+        fn handed_back(&self) -> bool {
+            $crate::menu::HasMenu::menu(self).handed_back()
+        }
+        fn scrim(&self) -> $crate::screen::Scrim {
+            $crate::menu::HasMenu::menu(self).scrim()
+        }
+        fn prepare(&mut self, _: &mut $crate::frame::Budget, cx: &plx_machine::machine::Cx<'_, $H>) {
+            $crate::menu::HasMenu::menu(self).prepare(cx.measure);
+        }
+        fn pointer_held(&self) -> bool {
+            $crate::menu::HasMenu::menu(self).pointer_held()
+        }
+        fn draw(&mut self, f: &mut $crate::screen::DrawFrame<'_, '_, $H>) {
+            let entry = $crate::menu::HasMenu::menu_entry(self);
+            $crate::profile::phase($phase, || $crate::menu::HasMenu::menu(self).draw(f, entry))
+        }
+    };
 }
 
 impl<P: Copy, Id: PartialEq + Clone, A: Clone> PopoverPanel for Menu<P, Id, A> {
