@@ -128,8 +128,10 @@ pub fn shelf_fade(tiles_top: f32, hero_a: f32) -> WashRamp {
 /// layers when the hero slides. The field stays put while title and controls move across it.
 pub fn home_shade(shelf: WashRamp, hero_a: f32) -> crate::widgets::WashScrim {
     let k = hero_a.clamp(0.0, 1.0);
-    let side = SideShade::Box { horizontal: theme::shade::HOME_SIDE_X, vertical: theme::shade::HOME_SIDE_Y };
-    edge_wash(shelf, side, None, theme::shade::HOME_SIDE_A * k, k)
+    // Discussion #1574 experiment: one curved field from the bottom-left corner, no shelf ramp.
+    let side = SideShade::ellipse([0.0, SCR_H], theme::shade::HOME_CURVE_REACH, theme::shade::HOME_CURVE_FEATHER);
+    let shelf = WashRamp { stops: shelf.stops.map(|(y, _)| (y, 0.0)), ..shelf };
+    edge_wash(shelf, side, None, theme::shade::HOME_CURVE_A * k, k)
 }
 
 /// Detail's continuous edge shade. During the logo's move the left fade gives way to a shallow
@@ -142,7 +144,8 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let lerp = |from, to| from + (to - from) * t;
     let [preview_top, preview_knee] = theme::shade::DETAIL_PREVIEW_FOOT_Y;
     let (top, knee) = (lerp(top, preview_top), lerp(knee, preview_knee));
-    let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(top, 0.0), (knee, mid), (SCR_H, foot)] };
+    // Discussion #1574 experiment: no full-width bottom ramp at rest; the curve alone carries the copy.
+    let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(top, 0.0), (knee, mid * t), (SCR_H, foot * t)] };
     let rise = theme::shade::DETAIL_PREVIEW_RISE * t;
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));

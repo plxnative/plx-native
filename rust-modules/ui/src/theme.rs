@@ -312,6 +312,11 @@ pub mod shade {
     pub const HOME_SIDE_Y: [f32; 2] = [110.0, 405.0];
     /// Strength at the left under the logo, metadata and actions.
     pub const HOME_SIDE_A: f32 = 0.59;
+    /// Discussion #1574 experiment: Home's curved field, an ellipse about the bottom-left corner
+    /// wide enough to reach the shelf captions on the right, its top on the left edge at y = 20.
+    pub const HOME_CURVE_REACH: [f32; 2] = [2600.0, 1060.0];
+    pub const HOME_CURVE_FEATHER: f32 = 420.0;
+    pub const HOME_CURVE_A: f32 = 0.75;
     /// Opacity difference over which the side and shelf shades softly join.
     pub const EDGE_JOIN: f32 = 0.10;
 
