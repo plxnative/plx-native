@@ -134,7 +134,7 @@ pub(super) fn derive_state(ps: &mut plx_media::route::PlaybackSession, state: pl
 pub(super) fn failure_fixture(ps: &plx_media::route::PlaybackSession) -> plx_appkit::player_hud::FailureReadout {
     use plx_media::player;
     let failure = player::failure_for_test(ps);
-    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false });
+    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false, versions_available: false });
     let support = player::support_line(failure.kind());
     plx_appkit::player_hud::FailureReadout::captured(failure.attempt(), failure.shape().clone(), actions, support, ps.repair_status)
 }

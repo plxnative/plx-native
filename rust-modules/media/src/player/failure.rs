@@ -84,6 +84,9 @@ pub struct LiveOffers {
     pub repair_idle: bool,
     /// The failed item has audio or subtitle tracks the picker can list ([`super::failed_tracks_available`]).
     pub tracks_available: bool,
+    /// The failed item has more than one version (file) the Select Version list can show
+    /// ([`super::failed_versions_available`]): the list reaches the store with the item's metadata, which can land after the failure.
+    pub versions_available: bool,
 }
 
 /// **Why one attempt failed, and what its viewer may do about it.** Immutable once recorded (the one
@@ -258,6 +261,7 @@ pub fn live_offers(ps: &crate::route::PlaybackSession, meta: plx_data::metadata:
     LiveOffers {
         repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
         tracks_available: super::failed_tracks_available(ps, meta),
+        versions_available: super::failed_versions_available(ps, meta),
     }
 }
 
@@ -279,6 +283,10 @@ pub enum Recovery {
     /// consumes it ([`crate::route::hold_pick_for_retry`]), so a refused or cancelled retry still keeps it for
     /// *Try again*.
     PickTracks(plx_data::metadata::PreplayPick),
+    /// A row of *Select Version*: the same request on another file of the item. The new attempt asks for this
+    /// version, and the version is remembered for the profile ([`crate::route::choose_version`]) only once a frame of it
+    /// has been decoded, never when it is asked for: a version that fails must not become what Play starts next time.
+    PickVersion(plx_plex::plex::MediaId),
 }
 
 impl Recovery {
@@ -290,28 +298,32 @@ impl Recovery {
             Self::PlayAutomatically => A::PlayAutomatically,
             Self::PickQuality(_) => A::ChangeQuality,
             Self::PickTracks(_) => A::ChangeTracks,
+            Self::PickVersion(_) => A::SelectVersion,
         }
     }
 
     /// What this recovery changes about the retry it starts.
     pub(crate) fn overrides(&self) -> RetryOverrides {
         use super::report::AttemptOrigin as O;
-        let (direct_play, origin) = match self {
-            Self::RetrySame => (None, O::UserRetry),
-            Self::PlayAutomatically => (Some(DirectPlayMode::Auto), O::UserRetry),
-            Self::PickQuality(_) => (None, O::QualityChange),
-            Self::PickTracks(_) => (None, O::ViewerReconfigure),
+        let (direct_play, origin, version) = match self {
+            Self::RetrySame => (None, O::UserRetry, None),
+            Self::PlayAutomatically => (Some(DirectPlayMode::Auto), O::UserRetry, None),
+            Self::PickQuality(_) => (None, O::QualityChange, None),
+            Self::PickTracks(_) => (None, O::ViewerReconfigure, None),
+            Self::PickVersion(media) => (None, O::ViewerReconfigure, Some(*media)),
         };
-        RetryOverrides { direct_play, origin }
+        RetryOverrides { direct_play, origin, version }
     }
 }
 
 /// What a recovery changes about the retry it starts ([`crate::route::retry_current_play`] applies it): the Direct
 /// Play mode the new attempt resolves under (`None` keeps the failed attempt's own: a retry is the SAME request),
-/// and why the viewer asked, which rides to the report of the attempt it starts.
+/// the version it asks for (`None` keeps the failed request's own) and why the viewer asked, which rides to the report
+/// of the attempt it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetryOverrides {
     pub direct_play: Option<DirectPlayMode>,
+    pub version: Option<plx_plex::plex::MediaId>,
     pub origin: super::report::AttemptOrigin,
 }
 
@@ -327,11 +339,13 @@ pub enum Refused {
 /// Does `failure`'s row, with `live`, offer `recovery`? The ONE answer is the row's own table, so a recovery is
 /// accepted exactly while its control is drawn.
 ///
-/// A track pick is judged with the item's tracks read as available: it was made on the picker those tracks fed, which
-/// is the evidence that they exist, and asking the metadata again at the commit would only race the panel.
+/// A track pick is judged with the item's tracks read as available, and a version pick with its versions: each was made on
+/// the picker that list fed, which is the evidence that it exists, and asking the metadata again at the commit would only
+/// race the panel.
 pub(crate) fn recovery_offered(failure: &PlaybackFailure, live: LiveOffers, recovery: &Recovery) -> bool {
     let live = match recovery {
         Recovery::PickTracks(_) => LiveOffers { tracks_available: true, ..live },
+        Recovery::PickVersion(_) => LiveOffers { versions_available: true, ..live },
         _ => live,
     };
     super::failure_actions(failure, live).contains(&recovery.action())
@@ -437,6 +451,7 @@ mod tests {
         let live = |ps: &PlaybackSession| LiveOffers {
             repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
             tracks_available: false,
+            versions_available: false,
         };
         assert!(failure_actions(&failure, live(&ps)).contains(&FailureAction::Repair));
         ps.repair_status = plx_os::tv::native_video::State::Running;
@@ -455,8 +470,8 @@ mod tests {
             DirectPlayMode::Auto,
             FrozenOffers { can_retry: true, quality_carriable: true },
         );
-        let before = failure_actions(&failure, LiveOffers { repair_idle: true, tracks_available: false });
-        let after = failure_actions(&failure, LiveOffers { repair_idle: true, tracks_available: true });
+        let before = failure_actions(&failure, LiveOffers { repair_idle: true, tracks_available: false, versions_available: false });
+        let after = failure_actions(&failure, LiveOffers { repair_idle: true, tracks_available: true, versions_available: false });
         assert!(!before.contains(&FailureAction::ChangeTracks));
         assert_eq!(after.iter().position(|a| *a == FailureAction::ChangeTracks), Some(before.len() - 1), "before Back");
         assert_eq!(
@@ -477,7 +492,7 @@ mod tests {
         plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 21, sub: plx_data::metadata::SubPick::Off }
     }
 
-    const LIVE: LiveOffers = LiveOffers { repair_idle: true, tracks_available: false };
+    const LIVE: LiveOffers = LiveOffers { repair_idle: true, tracks_available: false, versions_available: false };
     const OFFERS: FrozenOffers = FrozenOffers { can_retry: true, quality_carriable: true };
 
     /// **The door answers the overrides each recovery's performer used before there was one**: the Direct Play mode
@@ -490,14 +505,19 @@ mod tests {
         let mut forced = standing(PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Forced, OFFERS));
         let door = |ps: &mut PlaybackSession, r: Recovery| crate::route::begin_recovery(ps, LIVE, &r);
         assert_eq!(door(&mut forced, Recovery::PlayAutomatically),
-            Ok(RetryOverrides { direct_play: Some(DirectPlayMode::Auto), origin: O::UserRetry }));
-        assert_eq!(door(&mut forced, Recovery::RetrySame), Ok(RetryOverrides { direct_play: None, origin: O::UserRetry }));
+            Ok(RetryOverrides { direct_play: Some(DirectPlayMode::Auto), version: None, origin: O::UserRetry }));
+        assert_eq!(door(&mut forced, Recovery::RetrySame), Ok(RetryOverrides { direct_play: None, version: None, origin: O::UserRetry }));
         // an ordinary transient failure offers the rung and the pair
         let mut auto = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
         assert_eq!(door(&mut auto, Recovery::PickQuality(crate::route::Quality::P720)),
-            Ok(RetryOverrides { direct_play: None, origin: O::QualityChange }));
+            Ok(RetryOverrides { direct_play: None, version: None, origin: O::QualityChange }));
         assert_eq!(door(&mut auto, Recovery::PickTracks(pick())),
-            Ok(RetryOverrides { direct_play: None, origin: O::ViewerReconfigure }));
+            Ok(RetryOverrides { direct_play: None, version: None, origin: O::ViewerReconfigure }));
+        // a version pick names the version the new attempt asks for
+        let mut versioned = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
+        let media = plx_plex::plex::MediaId(3086);
+        assert_eq!(crate::route::begin_recovery(&mut versioned, LIVE, &Recovery::PickVersion(media)),
+            Ok(RetryOverrides { direct_play: None, version: Some(media), origin: O::ViewerReconfigure }));
     }
 
     /// **A track pick is held by the door, before the retry, and only when it is accepted.**
@@ -548,8 +568,9 @@ mod tests {
         use super::super::FailureAction as A;
         let _g = plx_base::testlock::serial();
         let recoveries = [Recovery::RetrySame, Recovery::PlayAutomatically,
-            Recovery::PickQuality(crate::route::Quality::P720), Recovery::PickTracks(pick())];
-        for action in [A::TryAgain, A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks] {
+            Recovery::PickQuality(crate::route::Quality::P720), Recovery::PickTracks(pick()),
+            Recovery::PickVersion(plx_plex::plex::MediaId(3086))];
+        for action in [A::TryAgain, A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::SelectVersion] {
             assert_eq!(recoveries.iter().filter(|r| r.action() == action).count(), 1, "{action:?} has exactly one recovery");
         }
         for recovery in &recoveries {
@@ -557,9 +578,10 @@ mod tests {
         }
         for (failure, live, row) in super::super::every_failure_row() {
             for recovery in &recoveries {
-                // a pick is made on the picker the tracks fed: judged with them available
+                // a pick is made on the picker its list fed: judged with that list available
                 let drawn = match recovery {
                     Recovery::PickTracks(_) => super::super::failure_actions(&failure, LiveOffers { tracks_available: true, ..live }),
+                    Recovery::PickVersion(_) => super::super::failure_actions(&failure, LiveOffers { versions_available: true, ..live }),
                     _ => row.clone(),
                 };
                 assert_eq!(recovery_offered(&failure, live, recovery), drawn.contains(&recovery.action()),

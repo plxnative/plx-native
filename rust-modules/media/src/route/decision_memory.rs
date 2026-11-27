@@ -687,6 +687,19 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     rematch_subtitle_with_names(ps);
     confirm_resume_presented(ps);
     send_parked_write_back(ps);
+    remember_version_that_played(ps);
+}
+
+/// **A version picked on the failure screen is remembered once a frame of it is decoded** (`Recovery::PickVersion`), not
+/// when it is asked for ([`PlaybackSession::version_on_trial`]): a version that fails must not become what Play starts
+/// next time. Taken whatever the outcome, so it writes once; only while the request in force still asks for exactly that
+/// version of that item. Every frame after the first finds nothing and takes no lock.
+fn remember_version_that_played(ps: &mut PlaybackSession) {
+    let Some((sid, rk, media)) = ps.version_on_trial.take() else { return };
+    let current = ps.request.as_ref().is_some_and(|r| r.sid == sid && r.rk == rk && r.version == Some(media));
+    if current {
+        choose_version(sid, &rk, media);
+    }
 }
 
 /// What the before-playback picker ([`commit_preplay_pick`]) is told about the item whose tracks it
@@ -802,6 +815,13 @@ pub fn begin_recovery(
     };
     crate::player::log(&format!("recovery refused: {recovery:?}: {refused:?}"));
     Err(refused)
+}
+
+/// **The version the failed attempt asked for** (the request's: the viewer's pick, else the profile's remembered choice,
+/// `None` for the server's default), which *Select Version* over the failure screen checks as the one that just failed
+/// ([`taken_version`](super::taken_version) turns it into the row that plays unasked).
+pub fn attempt_version(ps: &PlaybackSession) -> Option<plx_plex::plex::MediaId> {
+    ps.request.as_ref().and_then(|r| r.version)
 }
 
 /// **What the failure screen's picker starts from**: the held pick, else the attempt's standing

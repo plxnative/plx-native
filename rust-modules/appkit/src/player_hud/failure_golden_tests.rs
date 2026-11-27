@@ -41,7 +41,7 @@ fn produce(ps: &rt::PlaybackSession, arm: Option<&str>, tracks: bool) -> Produce
     // the derivation `observe_failure` records (the capture's gating on the state is graded in `plx_media`)
     let failure = pl::failure_under_for_test(ps, arm);
     let error = failure.shape().clone();
-    let live = pl::LiveOffers { repair_idle: repair == Repair::Idle, tracks_available: tracks };
+    let live = pl::LiveOffers { repair_idle: repair == Repair::Idle, tracks_available: tracks, versions_available: false };
     let row = pl::failure_actions(&failure, live);
     let handled = pl::backend::handled_failure(error.kind);
     let head = format!(
