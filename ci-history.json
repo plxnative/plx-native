@@ -1,4 +1,4 @@
-{"updated":"2026-11-27T13:11:13Z",
+{"updated":"2026-11-27T13:16:44Z",
 "ci":[
 {"id":33248488089,"at":"2026-08-29T10:43:47Z","sha":"37a5160c4","title":"Merge branch 'abr-mode-flap' into main","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":111},"failed":["host checks (NOT a device gate)"]},
 {"id":33276894833,"at":"2026-08-29T21:45:48Z","sha":"87aae35ff","title":"ui: a control on video is a light film, and a capsule is not a stadium","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
@@ -6156,7 +6156,8 @@
 {"id":45997749942,"at":"2026-11-27T12:20:03Z","sha":"a3ec969ce","title":"Failure read-out: the app's own refusals no longer read as the server's","pr":1592,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":234,"Linux simulator build + launch":294,"Windows launcher syntax":23,"macOS simulator build + launch":363}},
 {"id":46001972842,"at":"2026-11-27T12:50:12Z","sha":"87212b405","title":"Live TV Browse: the outbound guard's V13 pin follows the re-recorded fingerprint","pr":1585,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":293,"Linux simulator build + launch":271,"macOS simulator build + launch":159,"Windows launcher syntax":18}},
 {"id":46003033841,"at":"2026-11-27T12:58:01Z","sha":"93cfa3d1d","title":"Failure read-out: no qualified backend under Force reads as the Force policy's","pr":1592,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":389,"macOS simulator build + launch":366,"macOS tests against bundled FFmpeg and ASS":270,"Windows launcher syntax":24}},
-{"id":46003246556,"at":"2026-11-27T12:59:38Z","sha":"4447e0e8d","title":"Live TV Browse: register the filter menu's draw phase (ltv.filter)","pr":1585,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":181,"Windows launcher syntax":21,"macOS simulator build + launch":342,"Linux simulator build + launch":357}}
+{"id":46003246556,"at":"2026-11-27T12:59:38Z","sha":"4447e0e8d","title":"Live TV Browse: register the filter menu's draw phase (ltv.filter)","pr":1585,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":181,"Windows launcher syntax":21,"macOS simulator build + launch":342,"Linux simulator build + launch":357}},
+{"id":46004852195,"at":"2026-11-27T13:10:41Z","sha":"633d92526","title":"Live TV: Browse","pr":1585,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":321,"macOS simulator build + launch":325,"macOS tests against bundled FFmpeg and ASS":284,"Windows launcher syntax":18}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
