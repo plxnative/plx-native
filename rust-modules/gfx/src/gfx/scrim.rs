@@ -166,6 +166,13 @@ pub enum SideShade {
     /// most `1 / min(reach)` anywhere: the side shade never changes faster than
     /// `1.5 * peak / feather` per px, in any direction, and every iso-line is a curve.
     Ellipse { origin: [f32; 2], reach: [f32; 2], feather: f32 },
+    /// **The outside of an ellipse whose centre stands off-screen** (discussion #1574): exactly 0 on
+    /// and inside the ellipse of semi-axes `reach` about `centre`, rising OUTWARD across a band
+    /// `feather` px wide to hold `peak`: `peak * smoothstep(t)` with `t = (d - 1) * min(reach) /
+    /// feather`. With the centre above and right of the screen, its lower-left arc is an edge that
+    /// stands high on the left and sags toward the bottom right, and the shade fades from the
+    /// bottom up to it.
+    Sag { centre: [f32; 2], reach: [f32; 2], feather: f32 },
 }
 
 impl SideShade {
@@ -191,6 +198,12 @@ impl SideShade {
                 let d = (ux * ux + uy * uy).sqrt();
                 smooth(((1.0 - d) * self.band()).clamp(0.0, 1.0))
             }
+            SideShade::Sag { centre, reach, .. } => {
+                let (qx, qy) = (x - centre[0], centre[1] - y);
+                let (ux, uy) = (qx * (1.0 / reach[0]), qy * (1.0 / reach[1]));
+                let d = (ux * ux + uy * uy).sqrt();
+                smooth(((d - 1.0) * self.band()).clamp(0.0, 1.0))
+            }
         }
     }
 
@@ -198,7 +211,9 @@ impl SideShade {
     fn band(self) -> f32 {
         match self {
             SideShade::Box { .. } => 0.0,
-            SideShade::Ellipse { reach, feather, .. } => reach[0].min(reach[1]) / feather,
+            SideShade::Ellipse { reach, feather, .. } | SideShade::Sag { reach, feather, .. } => {
+                reach[0].min(reach[1]) / feather
+            }
         }
     }
 
@@ -207,6 +222,8 @@ impl SideShade {
         match self {
             SideShade::Box { horizontal, vertical } => (horizontal[1], vertical[0]),
             SideShade::Ellipse { origin, reach, .. } => (origin[0] + reach[0], origin[1] - reach[1]),
+            // The outside of an ellipse is unbounded: conservatively, everywhere.
+            SideShade::Sag { .. } => (f32::INFINITY, f32::NEG_INFINITY),
         }
     }
 
@@ -221,6 +238,11 @@ impl SideShade {
                 reach: reach.map(|a| a * s),
                 feather: feather * s,
             },
+            SideShade::Sag { centre, reach, feather } => SideShade::Sag {
+                centre: [centre[0] * s + ox, centre[1] * s + oy],
+                reach: reach.map(|a| a * s),
+                feather: feather * s,
+            },
         }
     }
 
@@ -232,6 +254,9 @@ impl SideShade {
             }
             SideShade::Ellipse { origin, reach, .. } => {
                 ([1.0 / reach[0], 1.0 / reach[1], self.band(), 0.0], [origin[0], origin[1], 1.0, 0.0])
+            }
+            SideShade::Sag { centre, reach, .. } => {
+                ([1.0 / reach[0], 1.0 / reach[1], self.band(), 0.0], [centre[0], centre[1], 2.0, 0.0])
             }
         }
     }

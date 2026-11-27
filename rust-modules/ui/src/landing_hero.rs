@@ -146,13 +146,14 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let (top, knee) = (lerp(top, preview_top), lerp(knee, preview_knee));
     // Discussion #1574 experiment: no full-width bottom ramp at rest; the curve alone carries the copy.
     let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(top, 0.0), (knee, mid * t), (SCR_H, foot * t)] };
-    let rise = theme::shade::DETAIL_PREVIEW_RISE * t;
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));
-    let [reach_x, reach_y] = theme::shade::DETAIL_SIDE_REACH;
-    let side = SideShade::ellipse([0.0, SCR_H], [reach_x, reach_y + rise], theme::shade::DETAIL_SIDE_FEATHER);
+    // Discussion #1574 experiment: the shade lies OUTSIDE an off-screen ellipse whose lower-left arc
+    // is the owner's drawn edge (high on the left, sagging to y ~ 877 at the right edge).
+    let side = SideShade::Sag { centre: theme::shade::DETAIL_SAG_CENTRE, reach: theme::shade::DETAIL_SAG_REACH,
+        feather: theme::shade::DETAIL_SAG_FEATHER };
     edge_wash(ramp, side, top_fade,
-        theme::shade::DETAIL_SIDE_A * field * (1.0 - t), base.max(field.min(1.0)))
+        theme::shade::DETAIL_SAG_A * field * (1.0 - t), base.max(field.min(1.0)))
 }
 
 /// Both heroes' field: the `side` shade at `peak` joined with `ramp` (`gfx::scrim::EdgeShade`).

@@ -312,6 +312,14 @@ pub mod shade {
     pub const HOME_SIDE_Y: [f32; 2] = [110.0, 405.0];
     /// Strength at the left under the logo, metadata and actions.
     pub const HOME_SIDE_A: f32 = 0.59;
+    /// Discussion #1574 experiment: Detail's edge, the lower-left arc of this off-screen ellipse,
+    /// fitted so every Detail text area (a logo up to 240 px tall over the title foot, the facts, the
+    /// synopsis, the actions, a three-line credits column, the first shelf heading) stands on at least
+    /// 95% of the peak, with as much of the top right left clear as that allows.
+    pub const DETAIL_SAG_CENTRE: [f32; 2] = [1800.0, -1050.0];
+    pub const DETAIL_SAG_REACH: [f32; 2] = [1400.0, 1500.0];
+    pub const DETAIL_SAG_FEATHER: f32 = 300.0;
+    pub const DETAIL_SAG_A: f32 = 0.80;
     /// Discussion #1574 experiment: Home's curved field, an ellipse about the bottom-left corner
     /// wide enough to reach the shelf captions on the right, its top on the left edge at y = 20.
     pub const HOME_CURVE_REACH: [f32; 2] = [2600.0, 1060.0];

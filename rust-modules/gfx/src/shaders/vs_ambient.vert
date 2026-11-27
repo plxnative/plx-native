@@ -73,7 +73,9 @@ float edge_alpha(vec2 px) {
   float upper;
   if (u_sc[4].z > 0.5) {
     vec2 q = vec2(px.x - u_sc[4].x, u_sc[4].y - px.y);
-    float t = clamp((1.0 - length(q * edge.xy)) * edge.z, 0.0, 1.0);
+    // z 1: inside an ellipse about a corner; z 2: outside one whose centre is off-screen (#1574).
+    float r = length(q * edge.xy);
+    float t = clamp((u_sc[4].z > 1.5 ? r - 1.0 : 1.0 - r) * edge.z, 0.0, 1.0);
     upper = ink.z * t * t * (3.0 - 2.0 * t);
   } else {
     upper = ink.z * (1.0 - smoothstep(edge.x, edge.y, px.x)) * smoothstep(edge.z, edge.w, px.y);
