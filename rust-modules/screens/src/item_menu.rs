@@ -1342,8 +1342,8 @@ pub(crate) mod tests {
     /// screen does — by identity — instead of through a parallel vector.
     struct Built(FormTable<ItemRow, Action, MenuPage>);
     fn built(form: ItemForm) -> Built {
-        // the item menus are compact action menus (`Class::Action`)
-        let mut table = FormTable::with_compact(crate::registry::BAND, true);
+        // the item menus are action menus (the class `ItemMenu` builds its `Menu` with)
+        let mut table = FormTable::with_class(crate::registry::BAND, Class::Action);
         table.set(form, None);
         Built(table)
     }
@@ -2126,7 +2126,7 @@ pub(crate) mod tests {
         let measure = MenuMeasure;
         for preference in plx_os::i18n::SHIPPED {
             let locale = LocaleContext::resolve(preference, None, None, None, None);
-            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::with_compact(crate::registry::BAND, true);
+            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::with_class(crate::registry::BAND, Class::Action);
             form.set(Form::new().section(FormSection::new("")
                 .item(ItemRow::MarkWatched, RowKind::Button, Action::MarkWatched("1".into()),
                     Row::new(plx_os::i18n::msg::widgets_action_mark_watched_in(&locale)).licon(Icon::CheckCircleFill))

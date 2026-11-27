@@ -80,15 +80,18 @@ arguments, and its time is the `dt` it is handed.
 
    **Every menu goes through `plx_ui::menu::Menu`; there is no second door.** A host supplies rows
    (a `Page`, a `Host`, a `Class`) and acts on the `Out` `Menu::step` answers. It never pushes or pops
-   a page, sets a title band (`TableView::set_title`), picks the table's size class (`compact` is fixed
-   at construction, from the menu's `Class`), builds its own `PageStack` or `PanelMotion`, sizes the
-   panel, or handles BACK itself. Visibility enforces it outside the crate (`TableView::compact` is
-   private; `set_title`, `PageStack::new` and `PanelMotion::new` are `pub(crate)`), and
-   `ci/check-deps.sh`'s `menudoors` rule enforces it inside the ui crate: those four spellings
-   appear only in `menu.rs`, `menu_tests.rs` and the three types' own modules. A menu that does not fit
-   `Menu` is a change to `Menu`, not a menu built beside it. (The one panel that is not a menu, Live
-   TV's number entry, is a lineup-entry machine over a `FormTable`; it takes its compact table at
-   construction through `FormTable::with_compact`, not by assigning the field.)
+   a page, sets a title band (`TableView::set_title`), builds its own `PageStack` or `PanelMotion`,
+   sizes the panel, or handles BACK itself. The size class has ONE vocabulary, `menu::Class`: a
+   table's class is fixed at construction (`TableView::with_class(Class)` /
+   `FormTable::with_class(band, Class)`, which `Menu::new` calls with the menu's own class), `compact`
+   is private and read with `is_compact()`, and there is no bool constructor. Visibility enforces it
+   outside the crate (`set_title`, `PageStack::new` and `PanelMotion::new` are `pub(crate)`), and
+   `ci/check-deps.sh`'s `menudoors` rule enforces it inside the ui crate: `set_title(`, `.compact =`,
+   `with_compact(`, `PageStack::new` and `PanelMotion::new` appear only in `menu.rs`, `menu_tests.rs`
+   and the three types' own modules. A menu that does not fit `Menu` is a change to `Menu`, not a menu
+   built beside it. Live TV's number entry (`channel_entry_panel.rs`) is a `FormTable` host, not a
+   `Menu`: it is a lineup-entry machine, and it takes its size class from `Class` like everything
+   else (`FormTable::with_class(BAND, Class::Action)`), with no named constructor of its own.
 
    **A new focusable element answers an accessibility id.** Tests and agents reach it with
    `focus:<id>` / `press:<id>` (`tools/a11y.py`), not by walking keys to it, so an element that

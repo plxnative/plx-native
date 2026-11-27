@@ -950,15 +950,15 @@ impl TableView {
             ROW_H_TALL
         }
     }
-    /// **A table of the size class `compact` says**, fixed at construction: the class belongs to the surface, so
-    /// no host re-assigns it afterwards (`crate::menu::Menu` builds its table from its [`crate::menu::Class`];
-    /// the one panel that is not a menu names its own).
-    pub const fn with_compact(compact: bool) -> Self {
+    /// **A table of the size class `class` says**, fixed at construction: `menu::Class` is the one size-class
+    /// vocabulary, and the class belongs to the surface, so nothing re-assigns it afterwards
+    /// (`crate::menu::Menu` builds its table from its own class; a table that is not a menu's names one).
+    pub const fn with_class(class: crate::menu::Class) -> Self {
         let mut t = Self::new();
-        t.compact = compact;
+        t.compact = class.compact();
         t
     }
-    /// The table's size class as it reads it ([`Self::with_compact`]).
+    /// The table's size class as it reads it ([`Self::with_class`]).
     pub const fn is_compact(&self) -> bool {
         self.compact
     }
