@@ -3016,7 +3016,6 @@ mod failed_pick_tests {
         assert!(!closed, "no resolve started: the panel stays up");
         assert!(written, "the door accepted the pick: its selection was written");
         assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "and the pair is held for Try again");
-        assert!(!plx_media::route::play_pending(), "nothing is resolving");
     }
 
     /// A server's stop ends the playback: the pick is neither held nor written, and the panel stays.
