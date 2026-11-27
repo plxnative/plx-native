@@ -779,3 +779,10 @@ shape `18326723613369063426`). `make check-replay` replays them SAME in Targets 
 difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
 has the record. A controlled recording publishes no wall clock, as its replay does not (`clock::hold_no_wall`), so a
 recording carries no measure of the TopBar clock's text (the time of day) at all.
+
+Live TV Browse (PR7) added the scope's filter and an empty-filter mode to the Live TV screen's canon and the filter menu
+as the registered surface `AppArg::LiveTvFilter`, which moved `SCREEN_SHAPES_PIN` again (`0xd1ed_8cb4_ad5b_5093` ->
+`0xba05_b95a_c8fe_c0cd`), so the two current anchors were recorded afresh (`tests/focusfp.sh --rec --only 12,13`,
+`plxnative-rec rerecord`, `anchor: true` preserved; shape `17626434610726812954`). `make check-replay` replays them SAME
+in Targets and Resolve (904 and 1177 frames, every difference counter zero); the four historical fixtures keep their
+expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
