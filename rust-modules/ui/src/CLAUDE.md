@@ -78,6 +78,18 @@ arguments, and its time is the `dt` it is handed.
    nothing here is close — and then it lands *here*, as a reusable `View`, so the next screen gets
    it for free.
 
+   **Every menu goes through `plx_ui::menu::Menu`; there is no second door.** A host supplies rows
+   (a `Page`, a `Host`, a `Class`) and acts on the `Out` `Menu::step` answers. It never pushes or pops
+   a page, sets a title band (`TableView::set_title`), picks the table's size class (`compact` is fixed
+   at construction, from the menu's `Class`), builds its own `PageStack` or `PanelMotion`, sizes the
+   panel, or handles BACK itself. Visibility enforces it outside the crate (`TableView::compact` is
+   private; `set_title`, `PageStack::new` and `PanelMotion::new` are `pub(crate)`), and
+   `ci/check-deps.sh`'s `menudoors` rule enforces it inside the ui crate: those four spellings
+   appear only in `menu.rs`, `menu_tests.rs` and the three types' own modules. A menu that does not fit
+   `Menu` is a change to `Menu`, not a menu built beside it. (The one panel that is not a menu, Live
+   TV's number entry, is a lineup-entry machine over a `FormTable`; it takes its compact table at
+   construction through `FormTable::with_compact`, not by assigning the field.)
+
    **A new focusable element answers an accessibility id.** Tests and agents reach it with
    `focus:<id>` / `press:<id>` (`tools/a11y.py`), not by walking keys to it, so an element that
    cannot be named cannot be tested. An element whose press ACTS ON a title it names (it plays, restarts,
@@ -118,7 +130,7 @@ arguments, and its time is the `dt` it is handed.
      in its first drawn frame, and never write a screen-local warm loop.
    - **A row of pills** (selection and focus capsules that travel): `widgets::TabStrip` and
      `SelMark` (`widgets.rs`), the nav bar's own motion.
-   - **Menus**: `Popover` (`popover.rs`) around a `TableView` (`table.rs`). A menu placed beside the
+   - **Menus**: `menu::Menu` (`menu.rs`, rule 4), which owns a `Popover` (`popover.rs`) around a `TableView` (`table.rs`). A menu placed beside the
      control that opened it takes its rect from `popover::anchor_panel` with a `Placement`
      (`under_or_above` and the player menus are calls of it; a header menu's cross axis is `hang_x`),
      never from a screen's own arithmetic. **Strips and grids of
@@ -482,7 +494,8 @@ presentation in a design pass.
    ground, the stop registration, the pointer hold and the dim are the menu's, never a host's. A row that
    opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root, and RIGHT
    on a row that opens no page, answer `Out::Edge`, the host's own key: the player's tab switch), and every pushed page wears the header with the back mark (there is no way to have none). The
-   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers.
+   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers. Nothing builds a menu
+   beside `Menu`: see rule 4 of the component rules above, and the `menudoors` gate.
 
    **Popover open styles.** Two exist. `Appear` (default) is the shared `K_APPEAR` fade+slide.
    `Morph` (`Popover::morphing()` is the one selector; open with `open_from(opener.rect)`) is the glass opener's pill-to-panel
