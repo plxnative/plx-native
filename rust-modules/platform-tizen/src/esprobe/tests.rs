@@ -408,6 +408,24 @@ fn an_error_callback_fails_the_scenario_with_its_code() {
     assert!(lines.iter().any(|l| l == "esprobe: h264-clock after the failure: prepare prepare_async_done(false)"), "{lines:#?}");
 }
 
+/// **A failed scenario's refused teardown is a note, not a second FAIL.** A refused `open` (what a set without the Partner
+/// privilege may answer) is followed by the teardown of the created player, which such a player may refuse too; that is
+/// the same cause again, so the tally counts the scenario once.
+#[test]
+fn a_refused_teardown_after_a_failed_open_is_a_note_not_a_second_fail() {
+    let mut probe = Probe::new(vec![clock()]);
+    assert_eq!(probe.next(0), Some(Cmd::Open));
+    probe.done(Cmd::Open, Outcome::Open(Err(("open", -13))), 1, 1);
+    let failed = probe.fail;
+    assert_eq!(probe.next(2), Some(Cmd::Teardown));
+    probe.done(Cmd::Teardown, Outcome::Teardown(-38, -38, 0), 3, 1);
+    let lines = probe.take_lines();
+    assert_eq!(probe.fail, failed, "{lines:#?}");
+    assert!(lines.iter().any(|l| l == "esprobe: h264-clock after the failure: teardown stop -38, close -38, destroy 0 (1 ms)"), "{lines:#?}");
+    assert_eq!(probe.next(4), None);
+    assert!(probe.finished());
+}
+
 /// **Where the library offers the first-decoded-picture callback, a video scenario notes whether it came**, with its
 /// time when it did; it is never a PASS or FAIL (the TV 10.0 emulator never raises it), and an audio scenario notes
 /// nothing.
@@ -441,9 +459,47 @@ fn the_first_frame_note_says_whether_the_callback_came_and_never_counts() {
 #[test]
 fn the_status_is_running_then_the_last_tally() {
     use plx_os::tv::packet_probe::Status;
-    assert_eq!(status_of(false, NEVER), Status::Idle);
-    assert_eq!(status_of(true, NEVER), Status::Running);
-    assert_eq!(status_of(true, 5), Status::Running);
-    assert_eq!(status_of(false, (57 << 32) | 6), Status::Done { pass: 57, fail: 6 });
-    assert_eq!(status_of(false, 0), Status::Done { pass: 0, fail: 0 });
+    assert_eq!(status_of(false, NEVER, 0, false), Status::Idle);
+    assert_eq!(status_of(true, NEVER, 0, false), Status::Running);
+    assert_eq!(status_of(true, 5, pack(3, 1), false), Status::Running);
+    assert_eq!(status_of(false, pack(57, 6), 0, false), Status::Done { pass: 57, fail: 6 });
+    assert_eq!(status_of(false, 0, 0, false), Status::Done { pass: 0, fail: 0 });
+}
+
+/// **A run stuck in a native call past its deadline reads done**, with the tally it reached and one more FAIL for the
+/// call that never returned, instead of `Running` for the rest of the session.
+#[test]
+fn a_run_stuck_past_its_deadline_reads_done_with_one_more_fail() {
+    use plx_os::tv::packet_probe::Status;
+    assert_eq!(status_of(true, NEVER, pack(12, 1), true), Status::Done { pass: 12, fail: 2 });
+    assert_eq!(status_of(true, pack(57, 5), pack(3, 0), true), Status::Done { pass: 3, fail: 1 }, "this run's tally, not the last one's");
+    assert_eq!(status_of(false, pack(57, 5), 0, true), Status::Done { pass: 57, fail: 5 }, "a run that ended reads its own tally");
+}
+
+/// **A cancel (the app went to the background, or the deadline) tears the open player down and runs nothing more**:
+/// one FAIL that says why, the ordinary teardown, no further scenario, and a second cancel adds nothing.
+#[test]
+fn a_cancel_tears_the_open_player_down_and_runs_nothing_more() {
+    let hevc = Scenario { name: "hevc", kind: Kind::Accept, video: Some(Arc::new(bundled("hevc"))), audio: None };
+    let mut probe = Probe::new(vec![clock(), hevc]);
+    assert_eq!(probe.next(0), Some(Cmd::Open));
+    probe.done(Cmd::Open, Outcome::Open(Ok(())), 1, 1);
+    let fail = probe.fail;
+    probe.cancel("the app went to the background");
+    probe.cancel("again");
+    assert_eq!(probe.next(2), Some(Cmd::Teardown), "the open player is torn down");
+    probe.done(Cmd::Teardown, Outcome::Teardown(0, 0, 0), 3, 1);
+    assert_eq!(probe.next(4), None);
+    assert!(probe.finished());
+    let lines = probe.take_lines();
+    assert_eq!(probe.fail, fail + 1, "{lines:#?}");
+    assert!(lines.iter().any(|l| l == "esprobe: FAIL h264-clock cancelled the app went to the background"), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.contains("hevc")), "no further scenario: {lines:#?}");
+
+    // Before any player: nothing to tear down.
+    let mut probe = Probe::new(vec![clock()]);
+    probe.cancel("the app is stopping");
+    assert_eq!(probe.next(0), None);
+    assert!(probe.finished());
+    assert_eq!(probe.fail, 1);
 }

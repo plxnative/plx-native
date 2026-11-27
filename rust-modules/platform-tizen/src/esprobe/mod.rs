@@ -13,7 +13,9 @@
 //! - [`run`]: the worker that makes the calls.
 //!
 //! One probe at a time: [`start`] refuses while one runs. Settings > Diagnostics starts it through [`command`], the
-//! platform's `packet_probe` hook, which also refuses while the host's player is open.
+//! platform's `packet_probe` hook, which also refuses while the host's player is open. The run ends early when the app
+//! goes to the background or stops, and at its deadline ([`run`]); a run stuck in a native call past the deadline and a
+//! grace is reported done by [`command`], with the tally so far and one more FAIL, while its worker is left to it.
 
 mod api;
 mod clip;
@@ -28,12 +30,36 @@ use plx_base::eventlog::log;
 use plx_os::tv::packet_probe::{Command, Status};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// The last run's tally, `pass << 32 | fail`, or [`NEVER`].
 static LAST: AtomicU64 = AtomicU64::new(NEVER);
 const NEVER: u64 = u64::MAX;
+/// The running probe's tally so far, packed as [`LAST`].
+static LIVE: AtomicU64 = AtomicU64::new(0);
+/// When the running probe started.
+static STARTED: Mutex<Option<Instant>> = Mutex::new(None);
+/// The stall has been logged for this run.
+static STALL_SAID: AtomicBool = AtomicBool::new(false);
+/// Past [`run::PROBE_DEADLINE`], how long a run may still take to end (its teardown, a display wait) before it is
+/// reported done.
+const STALL_GRACE: Duration = Duration::from_secs(30);
+
+fn pack(pass: u32, fail: u32) -> u64 {
+    (u64::from(pass) << 32) | u64::from(fail)
+}
+
+fn unpack(packed: u64) -> (u32, u32) {
+    ((packed >> 32) as u32, packed as u32)
+}
+
+/// A run that started longer ago than its deadline and the grace: its worker is stuck in a native call.
+fn overdue() -> bool {
+    running()
+        && STARTED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() > run::PROBE_DEADLINE + STALL_GRACE)
+}
 
 /// The bundled clips, by file stem.
 const CLIPS: [&str; 8] = ["h264", "aac", "hevc", "hevc10", "av1", "vp9", "ac3", "eac3"];
@@ -45,25 +71,47 @@ pub fn running() -> bool {
 
 /// The platform's `packet_probe` hook (`plx_os::tv::packet_probe`): start a probe, or say where it stands.
 pub fn command(command: Command) -> Status {
-    if command == Command::Start && !running() {
-        if crate::HOSTED.player_live() {
-            log("esprobe: refused: the host's player is open");
+    let stalled = overdue();
+    if command == Command::Start {
+        if stalled {
+            log("esprobe: refused: the stalled probe still holds its worker");
             return Status::Refused;
         }
-        let packed = |pass: u32, fail: u32| (u64::from(pass) << 32) | u64::from(fail);
-        if !start(&crate::HOSTED, &crate::layout::payload_dir(), move |pass, fail| LAST.store(packed(pass, fail), Ordering::Release)) {
-            return Status::Refused;
+        if !running() {
+            if crate::HOSTED.player_live() {
+                log("esprobe: refused: the host's player is open");
+                return Status::Refused;
+            }
+            if !start(&crate::HOSTED, &crate::layout::payload_dir(), move |pass, fail| LAST.store(pack(pass, fail), Ordering::Release)) {
+                return Status::Refused;
+            }
         }
     }
-    status_of(running(), LAST.load(Ordering::Acquire))
+    if stalled && !STALL_SAID.swap(true, Ordering::AcqRel) {
+        let (pass, fail) = unpack(LIVE.load(Ordering::Acquire));
+        log(&format!(
+            "esprobe: timeout: no end {} s after the start (a native call has not returned); reported done as pass={pass} fail={}",
+            (run::PROBE_DEADLINE + STALL_GRACE).as_secs(),
+            fail.saturating_add(1)
+        ));
+    }
+    status_of(running(), LAST.load(Ordering::Acquire), LIVE.load(Ordering::Acquire), stalled)
 }
 
-/// What [`command`] answers from the running flag and the packed last tally.
-fn status_of(running: bool, last: u64) -> Status {
-    match (running, last) {
-        (true, _) => Status::Running,
-        (false, NEVER) => Status::Idle,
-        (false, packed) => Status::Done { pass: (packed >> 32) as u32, fail: packed as u32 },
+/// What [`command`] answers from the running flag, the packed last and live tallies, and whether the run is overdue: a
+/// stalled run reads done, its tally so far with one more FAIL for the step that never returned.
+fn status_of(running: bool, last: u64, live: u64, overdue: bool) -> Status {
+    match (running, overdue, last) {
+        (true, false, _) => Status::Running,
+        (true, true, _) => {
+            let (pass, fail) = unpack(live);
+            Status::Done { pass, fail: fail.saturating_add(1) }
+        }
+        (false, _, NEVER) => Status::Idle,
+        (false, _, packed) => {
+            let (pass, fail) = unpack(packed);
+            Status::Done { pass, fail }
+        }
     }
 }
 
@@ -116,6 +164,9 @@ pub fn start(hosted: &'static Hosted, payload_dir: &Path, on_done: impl FnOnce(u
         return false;
     }
     let dir = payload_dir.join("esprobe");
+    LIVE.store(0, Ordering::Release);
+    STALL_SAID.store(false, Ordering::Release);
+    *STARTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     let started = plx_base::task::spawn("esprobe", move || {
         // Cleared however the worker ends: a panic in the run must not leave the row reading Running and every later
         // start refused for the rest of the session.
@@ -132,7 +183,7 @@ pub fn start(hosted: &'static Hosted, payload_dir: &Path, on_done: impl FnOnce(u
             .iter()
             .filter_map(|(name, c)| c.as_ref().err().map(|why| (false, format!("clip {name}"), why.clone())))
             .collect();
-        let (pass, fail) = run::run(hosted, scenarios(&clips), preface);
+        let (pass, fail) = run::run(hosted, scenarios(&clips), preface, &|pass, fail| LIVE.store(pack(pass, fail), Ordering::Release));
         log(&format!("esprobe: done pass={pass} fail={fail}"));
         on_done(pass, fail);
     })

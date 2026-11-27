@@ -4,9 +4,19 @@
 //! **Threads.** Every player call is made on this worker, in order, except the display bind, which runs on the host's
 //! main thread (the Ecore main loop owns the window; the URI player's bind is made there too) while the worker waits
 //! for it. The player's callbacks arrive on threads of its own (the runner counts which: the log says so): each one only
-//! pushes a [`Callback`] into the scenario's [`Mailbox`] and wakes the worker. The mailbox is the callbacks' `user_data`;
-//! every mailbox lives until the probe ends, so a callback that arrives after its player was destroyed still finds the
-//! memory it was given.
+//! pushes a [`Callback`] into the scenario's [`Mailbox`] and wakes the worker.
+//!
+//! **The callbacks' memory.** The mailbox is the callbacks' `user_data`, handed to the library as a counted reference
+//! ([`UserData`]) that is given back only once `esplusplayer_destroy` has returned 0. A player that is not destroyed (its
+//! display bind never answered, its destroy was refused, or the worker unwound with it open) keeps its mailbox for the
+//! rest of the process, so a callback that comes late always finds the memory it was given; the cost is one small
+//! mailbox per such player. A player whose bind is still pending is not stopped or closed either: the host's job may be
+//! calling into it on the main thread.
+//!
+//! **Ending early.** Between calls the worker checks the probe's deadline ([`PROBE_DEADLINE`]) and whether the app went
+//! to the background or is stopping ([`Hosted::backgrounded`]); either cancels the probe ([`Probe::cancel`]), which tears
+//! the current player down through the ordinary teardown and starts nothing more, so no tone plays behind Home and no
+//! decoder stays held. A native call that never returns is not interrupted; [`super::command`] then reports the run done.
 
 use super::api::{self, AudioStreamInfo, EsPacket, VideoStreamInfo};
 use super::clip::Clip;
@@ -22,8 +32,9 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
-/// The whole probe may take this long; past it the current player is torn down and the rest is not run.
-const PROBE_DEADLINE: Duration = Duration::from_secs(180);
+/// The whole probe's budget, checked between calls: past it the current player is torn down and the rest is not run. It
+/// cannot interrupt a call that never returns; [`super::command`] reports such a run done a grace period later.
+pub(super) const PROBE_DEADLINE: Duration = Duration::from_secs(180);
 /// How long the worker waits for the host's main thread to bind the display.
 const DISPLAY_WAIT: Duration = Duration::from_secs(5);
 /// The worker's longest sleep between commands.
@@ -63,8 +74,31 @@ impl Mailbox {
     }
 }
 
-/// The mailbox a callback's `user_data` names. SAFETY (callers): `user` is an `Arc<Mailbox>`'s pointer that the
-/// runner keeps alive until the probe ends.
+/// One player's `user_data`: a counted reference to its mailbox, made with `Arc::into_raw`. Dropping it gives nothing
+/// back (a raw pointer has no destructor), so every end but [`UserData::release`] leaks the reference on purpose,
+/// unwinding included; see the module doc.
+struct UserData(*const Mailbox);
+
+impl UserData {
+    fn new(mailbox: &Arc<Mailbox>) -> UserData {
+        UserData(Arc::into_raw(Arc::clone(mailbox)))
+    }
+
+    fn ptr(&self) -> *mut c_void {
+        self.0 as *mut c_void
+    }
+
+    /// Give the reference back.
+    ///
+    /// # Safety
+    /// The player it was handed to is destroyed (`esplusplayer_destroy` returned 0), so no callback can come later.
+    unsafe fn release(self) {
+        drop(Arc::from_raw(self.0));
+    }
+}
+
+/// The mailbox a callback's `user_data` names. SAFETY (callers): `user` is a [`UserData`] pointer, whose reference is
+/// given back only after its player was destroyed.
 unsafe fn mailbox<'a>(user: *mut c_void) -> Option<&'a Mailbox> {
     (user as *const Mailbox).as_ref()
 }
@@ -117,16 +151,16 @@ unsafe extern "C" fn on_ready_to_seek(t: c_int, offset: u64, user: *mut c_void) 
 struct Player {
     handle: *mut c_void,
     mailbox: Arc<Mailbox>,
+    /// The library's reference to `mailbox`: given back only after a destroy that returned 0.
+    user: UserData,
     /// The display bind was asked of the host and never answered: the host may still touch the handle, so it is never
-    /// destroyed.
+    /// stopped, closed or destroyed.
     display_pending: bool,
 }
 
 struct Runner {
     hosted: &'static Hosted,
     player: Option<Player>,
-    /// Every mailbox ever handed to a player, alive until the probe ends.
-    retired: Vec<Arc<Mailbox>>,
     worker: ThreadId,
     /// The optional first-decoded-picture export is bound.
     first_frame: bool,
@@ -134,16 +168,16 @@ struct Runner {
 
 impl Runner {
     fn open(&mut self) -> Outcome {
-        let mailbox = Arc::new(Mailbox::new(self.worker));
-        self.retired.push(Arc::clone(&mailbox));
         // SAFETY: a bound table (the runner loads it before any scenario); no argument.
         let handle = unsafe { api::esplusplayer_create() };
         if handle.is_null() {
             return Outcome::Open(Err(("create", 0)));
         }
-        self.player = Some(Player { handle, mailbox: Arc::clone(&mailbox), display_pending: false });
-        let user = Arc::as_ptr(&mailbox) as *mut c_void;
-        // SAFETY: a live handle and callbacks of the declared types; `user` outlives the player (see `retired`). Every
+        let mailbox = Arc::new(Mailbox::new(self.worker));
+        let data = UserData::new(&mailbox);
+        let user = data.ptr();
+        self.player = Some(Player { handle, mailbox, user: data, display_pending: false });
+        // SAFETY: a live handle and callbacks of the declared types; `user` outlives the player (see `UserData`). Every
         // callback is set before `open`, as the binding sets them.
         let steps: [(&'static str, c_int); 8] = unsafe {
             [
@@ -269,16 +303,21 @@ impl Runner {
 
     fn teardown(&mut self) -> (Outcome, Option<Arc<Mailbox>>) {
         let Some(player) = self.player.take() else { return (Outcome::Teardown(0, 0, 0), None) };
+        if player.display_pending {
+            // The host's job may be inside `set_ecore_display` on this handle right now: no call is made on it, and its
+            // mailbox is kept (`player.user` is dropped without being released).
+            log("esprobe: the display bind never answered: the player is not stopped, closed or destroyed, and its callbacks' mailbox is kept");
+            return (Outcome::Teardown(-1, -1, -1), Some(player.mailbox));
+        }
         let h = player.handle;
-        // SAFETY: a live handle, released here exactly once (or deliberately leaked, below).
-        let (stop, close) = unsafe { (api::esplusplayer_stop(h), api::esplusplayer_close(h)) };
-        let destroy = if player.display_pending {
-            log("esprobe: the display bind never answered, so the player is left undestroyed (the host may still use it)");
-            -1
+        // SAFETY: a live handle, released here exactly once.
+        let (stop, close, destroy) = unsafe { (api::esplusplayer_stop(h), api::esplusplayer_close(h), api::esplusplayer_destroy(h)) };
+        if destroy == 0 {
+            // SAFETY: the player is destroyed, so no callback of it can come later.
+            unsafe { player.user.release() };
         } else {
-            // SAFETY: as above.
-            unsafe { api::esplusplayer_destroy(h) }
-        };
+            log("esprobe: destroy refused: the callbacks' mailbox is kept");
+        }
         (Outcome::Teardown(stop, close, destroy), Some(player.mailbox))
     }
 
@@ -371,8 +410,14 @@ fn flush_lines(probe: &mut Probe) {
     }
 }
 
-/// The API and layout checks, then every scenario. Returns the tally.
-pub fn run(hosted: &'static Hosted, scenarios: Vec<super::machine::Scenario>, preface: Vec<(bool, String, String)>) -> (u32, u32) {
+/// The API and layout checks, then every scenario. Returns the tally; `progress` is told the tally so far after every
+/// step, on this thread.
+pub fn run(
+    hosted: &'static Hosted,
+    scenarios: Vec<super::machine::Scenario>,
+    preface: Vec<(bool, String, String)>,
+    progress: &dyn Fn(u32, u32),
+) -> (u32, u32) {
     let mut probe = Probe::new(Vec::new());
     for (pass, step, detail) in preface {
         probe.record(pass, &step, &detail);
@@ -417,21 +462,21 @@ pub fn run(hosted: &'static Hosted, scenarios: Vec<super::machine::Scenario>, pr
     }
     let mut probe = probe.with_scenarios(scenarios);
     probe.watch_first_frame(first_frame);
-    let mut runner = Runner { hosted, player: None, retired: Vec::new(), worker: std::thread::current().id(), first_frame };
+    let mut runner = Runner { hosted, player: None, worker: std::thread::current().id(), first_frame };
     let started = Instant::now();
     let now = || started.elapsed().as_millis() as u64;
     let mut current: Option<Arc<Mailbox>> = None;
     loop {
         flush_lines(&mut probe);
+        progress(probe.pass, probe.fail);
         if probe.finished() {
             break;
         }
+        // Both end the probe through the machine (`cancel` is once only), so the open player gets its ordinary teardown.
         if started.elapsed() > PROBE_DEADLINE {
-            let name = probe.scenario_name();
-            probe.record(false, &format!("{name} deadline"), &format!("the probe ran past {} s; stopped here", PROBE_DEADLINE.as_secs()));
-            let (outcome, _) = runner.teardown();
-            log(&format!("esprobe: teardown after the deadline: {outcome:?}"));
-            break;
+            probe.cancel(&format!("the probe ran past {} s; the current player is torn down and the rest is not run", PROBE_DEADLINE.as_secs()));
+        } else if hosted.backgrounded() {
+            probe.cancel("the app went to the background or is stopping; the current player is torn down and the rest is not run");
         }
         let mailbox = runner.player.as_ref().map(|p| Arc::clone(&p.mailbox)).or_else(|| current.clone());
         if let Some(m) = &mailbox {
@@ -465,6 +510,36 @@ pub fn run(hosted: &'static Hosted, scenarios: Vec<super::machine::Scenario>, pr
         }
     }
     flush_lines(&mut probe);
+    progress(probe.pass, probe.fail);
     drop(runner);
     (probe.pass, probe.fail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A player's mailbox outlives every end but a destroy.** The library holds the mailbox as `user_data`; a worker
+    /// that unwinds with the player open, or a player left undestroyed, must leave that memory alive for a late
+    /// callback, and only a destroyed player's reference is given back.
+    #[test]
+    fn a_players_mailbox_outlives_every_end_but_a_destroy() {
+        let mailbox = Arc::new(Mailbox::new(std::thread::current().id()));
+        let unwound = UserData::new(&mailbox);
+        let user = unwound.ptr();
+        assert_eq!(Arc::strong_count(&mailbox), 2);
+        let _ = catch_unwind(AssertUnwindSafe(move || {
+            let _held = unwound;
+            panic!("the worker unwinds with a player open");
+        }));
+        assert_eq!(Arc::strong_count(&mailbox), 2, "the unwind kept the library's reference");
+        post(user, Callback::Eos);
+        assert!(matches!(mailbox.drain(Duration::ZERO)[..], [Callback::Eos]), "a late callback still lands");
+
+        let destroyed = UserData::new(&mailbox);
+        assert_eq!(Arc::strong_count(&mailbox), 3);
+        // SAFETY: no player was ever given this reference.
+        unsafe { destroyed.release() };
+        assert_eq!(Arc::strong_count(&mailbox), 2, "a destroyed player's reference is given back");
+    }
 }

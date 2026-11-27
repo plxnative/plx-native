@@ -380,6 +380,12 @@ impl Hosted {
         self.gate.stopping()
     }
 
+    /// The app is in the background (a pause the loop delivered and no resume since) or stopping: the packet-player
+    /// probe's worker reads it between calls and tears its player down (`esprobe::run`).
+    pub(crate) fn backgrounded(&self) -> bool {
+        self.paused.load(Ordering::SeqCst) || self.gate.stopping()
+    }
+
     /// Ask the host to run `job` on its main thread, through `run_on_host`, without waiting for it. `false`
     /// when a stop was requested (the gate refuses it: a host that stopped the library owns the window's end
     /// with the process's), or the host refused the request; the job is then dropped unrun.
@@ -985,13 +991,16 @@ mod tests {
             w.start(|_| Ok(()), move |_, ()| {
                 let mut rec = Rec::default();
                 let mut states = Vec::new();
+                let mut background = Vec::new();
                 // pause, then resume, then pause again: armed state after each is what is asserted.
                 for (phase, expected_len) in [(Input::Pause, 1usize), (Input::Resume, 2), (Input::Pause, 3)] {
                     hosted.push(phase).unwrap();
                     hosted.deliver(&mut rec);
                     assert_eq!(rec.seen.len(), expected_len, "{:?}", rec.seen);
                     states.push(plx_base::task::watchdog::is_armed());
+                    background.push(hosted.backgrounded());
                 }
+                assert_eq!(background, [true, false, true], "the probe's cancel flag follows the pause and the resume");
                 tx.send((states, rec.seen.clone())).unwrap();
                 while !rec.seen.iter().any(|e| e == "quit") {
                     hosted.deliver(&mut rec);
@@ -1008,6 +1017,7 @@ mod tests {
             ["lifecycle DidBackground", "lifecycle DidForeground", "lifecycle DidBackground"]
         );
         hosted.stop(Duration::from_secs(30));
+        assert!(hosted.backgrounded(), "a stop cancels the probe too");
         w.wait_stopped(1);
         let armed_at_report = seen(|s| s.stopped[0].2);
         assert!(!armed_at_report, "the watchdog was disarmed when on_stopped ran");

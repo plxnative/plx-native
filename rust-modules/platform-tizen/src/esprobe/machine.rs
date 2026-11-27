@@ -251,11 +251,41 @@ pub struct Probe {
     privilege_told: bool,
     /// The library offers the first-decoded-picture callback, so a video scenario notes whether it came.
     watch_first_frame: bool,
+    /// [`Probe::cancel`] was called: nothing more is started.
+    cancelled: bool,
 }
 
 impl Probe {
     pub fn new(scenarios: Vec<Scenario>) -> Probe {
-        Probe { queue: scenarios.into(), run: None, lines: Vec::new(), pass: 0, fail: 0, privilege_told: false, watch_first_frame: false }
+        Probe {
+            queue: scenarios.into(),
+            run: None,
+            lines: Vec::new(),
+            pass: 0,
+            fail: 0,
+            privilege_told: false,
+            watch_first_frame: false,
+            cancelled: false,
+        }
+    }
+
+    /// End the probe early (the app went to the background or is stopping, or the probe's deadline passed): one FAIL
+    /// that says why, the current player torn down through the ordinary [`Cmd::Teardown`], and no further scenario.
+    /// Once only; the runner calls it between commands, never with one in flight.
+    pub fn cancel(&mut self, why: &str) {
+        if self.cancelled {
+            return;
+        }
+        self.cancelled = true;
+        self.queue.clear();
+        let name = self.scenario_name();
+        self.record(false, &format!("{name} cancelled"), why);
+        if let Some(run) = self.run.as_mut() {
+            run.failed = true;
+            if !matches!(run.phase, Phase::Teardown | Phase::Done) {
+                run.phase = if run.opened { Phase::Teardown } else { Phase::Done };
+            }
+        }
     }
 
     /// The same probe (its tally and unwritten lines) with `scenarios` to run next.
@@ -540,8 +570,12 @@ impl Probe {
                 run.phase = Phase::Done;
                 let ok = stop == 0 && close == 0 && destroy == 0;
                 let detail = format!("stop {stop}, close {close}, destroy {destroy} ({took_ms} ms)");
+                let (failed, name) = (run.failed, run.scenario.name);
                 if ok {
                     self.pass_line("teardown", detail);
+                } else if failed {
+                    // The same cause as the failure before it (a player whose open was refused may refuse its stop too).
+                    self.lines.push(format!("esprobe: {name} after the failure: teardown {detail}"));
                 } else {
                     let name = self.scenario_name();
                     self.record(false, &format!("{name} teardown"), &detail);

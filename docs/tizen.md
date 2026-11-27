@@ -649,7 +649,8 @@ System.Reflection.Metadata dump, the native libraries with `nm -D`, `readelf` an
   `ready_to_prepare` names their stream; `prepare_async_done(true)`; `start`. Times are milliseconds.
 - **The payload is the Feed engine's own**: Annex-B H.264 and HEVC with the parameter sets in-band on the keyframe and no codec data,
   B-frames in decode order, ADTS AAC, AV1 with its `av1C` as codec data, VP9 as demuxed. HDR10 rides the first packet after a prepare
-  or seek as the packet's `matroska_color_info` (the mastering display and content light levels); HDR10+ has a metadata pointer of its
+  (and, by the binding's design, after a seek: not verified, since the probe never seeks the `hevc10` clip) as the packet's
+  `matroska_color_info` (the mastering display and content light levels); HDR10+ has a metadata pointer of its
   own; the packet has no Dolby Vision field.
 - **The clock** is `esplusplayer_get_playing_time` (ms). **Seek** is `esplusplayer_seek(ms)`, then `ready_to_seek(stream, offset)` per
   stream, the feed resumed from the keyframe at or before the offset, then `seek_done`; the probe never calls `esplusplayer_flush`.
@@ -675,7 +676,10 @@ survives `RELEASE=1` (it is not a dev trigger). It plays only the clips this pac
 `tools/make-esprobe-clips.py` from FFmpeg's test sources, and a PCM tone it makes), never the viewer's media; it asks no server and writes
 nothing but its log lines. One run at a time, refused while the host's player is open (`Busy`; only at the start: a title opened during a run contends with
 the probe for the decoder, so the tester must not play anything until the row shows the tally); the row then reads `Running` and, at the
-end, the tally (`57 passed, 5 failed` on the emulator), so a run whose log was lost still says how it went.
+end, the tally (`57 passed, 5 failed` on the emulator), so a run whose log was lost still says how it went. The run ends early, with a
+`cancelled` FAIL and the current player torn down, when the app goes to the background or stops, and at 180 s; a run stuck in a native
+call reads done 30 s after that, with one more FAIL and an `esprobe: timeout:` line. A failure counts once per scenario: what the same
+cause raises after it (a later callback, a refused teardown) is an `after the failure:` note.
 
 The code is `rust-modules/platform-tizen/src/esprobe/`: `clip.rs` (the clip format), `api.rs` (the library's functions, structs and
 constants, each from the binding), `machine.rs` (the Sans-IO logic: which call next and what an answer means, tested over a simulated
@@ -725,7 +729,10 @@ route's failure read-out nor the Settings page draws.
   does. The only host-thread call is `set_ecore_display`, through `Hosted::on_host`.
 - **Threads and Sans-IO.** The sink is a runner, not a machine: it owns the player handle on one worker (`plx_base::task::spawn`, inside
   the existing ledgers), submits from the engine's feed, and turns every callback into one event posted to a mailbox (the probe's
-  `Mailbox`, keyed by `user_data`, never a static), which the engine drains as it drains Starfish's. The engine's machines are unchanged.
+  `Mailbox`, keyed by `user_data`, never a static), which the engine drains as it drains Starfish's. The library's reference to a
+  mailbox is given back only after a destroy that returned 0; a player left undestroyed (a display bind that never answered, a refused
+  destroy, an unwinding worker) keeps its mailbox, and one whose bind is pending gets no call at all (the probe's `UserData`). The
+  engine's machines are unchanged.
 - **FFmpeg in the TPK.** The same bundled FFmpeg 9.0 (`ci/build-ffmpeg.sh`: LGPL, `-plx` suffix, no network), built for armv7 with the
   pinned NDK the Tizen armv7 link already uses and for x86_64 for the emulator, staged under `res/` and checked by `verify_tpk` the way
   #1576 stages `libass-plx`, and opened by absolute path from the payload directory, as `media-codecs/src/ffi.rs` opens it on webOS. Its
@@ -737,8 +744,9 @@ route's failure read-out nor the Settings page draws.
   straight-alpha mixing ("The video plane", above) apply unchanged.
 - **A mid-play track switch** is a reload, the webOS rule: close the player and open a new one at the current position, never a stream
   swap on a live player.
-- **Composition.** `player/compose.rs` installs only `TizenUriDriver`. With the Feed sink it installs both when the probe's checks pass
-  at boot (the library opens and its sizes match), and the planner chooses between them per title as it does on webOS: the URI driver
+- **Composition.** `player/compose.rs` installs only `TizenUriDriver`. With the Feed sink it installs both, and the Feed's own checks (the
+  library opens and its sizes match) run at its first use, never at boot: a viewer who never needs the Feed pays no `dlopen` of the
+  player stack (review-checklist item 3), and the planner chooses between them per title as it does on webOS: the URI driver
   for the host player's direct play, Feed for what needs the app's demux (remux, app-decoded audio, picture subtitles).
 
 **Unknowns the tester's log answers:** whether a retail Tizen 9.0 set opens `libesplusplayer.so` and with what sizes; whether create
