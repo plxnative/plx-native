@@ -3,10 +3,9 @@
 //!
 //! The Detail hero's disc, the `…` menu's row and the playback failure screen's entry all open the
 //! same two-level panel, so the rows live here once and each host owns only its surface. A host
-//! pushes the pages it is asked for (`PickPage`), shows [`root_form`] / [`audio_form`] /
-//! [`subtitle_form`] on its own `FormTable`, resolves a focused row to a [`Pick`] ([`pick_of`]),
-//! and commits with [`commit`]. BACK pops a page before it dismisses, and a push or pop slides the
-//! two pages: the pages are `ui::menu`'s (one stack, one slide, one header with the back mark).
+//! holds a [`PickerState`], whose `ui::menu::Menu` owns the form, the stack and the slide (one stack,
+//! one slide, one header with the back mark); the host feeds it `Event`s, resolves a focused row to a
+//! [`Pick`] ([`pick_of`]) and commits with [`commit`]. BACK pops a page before it dismisses.
 //!
 //! **Not a second track list.** Audio rows are [`crate::track_menu::audio_track_row`], the
 //! in-player Audio tab's own row; the Subtitles page is `metadata::sub_layout::sub_sections`

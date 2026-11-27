@@ -743,7 +743,9 @@ tried first. None of it is reconstructable from the code without repeating the m
   copy; no menu takes that path any more. A source-grep test (`widgets_glass_budget_tests`) keeps `Glass` and
   `Painter::backdrop_blur` out of every file except the chrome list — no popover and no screen
   names the blur path — and pins the scope: the menu files name `Ground::Menu`, the sheet files
-  `Ground::Sheet`, and none names the other.
+  `Ground::Sheet`, and none names the other. The one exception is `ui/src/menu.rs`, which names both and
+  derives the choice from its `Host`; the four Detail hosts built on it (`item_menu`, `alt_sources`,
+  `versions_panel`, `preplay_panel`) name no ground and are asserted not to, so a host cannot choose one.
 
 - **Glass over a page stands on the frozen host; the page does not move while a menu is up, except
   under a menu that lets it reflow.**
