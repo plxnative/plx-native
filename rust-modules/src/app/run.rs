@@ -10180,7 +10180,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
             return;
         };
         let mut fr = refuse_restore(&mut rig);
-        // The refused restore leaves no engine and no read-out of its own, so the press this test makes has no button to
+        // The refused restore leaves the player Idle with no engine and no read-out of its own (it never captures a
+        // failure, however many frames run), so the press this test makes has no button to
         // come from: capture the transient failure the read-out would draw *Try again* on (the door judges a recovery
         // against the captured failure), exactly as the frame does for the dev trigger's "connection" arm.
         plx_media::player::observe_failure(
