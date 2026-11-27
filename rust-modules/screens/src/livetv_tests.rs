@@ -1055,12 +1055,13 @@ fn ch_plus_and_ch_minus_turn_the_page_by_six() {
     let from = cell_elem(&screen, 1, 0);
     let (handled, out) = step_handled(&mut screen, view, Some(from), &ch_up);
     assert_eq!(handled, Handled::Yes);
-    // row 1 + 6 = 7, the last of 8 channels
-    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 0)]);
+    // row 1 + 6 = 7, the last of 8 channels; row 1's programme has 50 minutes left (10 to 60), of which row 7's second half
+    // shares 30 and its first 20: a landing counts what is left of the programme, not what has aired of it
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 1)]);
     assert_eq!(board(&screen).grid.page(), 1, "the page is showing before focus lands on it");
     assert_eq!(board(&screen).grid.indicator(), (7, 8, 8));
     // and back
-    let (_, out) = step_handled_at(&mut screen, view, 7, 0, &ch_down);
+    let (_, out) = step_handled_at(&mut screen, view, 7, 1, &ch_down);
     assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 1, 0)]);
     assert_eq!(board(&screen).grid.page(), 0);
     // the first page has none before it, the last none after it
