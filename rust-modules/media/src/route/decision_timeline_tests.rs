@@ -1920,6 +1920,32 @@ fn a_live_plan_abandoned_after_its_tune_still_stops_the_recording() {
     assert!(abandoned_plan_resources(&Plan::default()).is_none());
 }
 
+/// **A build that unwinds after its tune still names the session it tuned.** The resolve worker
+/// catches a panicking `build_stream` and lands an empty plan in its place, and an empty plan names
+/// nothing to stop: the tuner the tune took stayed held until the server expired the session. Past
+/// the tune the build is guarded, so the plan that lands is the tuned one, failed (no URL, no
+/// verdict), and a failed landing retires what it names (`abandoned_plan_resources`), the live
+/// session's `stopped` included.
+#[test]
+fn a_live_build_that_unwinds_after_its_tune_still_names_the_session_to_stop() {
+    let live = plx_plex::plex::livetv::LiveSession { key: "/livetv/sessions/abcdef01".into(), rating_key: String::new() };
+    // What the resolve worker does with `build_stream`: a panic lands as an empty plan.
+    let landed = std::panic::catch_unwind(|| {
+        let mut plan = Plan { sid: ServerId::from_raw(3), sess: "s1".into(), live: Some(live.clone()), ..Default::default() };
+        keep_the_tune_if_it_unwinds(&mut plan, |plan| {
+            plan.url = "http://127.0.0.1/half-built".into();
+            panic!("a fault after the tune");
+        });
+        plan
+    })
+    .unwrap_or_else(|_| Plan::default());
+    assert!(landed.url.is_empty(), "a half-built URL never plays: {}", landed.url);
+    assert!(landed.verdict.is_none());
+    let resources = abandoned_plan_resources(&landed).expect("the tuned session is still a server object to retire");
+    assert_eq!(resources.live, Some((live, "s1".to_string())));
+    assert_eq!(resources.identities, vec!["s1".to_string()]);
+}
+
 #[test]
 fn a_full_stop_retires_the_live_request_but_replacement_keeps_its_descriptor() {
     let mut ps = PlaybackSession::IDLE;

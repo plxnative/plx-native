@@ -3438,7 +3438,6 @@ fn build_live_stream(
     env: &ResolveEnv, plan: &mut Plan,
 ) {
     use plx_plex::plex::livetv::TuneOutcome;
-    use plx_playback_contract::demux::hls_accepts_codecs;
     let session = new_sess("");
     plan.sess = session.clone();
     let live = match client.tune(off, &tune.dvr, &tune.channel, &session) {
@@ -3450,7 +3449,33 @@ fn build_live_stream(
         }
     };
     plan.live = Some(live.clone());
-    let Some(play) = client.live_part(off, &live, &session) else {
+    keep_the_tune_if_it_unwinds(plan, |plan| live_plan(off, client, env, plan, &live, &session));
+}
+
+/// **The tune outlives a fault in the build after it.** A tuned session is a server object that
+/// holds one of the server's tuners until its `stopped`, and only this plan names it. The resolve
+/// worker catches a panicking `build_stream` and lands an empty plan in its place, which names
+/// nothing to stop, so a fault past the tune left the tuner held until the server expired the
+/// session. Here the fault is caught where the plan is still in hand: the plan keeps its session,
+/// its live session and any conversion id the decision registered, loses the URL it may have
+/// half-built and any verdict, and lands as a failed plan, whose landing retires what it names
+/// (`abandoned_plan_resources`), the live session's `stopped` first.
+pub(super) fn keep_the_tune_if_it_unwinds(plan: &mut Plan, after_tune: impl FnOnce(&mut Plan)) {
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| after_tune(&mut *plan))).is_err();
+    if unwound {
+        crate::player::log("livetv: the stream build unwound after the tune; the failed plan keeps the session to stop");
+        plan.url.clear();
+        plan.verdict = None;
+    }
+}
+
+/// Everything after a successful tune: the session's own playlist, or its conversion.
+fn live_plan(
+    off: &plx_base::task::OffFrame, client: &plx_plex::plex::Client, env: &ResolveEnv, plan: &mut Plan,
+    live: &plx_plex::plex::livetv::LiveSession, session: &str,
+) {
+    use plx_playback_contract::demux::hls_accepts_codecs;
+    let Some(play) = client.live_part(off, live, session) else {
         crate::player::log("livetv: the decision named no playlist");
         return;
     };
@@ -3477,10 +3502,10 @@ fn build_live_stream(
         plan.src_acodec = plan.acodec.clone();
         plan.tsession.clear();
         plan.contract = plx_plex::plex::EncodeContract::default();
-        plan.url = client.direct_play_url(&play.part, &session).to_url();
+        plan.url = client.direct_play_url(&play.part, session).to_url();
     };
     if plan.source_decodable && mode != DirectPlayMode::Disabled {
-        plan.url = client.direct_play_url(&play.part, &session).to_url();
+        plan.url = client.direct_play_url(&play.part, session).to_url();
         return;
     }
     if mode == DirectPlayMode::Forced {
@@ -3499,12 +3524,12 @@ fn build_live_stream(
         no_video_copy: !video,
         ..Default::default()
     };
-    let mut spec = transcode_spec_carrying_burn(&env.caps, "", 0, &session, &session,
+    let mut spec = transcode_spec_carrying_burn(&env.caps, "", 0, session, session,
         plx_plex::plex::TranscodeOffset::Fresh, 0, 0, true, plan.contract);
     spec.source = plx_plex::plex::TranscodeSource::Live(&live.key);
     // The decision may register resources even on refusal; both owners must survive for cleanup
     // (they are one id here, so the as-recorded read below keeps it as the playback session).
-    plan.tsession = session.clone();
+    plan.tsession = session.to_owned();
     let decision = client.transcode_decision(off, &spec);
     let refused = decision.as_ref().map_or(Some(None), |d| refusal(d).map(Some));
     if let Some(reason) = refused {
