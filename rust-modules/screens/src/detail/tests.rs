@@ -6235,6 +6235,9 @@ mod hero_shade;
 #[path = "no_driver_tests.rs"]
 mod no_driver;
 
+#[path = "failed_tests.rs"]
+mod failed_page;
+
 /// W6c: a platform that composes no playback driver leaves Detail's Play pill inert (it owns no focus
 /// stop either: `no_driver`'s tests). The same press with a driver composed starts the play, so the
 /// guard is the only difference.
