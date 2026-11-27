@@ -1,4 +1,4 @@
-{"updated":"2026-11-27T11:35:33Z",
+{"updated":"2026-11-27T12:07:11Z",
 "ci":[
 {"id":33248488089,"at":"2026-08-29T10:43:47Z","sha":"37a5160c4","title":"Merge branch 'abr-mode-flap' into main","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":111},"failed":["host checks (NOT a device gate)"]},
 {"id":33276894833,"at":"2026-08-29T21:45:48Z","sha":"87aae35ff","title":"ui: a control on video is a light film, and a capsule is not a stadium","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
@@ -6146,7 +6146,8 @@
 {"id":45983823328,"at":"2026-11-27T10:38:37Z","sha":"6ddd62f6b","title":"Refused pick: settle the race per field, supersede older rebuild memos, seed from the fetched flags","pr":1591,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":16,"macOS simulator build + launch":209,"Linux simulator build + launch":300,"macOS tests against bundled FFmpeg and ASS":277}},
 {"id":45987709716,"at":"2026-11-27T11:06:33Z","sha":"8e5c5e612","title":"Write-back test: the server keeps its own audio under a subtitle-only PUT","pr":1591,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":334,"Windows launcher syntax":19,"macOS simulator build + launch":309,"macOS tests against bundled FFmpeg and ASS":195}},
 {"id":45989518005,"at":"2026-11-27T11:19:26Z","sha":"9e640b1a1","title":"Selection queue: a panicking send releases its waiters instead of stranding the queue","pr":1591,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":137,"macOS simulator build + launch":296,"Linux simulator build + launch":405,"Windows launcher syntax":22}},
-{"id":45990733267,"at":"2026-11-27T11:28:17Z","sha":"da4469c33","title":"Playback: a track pick the server refuses is not kept","pr":1591,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":345,"Windows launcher syntax":19,"macOS simulator build + launch":346,"macOS tests against bundled FFmpeg and ASS":206}}
+{"id":45990733267,"at":"2026-11-27T11:28:17Z","sha":"da4469c33","title":"Playback: a track pick the server refuses is not kept","pr":1591,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":345,"Windows launcher syntax":19,"macOS simulator build + launch":346,"macOS tests against bundled FFmpeg and ASS":206}},
+{"id":45995084388,"at":"2026-11-27T12:00:43Z","sha":"0df6db9c3","title":"Library, Account and Watchlist menus on plx_ui::menu","pr":1590,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":373,"macOS simulator build + launch":337,"Windows launcher syntax":21,"macOS tests against bundled FFmpeg and ASS":241}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
