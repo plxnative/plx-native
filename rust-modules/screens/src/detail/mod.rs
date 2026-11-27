@@ -1973,7 +1973,8 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         // the item brings back (Go to Show, Restart, Play Version) is not gone, only not here yet, so
         // a focus held on one stays there: sent to Play for the length of the load, it would be
         // Play's by the time the item landed, and the restore (`restore_focus`) is spent on a focus
-        // that has already been moved. `pump_restore` ends the wait when the request fails.
+        // that has already been moved. `pump_restore` ends the wait when the request fails, and the page
+        // is then the failed read-out, whose seat is Try again (`reconcile` answers it first).
         if self.return_pending && self.detail(meta).is_none() && hero::HeroCtl::of_elem(want.elem).is_some() {
             return want;
         }
@@ -4054,9 +4055,9 @@ impl DetailScreen {
         if self.detail(meta).is_none() && meta.detail_request_status(self.sid, &self.rk) == Some(false) {
             self.restore_intent = None;
             self.return_pending = false;
-            // Nothing draws without a detail but the hero, which is faded out past `HERO_FADE`, and
-            // `reveal_focus` holds off without one: a body that kept its scroll through
-            // `restore_memory` would sit on the backdrop alone.
+            // The request failed: the page is the failed read-out (`failed`), which has no body to
+            // scroll, and `reveal_focus` holds off without a detail: a body that kept its scroll
+            // through `restore_memory` would sit past the top of a page that has nothing below it.
             self.scroll_target = 0.0;
             return;
         }
