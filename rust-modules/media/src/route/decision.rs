@@ -14779,10 +14779,11 @@ pub fn enhancement_test_session(route: EnhTestFixture) -> (PlaybackSession, Serv
 /// CONTAINER audio ordinal (the menu converts its row via metadata::audio_ordinal); `audio` itself
 /// is the frozen `CarriedAudio` snapshot (issue #266) the menu built via `CarriedAudio::from_stream`.
 ///
-/// **Returns whether the route accepted the pick**, which is what the track memory is written on: it
-/// is `false` only for the Forced refusal (the pick is not played and the verdict says so). A pick
-/// deferred behind a pending Original handoff, or one the enhancement reconcile re-routes, is
-/// accepted.
+/// **Returns whether the route accepted the pick**: `false` only for the Forced refusal (the pick is
+/// not played and the verdict says so). A pick deferred behind a pending Original handoff, or one
+/// the enhancement reconcile re-routes, is accepted. The track memory is NOT written on this bool but
+/// on [`commit_audio_selection_routed`]'s [`PickRoute`]: only `Applied` writes at once, a rebuild's
+/// memo rides its claim.
 ///
 /// **While the subtitle mode is Forced only the pick also re-points it** (FO): the forced
 /// track in the language of the audio just chosen is committed as a derived selection
