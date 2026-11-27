@@ -164,23 +164,26 @@ fn a_rung_on_the_failure_persists_then_repeats_the_request_as_a_quality_change()
     route::cancel_play(&mut app.player.session);
 }
 
-/// A rung whose retry is refused still persists, and still reports `true`: the viewer's choice is kept for the next try.
+/// A rung on a failure with NOTHING to resolve again (a URL playback has no Plex request) is refused: its row draws no
+/// *Change quality*, so a rung that reaches the app (a `...` popover that was already open when the failure landed, the
+/// socket) is neither persisted nor retried. This is the one place the door differs from the performers it replaced,
+/// which persisted the rung and reported `true` for any Error; no button of the row can reach it.
 #[test]
-fn a_rung_whose_retry_is_refused_is_still_persisted_and_taken() {
+fn a_rung_with_nothing_to_retry_is_refused_not_persisted() {
     let _serial = plx_base::testlock::serial();
     let _tidy = Tidy::new();
     let mut app = app();
-    // an Error with a verdict, but no Plex request to resolve again (a URL playback)
     route::refuse_for_test(&mut app.player.session, PlayVerdict::Server("Cannot convert.".into(), route::DecisionCodes::default()));
     player::observe_failure(&mut app.player.session, FailureTrigger::NONE, player::report::attempt_id());
-    let rung = if route::quality() == Quality::P720 { Quality::P480 } else { Quality::P720 };
+    assert!(!row(&app).contains(&player::FailureAction::ChangeQuality), "rig: {:?}", row(&app));
+    let quality = route::quality();
+    let rung = if quality == Quality::P720 { Quality::P480 } else { Quality::P720 };
     let mut present = plx_machine::present::Present::new();
     let took = crate::app::playback::apply_quality(
         &mut app.player.session, &mut app.adapters.player, &mut app.runtime.bridge(&mut app.bridge), rung, &mut present);
-    assert!(took, "the failed arm reports true whether or not the retry started");
-    assert_eq!(route::quality(), rung, "the rung was persisted ahead of the retry");
-    assert!(!route::play_pending(), "no request: nothing started");
-    assert!(!present.page_damaged(), "nothing started: nothing damaged");
+    assert!(!took, "a rung the failure does not offer is refused");
+    assert_eq!(route::quality(), quality, "and not persisted");
+    assert!(!route::play_pending() && !present.page_damaged(), "nothing started, nothing damaged");
 }
 
 /// A server's stop ends the playback: no recovery of any kind is taken, and nothing is written.
@@ -224,10 +227,45 @@ fn a_rung_over_a_forced_read_out_is_not_a_recovery() {
     assert!(!route::play_pending(), "the live ladder asks nothing of the resolver for a session that is not playing");
 }
 
+/// **A recovery the failure does not offer is refused, and writes nothing**: *Play automatically* on a failure that is
+/// not under Force or Disabled (so its row never drew it) neither persists Auto nor retries, and the failure stands.
+#[test]
+fn a_recovery_the_row_does_not_offer_changes_nothing() {
+    let _serial = plx_base::testlock::serial();
+    let _tidy = Tidy::new();
+    let mut app = interrupted();
+    assert!(!row(&app).contains(&player::FailureAction::PlayAutomatically), "rig: {:?}", row(&app));
+    let (mode, quality) = (route::direct_play_mode(), route::quality());
+    let seen = press(&mut app, PlayerRequestOf::play_automatically());
+    assert_eq!(seen, Seen {
+        pending: false, request: Some("m1".into()), origin: seen.origin, failure_cleared: false,
+        mode, mode_publishes: 0, quality, damaged: false,
+    });
+}
+
+/// **A recovery before the failure is captured is refused**, not guessed at: an Error the frame has not captured yet
+/// has no row to offer anything.
+#[test]
+fn a_recovery_before_the_failure_is_captured_is_refused() {
+    let _serial = plx_base::testlock::serial();
+    let _tidy = Tidy::new();
+    let mut app = app();
+    route::seed_request_for_test(&mut app.player.session, "m1");
+    route::refuse_for_test(&mut app.player.session, PlayVerdict::Server("Cannot convert.".into(), route::DecisionCodes::default()));
+    assert!(route::failure(&app.player.session).is_none(), "rig: nothing captured");
+    let quality = route::quality();
+    let rung = if quality == Quality::P720 { Quality::P480 } else { Quality::P720 };
+    let mut present = plx_machine::present::Present::new();
+    assert!(!crate::app::playback::apply_quality(
+        &mut app.player.session, &mut app.adapters.player, &mut app.runtime.bridge(&mut app.bridge), rung, &mut present));
+    assert_eq!(route::quality(), quality);
+    assert!(!route::play_pending());
+}
+
 /// The requests the screen's failure row emits for its two retrying buttons. One place, so that moving the buttons onto
 /// the typed recovery door changes this and nothing the tests assert.
 struct PlayerRequestOf;
 impl PlayerRequestOf {
-    fn try_again() -> PlayerReq { PlayerReq::RetryPlayback }
-    fn play_automatically() -> PlayerReq { PlayerReq::PlayAutomatically }
+    fn try_again() -> PlayerReq { PlayerReq::Recover(player::Recovery::RetrySame) }
+    fn play_automatically() -> PlayerReq { PlayerReq::Recover(player::Recovery::PlayAutomatically) }
 }

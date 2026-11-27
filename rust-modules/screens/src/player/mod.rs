@@ -1309,8 +1309,8 @@ impl PlayerScreen {
         let Some(action) = readout.actions().get(idx).copied() else { return };
         self.failure_sel = idx;
         match action {
-            A::PlayAutomatically => Self::ask(fx, PlayerReq::PlayAutomatically),
-            A::TryAgain => Self::ask(fx, PlayerReq::RetryPlayback),
+            A::PlayAutomatically => Self::ask(fx, PlayerReq::Recover(plx_media::player::Recovery::PlayAutomatically)),
+            A::TryAgain => Self::ask(fx, PlayerReq::Recover(plx_media::player::Recovery::RetrySame)),
             A::ChangeQuality => Self::ask(fx, PlayerReq::OpenOverlay(overlay::OverlayKind::More { page: Some(plx_appkit::more_menu::MorePage::Quality) })),
             // The picker hangs off the control that opened it, by the drawn rect (the Detail hero's rule), not
             // off a fallback: it opens beside its own button and keeps that anchor when a page is pushed.
@@ -2944,7 +2944,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
             frames.get(at).copied().flatten()?;
             let action = *readout.actions().get(at)?;
             let item = A11y::new(A11yPath::new().name("failure").name(player_hud::failure_action_word(action)), Role::Button);
-            // Try again and Play automatically resolve the failed request again (`app::playback::retry_failed_playback`,
+            // Try again and Play automatically resolve the failed request again (`app::playback::perform_recovery`,
             // `route::retry_current_play`): the key of THAT request, which a play that failed before its plan landed
             // holds and `cur_rk` does not. Change quality, Repair and Back start no title.
             use plx_media::player::FailureAction as Fail;
@@ -4858,7 +4858,7 @@ pub(crate) mod step_ladder_tests {
     }
 
     /// **The failure read-out's Try again and Play automatically resolve the failed REQUEST again**
-    /// (`retry_failed_playback`, `route::retry_current_play`), so each names the request's key and not `cur_rk`: a
+    /// (`perform_recovery`, `route::retry_current_play`), so each names the request's key and not `cur_rk`: a
     /// play that failed before its plan landed holds the item it asked for in the one and the previous item in the
     /// other. Change quality, Repair and Back start no title and name none; a session that made no request (a URL)
     /// has nothing to retry and names none.
@@ -4949,8 +4949,8 @@ pub(crate) mod step_ladder_tests {
                 _ => None,
             }).collect::<Vec<_>>()
         };
-        assert_eq!(asked(&mut page, 0), [PlayerReq::PlayAutomatically]);
-        assert_eq!(asked(&mut page, 1), [PlayerReq::RetryPlayback]);
+        assert_eq!(asked(&mut page, 0), [PlayerReq::Recover(plx_media::player::Recovery::PlayAutomatically)]);
+        assert_eq!(asked(&mut page, 1), [PlayerReq::Recover(plx_media::player::Recovery::RetrySame)]);
         assert_eq!(asked(&mut page, 2), [PlayerReq::OpenOverlay(overlay::OverlayKind::More {
             page: Some(plx_appkit::more_menu::MorePage::Quality) })]);
         assert!(matches!(asked(&mut page, 3).as_slice(), [PlayerReq::OpenFailedTracks { .. }]));

@@ -10180,12 +10180,15 @@ pub(in crate::app) mod lifecycle_regression_tests {
             return;
         };
         let mut fr = refuse_restore(&mut rig);
+        // the frame captures the failure the read-out draws *Try again* on; the press is a recovery of that failure
+        super::player_presentation::capture_failure(&mut rig.app);
+        assert!(plx_media::route::failure(&rig.app.player.session).is_some(), "the refused restore is a captured failure");
 
         player_requests(
             &mut rig.app.player,
             &mut rig.app.adapters.player,
             &mut rig.app.repause_at,
-            vec![plx_screens::registry::PlayerReq::RetryPlayback],
+            vec![plx_screens::registry::PlayerReq::Recover(plx_media::player::Recovery::RetrySame)],
             fr.now,
             &mut rig.app.refresh_hubs,
             &mut rig.app.pages,
