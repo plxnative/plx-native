@@ -819,6 +819,11 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 fx.invalidate(plx_machine::present::Provenance::Input);
                 Handled::Yes
             }
+            ScreenEvent::App(AppMsg::LiveChannelPicked { sid, dvr, channel }) => {
+                self.live_pick(H::session(cx), H::lineup(cx), (*sid, dvr, channel), cx.tick.ms);
+                fx.invalidate(plx_machine::present::Provenance::Input);
+                Handled::Yes
+            }
             ScreenEvent::App(AppMsg::PlayerStart { now, hud_ms }) => {
                 self.live.started(*now);
                 self.hud = HudState::IDLE;
@@ -3792,7 +3797,7 @@ pub(crate) mod step_ladder_tests {
         let channel = plx_data::livetv::Channel {
             sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(), channel: "C101.242.ersatztv.org".into(),
             vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: "Family Show".into(),
-            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600,
+            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600, later: Vec::new(),
         };
         let mut ps = plx_media::route::PlaybackSession::IDLE;
         plx_media::route::mark_live_channel_for_test(&mut ps, channel);

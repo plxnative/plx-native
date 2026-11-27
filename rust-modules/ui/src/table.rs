@@ -192,6 +192,10 @@ pub struct Row {
     /// [`TableView::fit_notes`] has measured it). A cache of a pure function of (text, width,
     /// measure), so it lives in a `Cell` and draw may refresh it through `&self`.
     pub note_lines: std::cell::Cell<u8>,
+    /// A **leading number** ([`Row::lead`]): a short bold run in its own column ahead of the label, the
+    /// way a channel's number leads its station on the lineup face ([`TableView::lineup`]). Only a table
+    /// in that face reserves the column and draws it; every other table ignores it.
+    pub lead: Option<String>,
 }
 impl Row {
     pub fn new(label: impl Into<String>) -> Self {
@@ -216,7 +220,13 @@ impl Row {
             moving: RowMove::Off,
             destructive: false,
             note_lines: std::cell::Cell::new(1),
+            lead: None,
         }
+    }
+    /// The row's leading number (see [`Row::lead`]'s field): `2010` before `PBS Nature`.
+    pub fn lead(mut self, number: impl Into<String>) -> Self {
+        self.lead = Some(number.into());
+        self
     }
     /// A [`Row::note`]: `sep` with text (a bare `sep` is the hairline).
     pub fn is_note(&self) -> bool {
@@ -574,6 +584,11 @@ const CHECK_W: f32 = 32.0; // leading check column
 const GAP: f32 = 16.0; // check→label gap
 /// The leading column every row's label stands past: the check column and its gap to the label.
 const LABEL_INSET: f32 = CHECK_W + GAP;
+/// The lineup face's leading number column ([`TableView::lineup`]): wide enough for a four-digit channel
+/// number at BODY bold, and the label starts one hairline gap ([`theme::space::XS`]) past it.
+pub const LEAD_W: f32 = 72.0;
+/// The lineup face's pill corner radius (a list of channel rows, not a menu of actions).
+const LINEUP_PILL_RAD: f32 = 12.0;
 /// Focused-row pill corner radius. `pub` for the [`ROW_H`] caller shape.
 pub const PILL_RAD: f32 = 18.0;
 /// Pill inset from the row's top/bottom. `pub` for the [`ROW_H`] caller shape.
@@ -771,10 +786,17 @@ pub struct TableView {
     ///
     /// Defaults to `true`, so every panel whose list is the only focusable thing is unchanged.
     pub list_focused: bool,
-    /// compact size class: BODY regular row LABELS instead of the default HEADLINE bold (HEADLINE-bold
-    /// rows overwhelmed the small account popover, a panel of one-word actions). Set it on every
-    /// ACTION menu — the item context menu, account, more, and the library sort/filter/genre menus
-    /// all do; only a PICKER of title+detail rows stays on the default.
+    /// **The size class: ONE per glass.** Compact = BODY regular row LABELS (and two-line titles) instead
+    /// of the default HEADLINE bold; the detail line stays at CAPTION in secondary ink in both. HEADLINE-bold
+    /// rows overwhelmed the small account popover, a panel of one-word actions. Set it on every ACTION
+    /// menu — the item context menu, account, more, and the library sort/filter/genre menus all do;
+    /// only a standalone PICKER of title+detail rows (Select Version, Audio & Subtitles, the failure
+    /// screen's) stays on the default.
+    ///
+    /// The class belongs to the surface, never to a page: **a picker pushed into an action menu takes
+    /// the menu's class** (the hero `…` menu's and a tile menu's Select Version and Audio & Subtitles
+    /// pages are BODY regular), so a page push and pop leave it alone (`page_stack::push_page`,
+    /// [`Self::blank_like`] carries it) and the same page on its standalone panel is HEADLINE bold.
     ///
     /// It no longer affects HEADERS: those are CAPS at CAPTION in both classes, because the caps
     /// are what make a header a label and a size that varied could tie with its own rows.
@@ -783,6 +805,8 @@ pub struct TableView {
     tall: bool,
     /// see [`TableView::page`]. Layout configuration like `min_panel_w`, not motion.
     board: bool,
+    /// see [`TableView::lineup`]. Layout configuration like `board`, not motion.
+    lineup: bool,
     /// Semantic ink for section labels. Ambient routes can raise this role for contrast without
     /// replacing the shared table header renderer or changing row/detail hierarchy.
     pub header_ink: [f32; 4],
@@ -830,7 +854,7 @@ impl TableView {
     /// The owner records its row data separately. These fields determine layout, the selected
     /// face and subsequent motion; no text/texture cache or renderer pointer is traversed.
     pub fn write_motion(&self, c: &mut plx_machine::machine::Canon) {
-        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, lift, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
+        let Self { sections: _, sel, list_focused, compact, tall, board: _, lineup: _, header_ink, hl_top, hl_bot, scroll, glide, lift, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
         c.u32(*sel as u32).bool(*list_focused).bool(*compact).bool(*tall);
         for component in header_ink { c.f32(*component); }
         for spring in [hl_top, hl_bot, scroll] { c.f32(spring.pos).f32(spring.vel); }
@@ -849,6 +873,21 @@ impl TableView {
     /// what every other table here has always drawn.
     pub fn tall_rows(&mut self, v: bool) {
         self.tall = v;
+    }
+    /// **The lineup face** (Live TV number entry, SPEC-5): a list of channel rows rather than a menu of
+    /// actions. A row's [`Row::lead`] number stands in its own [`LEAD_W`] column at BODY bold; the label
+    /// (the station) is CAPTION in the secondary ink, and the highlight pill is a 12 px rounded rect.
+    /// Opt-in per table, like [`Self::tall_rows`]; the rows keep every other behaviour.
+    pub fn lineup(&mut self, v: bool) {
+        self.lineup = v;
+    }
+    /// How far a row's label stands from the content edge: the check column's, or in the lineup face
+    /// the number column's plus its gap.
+    fn label_inset(&self) -> f32 {
+        if self.lineup { LEAD_W + theme::space::XS } else { LABEL_INSET }
+    }
+    fn pill_rad(&self) -> f32 {
+        if self.lineup { LINEUP_PILL_RAD } else { PILL_RAD }
     }
     /// **A route page's table** — the Settings family's, set to the design system's `TableView` to
     /// the pixel, and the ONE place that look is defined: every page drawn in a
@@ -920,6 +959,7 @@ impl TableView {
             compact: false,
             tall: false,
             board: false,
+            lineup: false,
             header_ink: theme::TEXT_TERTIARY,
             min_panel_w: MENU_MIN_W,
             hl_top: Spring::at(0.0),
@@ -1222,7 +1262,7 @@ impl TableView {
                     None => primary,
                 };
                 let fixed = trailing_reserved(&trailing_items(row, None, measure, self.board), self.board);
-                width = width.max(2.0 * CONTENT_X + LABEL_INSET + fixed + text);
+                width = width.max(2.0 * CONTENT_X + self.label_inset() + fixed + text);
             }
         }
         width.ceil()
@@ -1399,8 +1439,11 @@ impl TableView {
         }
     }
 
-    fn label_style(&self) -> (std::os::raw::c_int, bool) {
-        if self.compact { (theme::size::BODY, false) } else { (theme::size::HEADLINE, true) }
+    /// The size and weight of a row's label (and a two-line row's title) in this table's class ([`Self::compact`]).
+    pub fn label_style(&self) -> (std::os::raw::c_int, bool) {
+        if self.lineup {
+            (theme::size::CAPTION, false)
+        } else if self.compact { (theme::size::BODY, false) } else { (theme::size::HEADLINE, true) }
     }
 
     /// The same label budget used by rendering and intrinsic-width checks.
@@ -1424,7 +1467,7 @@ impl TableView {
     /// The label is hugged with [`fit::HUG_MARGIN`] before dividing.
     fn row_columns_under(&self, row: &Row, frame_w: f32, measure: &dyn plx_machine::machine::Measure, headroom: f32) -> RowColumns {
         let fixed = trailing_reserved(&trailing_items(row, None, measure, self.board), self.board);
-        let span = (frame_w - 2.0 * CONTENT_X - LABEL_INSET - fixed).max(0.0);
+        let span = (frame_w - 2.0 * CONTENT_X - self.label_inset() - fixed).max(0.0);
         let (label, value) = self.row_runs(row, measure);
         let Some(value) = value else {
             return RowColumns { label_w: span, value_w: 0.0 };
@@ -1949,8 +1992,8 @@ impl TableView {
             };
             self.group_painter(p.alpha(fade), self.section_of_row(self.sel)).rrect(
                 pill,
-                PILL_RAD,
-                PILL_RAD,
+                self.pill_rad(),
+                self.pill_rad(),
                 fill,
             );
         }
@@ -2141,7 +2184,15 @@ impl TableView {
             // Leading column (SVG): the PICKER's tick, or an ACTION's glyph — one or the other, and
             // never a switch. A mark here says WHERE YOU ARE; what a row is SET to is a word at the
             // trailing edge (below), and no row is allowed to say both.
-            let label_x = content_x + LABEL_INSET;
+            let label_x = content_x + self.label_inset();
+            // the lineup face's number column, BODY bold, in the row's own ink
+            if let (true, Some(number)) = (self.lineup, row.lead.as_deref()) {
+                if let Ok(cn) = std::ffi::CString::new(number) {
+                    let (nsz, nbold) = (theme::size::BODY, 1);
+                    let ny = plx_gfx::text::text_vcenter_y(nsz, nbold, cyc);
+                    p.text(cn.as_ptr(), content_x, ny, nsz, base, 0, nbold);
+                }
+            }
             let lead = if row.checked {
                 Some(crate::icons::Icon::Check)
             } else {
@@ -2256,11 +2307,10 @@ impl TableView {
             };
             // PLACE 2 — the label over its optional sub-line. Compact tables read their single-line
             // labels at BODY regular.
-            let (lsz, lbold) = if self.compact {
-                (theme::size::BODY, 0)
-            } else {
-                (theme::size::HEADLINE, 1)
-            };
+            let (lsz, bold) = self.label_style();
+            let lbold = i32::from(bold);
+            // the lineup face reads its station a step behind the number: secondary off the pill
+            let label_ink = if self.lineup { on_pill(theme::TEXT_SECONDARY, ink) } else { base };
             let text_w = self.label_width(row, frame.w, measure);
             // The FOCUSED row's label never elides: one that overflows its column scrolls through
             // it instead ([`crate::marquee::ROW`] — a rest, a glide, a loop), so a long server name
@@ -2285,8 +2335,8 @@ impl TableView {
                     // the shared placement rule: an Arabic or Hebrew label glides mirrored
                     let rtl = plx_gfx::text::is_rtl_paragraph(&row.label);
                     let (run, follower) = crate::marquee::placements(full_w, text_w, off, rtl);
-                    p.text(cs.as_ptr(), label_x + run, y, msz, base, 0, mbold);
-                    p.text(cs.as_ptr(), label_x + follower, y, msz, base, 0, mbold);
+                    p.text(cs.as_ptr(), label_x + run, y, msz, label_ink, 0, mbold);
+                    p.text(cs.as_ptr(), label_x + follower, y, msz, label_ink, 0, mbold);
                 }
             } else {
                 if focused {
@@ -2301,7 +2351,7 @@ impl TableView {
                     if two_line {
                         p.text(cs.as_ptr(), label_x, title_y, tsz, base, 0, tbold);
                     } else {
-                        let mut lab = Label::new(cs.as_ptr(), lsz, base);
+                        let mut lab = Label::new(cs.as_ptr(), lsz, label_ink);
                         if lbold == 1 {
                             lab = lab.bold();
                         }
@@ -2349,9 +2399,9 @@ impl TableView {
     fn lift_row(&self, p: Painter, band: Rect, lift: f32) -> Painter {
         let z = p.translate(0.0, -LIFT_RISE * lift).zoomed(crate::Zoom::about(band, (0.5, 0.5), 1.0 + (LIFT_SCALE - 1.0) * lift));
         let pill = Rect::new(band.x, band.y + PILL_INSET, band.w, band.h - 2.0 * PILL_INSET);
-        z.focus_shadow_outside(pill, PILL_RAD, lift);
+        z.focus_shadow_outside(pill, self.pill_rad(), lift);
         if self.list_focused {
-            z.rrect(pill, PILL_RAD, PILL_RAD, crate::ACCENT);
+            z.rrect(pill, self.pill_rad(), self.pill_rad(), crate::ACCENT);
         }
         z
     }
@@ -2510,6 +2560,30 @@ mod tests {
     }
 
     use super::*;
+
+    /// **The lineup face is opt-in and changes only what SPEC-5 names**: the number column, the label's
+    /// CAPTION size, the 12 px pill. A table that never asks keeps the menu face; a lineup row's number
+    /// is its [`Row::lead`] and no other table reads it.
+    #[test]
+    fn the_lineup_face_reserves_the_number_column_and_reads_caption() {
+        let menu = TableView::new();
+        let mut lineup = TableView::new();
+        lineup.lineup(true);
+        assert_eq!((menu.label_inset(), menu.pill_rad()), (LABEL_INSET, PILL_RAD));
+        assert_eq!((lineup.label_inset(), lineup.pill_rad()), (LEAD_W + theme::space::XS, 12.0));
+        assert_eq!(lineup.label_style(), (theme::size::CAPTION, false));
+        assert_ne!(menu.label_style(), lineup.label_style());
+        let row = Row::new("PBS Nature").lead("2010");
+        assert_eq!(row.lead.as_deref(), Some("2010"));
+        assert_eq!(Row::new("PBS Nature").lead, None);
+        // the face is layout configuration, not motion: it does not enter the motion canon
+        let hash = |t: &TableView| {
+            let mut c = plx_machine::machine::Canon::new();
+            t.write_motion(&mut c);
+            c.finish()
+        };
+        assert_eq!(hash(&menu), hash(&lineup));
+    }
 
     /// ONE trailing read-out per row, resolved in ONE place. The rule the design system states and
     /// this widget enforces is that **a mark says where you are and a word says what is set, and no
@@ -2874,6 +2948,27 @@ mod tests {
             let gap = span - M.width_str(&row.label, size, bold) - M.width_str(value, theme::size::LABEL, VALUE_BOLD != 0);
             assert!(gap >= theme::space::MD - 0.01, "{}: label to value air {gap} < the MD rung", row.label);
         }
+    }
+
+    /// **One size class per glass** (`TableView::compact`): a compact table lays its row labels and its
+    /// two-line titles out at BODY regular, the default at HEADLINE bold, and a page taken aside for a
+    /// slide ([`TableView::blank_like`], which the next page is built into) keeps the class, so a page
+    /// pushed into an action menu is BODY regular and a standalone panel's stays HEADLINE bold.
+    #[test]
+    fn the_size_class_is_the_tables_and_a_page_swap_keeps_it() {
+        use plx_base::fontcov::advances::ShippedMeasure as M;
+        let two_line = |compact: bool| {
+            let mut t = TableView::new();
+            t.compact = compact;
+            t.set_sections(vec![Section::new("").row(Row::new("Original quality").detail("H.264 · 8 Mbps"))], 0, false);
+            t
+        };
+        let (menu, panel) = (two_line(true), two_line(false));
+        assert_eq!(menu.label_style(), (theme::size::BODY, false), "a compact table's labels are BODY regular");
+        assert_eq!(panel.label_style(), (theme::size::HEADLINE, true), "the default is HEADLINE bold");
+        assert!(menu.measured_width(&M) < panel.measured_width(&M), "the rows are laid out at the class's size");
+        assert_eq!(menu.blank_like().label_style(), menu.label_style(), "the page built next takes the glass's class");
+        assert_eq!(panel.blank_like().label_style(), panel.label_style());
     }
 
     const ES_NOTE: &str = "No se puede cambiar mientras Realzar diálogos o Normalizar volumen esté activado.";

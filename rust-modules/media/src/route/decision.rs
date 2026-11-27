@@ -7488,6 +7488,13 @@ pub fn set_subtitle(ps: &mut PlaybackSession, sid: i64) {
 pub fn cur_sub_sid(ps: &PlaybackSession) -> i64 {
     ps.cur_sub_sid
 }
+/// **The embedded subtitle the app draws, as `(stream id, render ordinal)`**: the selected stream when the session
+/// says the app's own renderer draws it from an embedded track (`metadata::sub_render_ordinal`'s ordinal, never a
+/// sidecar). A URI driver's captions are kept only for this stream, and drawn at this ordinal.
+pub fn embedded_subtitle_drawn_by_app(ps: &PlaybackSession) -> Option<(i64, i32)> {
+    (ps.cur_sub_sid > 0 && ps.cur_sub_client_drawable && !ps.cur_sub_sidecar && ps.cur_sub_ordinal >= 0)
+        .then_some((ps.cur_sub_sid, ps.cur_sub_ordinal))
+}
 /// The subtitle-language preference this play resolved under (show pref, else account pref), as
 /// a BCP-47 code — `metadata::sub_layout::sub_sections`'s "yours" grouping reads this, never a Plex
 /// account type.
@@ -8664,6 +8671,9 @@ struct ScrobbleWork {
     audio_stream_id: i64,
     subtitle_stream_id: i64,
     transcode_session: String,
+    /// The id the play's `/decision` reserved its Streaming Resource under. The playback may have
+    /// moved onto an encoder id derived from it, which a stop never names.
+    logical_session: String,
     /// The item whose last reported id [`ScrobbleWork::run`] takes ([`ReportedTimeline`]), and the
     /// server it was reported to. The take is the worker's, after the reporter is joined: a tick
     /// in flight when the stop began still writes the record, and a take on the main thread
@@ -8859,6 +8869,10 @@ impl ScrobbleWork {
                 .is_some_and(|c| c.transcode_stop(&self.transcode_session));
             plx_base::eventlog::log(&format!("transcode stopped ok={}", ok as i32));
         }
+        if !self.logical_session.is_empty() && self.logical_session != self.transcode_session {
+            let closed = self.client.and_then(|c| c.transcode_resource_reconciled(&self.logical_session));
+            plx_base::eventlog::log(&format!("logical resource close ok={}", closed.is_some() as i32));
+        }
     }
 }
 
@@ -8884,6 +8898,13 @@ pub fn scrobble_stop(
     report_th: Option<std::thread::JoinHandle<()>>,
 ) {
     if preview_request(ps) {
+        // A trailer writes no watch state, but its `/decision` reserved a stream slot all the same.
+        // Retired off the main thread, like an abandoned plan's identities, and never behind
+        // `drain_scrobble`: a trailer's retirement must not wait for a film's stop worker.
+        let logical = sess(ps);
+        if !logical.is_empty() {
+            retire_plan_resources(AbandonedPlanResources { sid: cur_sid(ps), identities: vec![logical], live: None });
+        }
         return;
     }
     let (logical_session, pq, pqi) = (sess(ps), pq_id(ps), pq_item_id(ps));
@@ -8891,7 +8912,7 @@ pub fn scrobble_stop(
     let (aud, sub) = (cur_audio_sid(ps), cur_sub_sid(ps)); // the selection this playback reported under
     let tsession = take_active_encoder();
     let session = if tsession.is_empty() {
-        logical_session
+        logical_session.clone()
     } else {
         tsession.clone()
     };
@@ -8905,11 +8926,18 @@ pub fn scrobble_stop(
     // the rest is still read after teardown returns — see `reset_session`'s doc for the reader that
     // would break.
     let live = ps.cur_live.take();
+    // The id the decision reserved its Streaming Resource under, closed only when the playback had
+    // moved onto a DIFFERENT encoder id that this stop takes: an encoder under the same id (a direct
+    // play installs the logical id itself) is closed by its own stop, no encoder taken means an
+    // earlier stop or retirement already owned the close, and a live route's tune is ended by the
+    // timeline's `stopped`.
+    let logical_session =
+        if live.is_some() || tsession.is_empty() || logical_session == tsession { String::new() } else { logical_session };
     { let s = &mut *ps; {
         s.tsession.clear();
         s.cur_contract.remux = false;
     } };
-    if final_report.is_none() && tsession.is_empty() && report_th.is_none() && live.is_none() {
+    if final_report.is_none() && tsession.is_empty() && report_th.is_none() && live.is_none() && logical_session.is_empty() {
         // Nothing to post and nobody to wait for, so no worker. The record a reporter left must
         // still go with its playback, and a take is only ordered after the reporter's last POST
         // while the effect lane is free: a reporter cut loose by a reload may be mid-POST on it.
@@ -8964,6 +8992,7 @@ pub fn scrobble_stop(
         } else {
             tsession
         },
+        logical_session,
         reported_sid,
         reported_rk,
         timeline_stop,
@@ -10247,8 +10276,10 @@ fn mde_verdict(mc: &plx_plex::plex::MediaContainer) -> Option<MdeVerdict> {
         Some(p) => p,
         None => {
             crate::player::log(&format!(
-                "decision: no media (general={:?}) -> no Original",
-                mc.general_decision_code
+                "decision: no media (general={:?} \"{}\" / \"{}\") -> no Original",
+                mc.general_decision_code,
+                mc.general_decision_text.trim(),
+                mc.transcode_decision_text.trim(),
             ));
             return None;
         }
@@ -13011,7 +13042,8 @@ pub(super) enum RetranscodeWorkerOutcome {
 
 /// The audio codec a codec-preserving remux is GUESSED to deliver when its `/decision` cannot be
 /// read (the answer, when there is one, replaces this). An enhanced remux re-encodes the audio
-/// (I4), and a carried track the profile cannot admit is converted by the server, both to the
+/// (I4), and a carried track the session profile cannot admit (`plex::is_session_audio_track_with`,
+/// which bounds a DTS track by its own layout, #1537) is converted by the server, both to the
 /// profile's first target (`ac3`) — the source codec would describe bytes that never arrive
 /// (silent audio). A plain remux of an admissible track copies it; with no carried track (the
 /// server default) it falls back to the file's own default codec.
@@ -13019,7 +13051,7 @@ fn remux_output_acodec(
     caps: &plx_os::devcaps::Caps, enhanced: bool, carried: Option<&CarriedAudio>, src_acodec: &str,
 ) -> String {
     let carried = carried.filter(|a| !a.codec.is_empty());
-    if enhanced || carried.is_some_and(|a| !plx_plex::plex::is_dp_audio_track_with(caps, &a.codec, a.channels, a.sample_rate)) {
+    if enhanced || carried.is_some_and(|a| !plx_plex::plex::is_session_audio_track_with(caps, &a.codec, a.channels, a.sample_rate)) {
         "ac3".to_owned()
     } else {
         carried.map_or_else(|| src_acodec.to_owned(), |a| a.codec.clone())

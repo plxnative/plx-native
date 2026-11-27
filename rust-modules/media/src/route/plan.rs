@@ -950,7 +950,7 @@ fn decision_audio(mc: &plx_plex::plex::MediaContainer) -> Option<&str> {
 /// Grade a kept enhanced decision (issue #266's `EnhancementOutcome`). `Applied` only when the
 /// server transcoded audio this profile would otherwise have COPIED — the one case where the
 /// transcode is provably the DSP's doing (M2's AC3 2.0). A carried track outside the copy list
-/// (`plex::is_dp_audio_track_with` over the attempt's `caps`, the same value the profile's
+/// (`plex::is_session_audio_track_with` over the attempt's `caps`, the same value the session profile's
 /// `audioCodec`, `audio.channels` and `audio.samplingRate` lanes are built from) is transcoded at
 /// baseline too, so the ask was delivered but cannot be told apart from what would have happened
 /// anyway: `Unverified` (M2's AAC 5.1 under the measured profile).
@@ -965,7 +965,7 @@ pub(super) fn classify_outcome(
     if audio.is_none() {
         return EnhancementOutcome::Off;
     }
-    let copyable = carried.is_some_and(|a| plx_plex::plex::is_dp_audio_track_with(caps, &a.codec, a.channels, a.sample_rate));
+    let copyable = carried.is_some_and(|a| plx_plex::plex::is_session_audio_track_with(caps, &a.codec, a.channels, a.sample_rate));
     match mc.and_then(decision_audio) {
         Some("transcode") if copyable => EnhancementOutcome::Applied,
         _ => EnhancementOutcome::Unverified,
@@ -1826,6 +1826,27 @@ pub enum SubWrite {
     Off,
 }
 
+/// Every embedded subtitle stream of the playing Part, for a qualifier whose driver hands the selected track's cues to
+/// the app (`uri-captions`, the Tizen build). A build without such a driver (webOS) sends none: its qualifier never
+/// reads them, and [`SubtitleStreams`](super::uri_preflight::SubtitleStreams) holds nothing there.
+#[cfg(feature = "uri-captions")]
+fn uri_subtitle_streams(playing: Option<&plx_data::metadata::PlayingItem>) -> super::uri_preflight::SubtitleStreams {
+    playing.map_or_else(Vec::new, |item| item.subs.iter()
+        .enumerate()
+        .filter(|(_, sub)| !sub.external)
+        .map(|(i, sub)| super::uri_preflight::SourceSubtitleStream {
+            sid: u64::try_from(sub.id).unwrap_or(0),
+            ordinal: i64::from(plx_data::metadata::sub_render_ordinal(&item.subs, i)),
+            codec: sub.codec.to_lowercase(),
+            language: sub.lang_code.clone(),
+        })
+        .collect()).into()
+}
+
+#[cfg(not(feature = "uri-captions"))]
+fn uri_subtitle_streams(_: Option<&plx_data::metadata::PlayingItem>) -> super::uri_preflight::SubtitleStreams {
+    super::uri_preflight::SubtitleStreams::default()
+}
 
 /// Pick the stream URL for an item: direct-play only what the pipeline decodes natively (H264/
 /// HEVC + a direct-playable audio track); else ask the server to remux or transcode into
@@ -2138,14 +2159,14 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 let source_decodable = video_direct_plays(vcodec, width, height,
                     dv_decision.presentation, &env.caps);
                 // The track the URI source would play is the intended one, with no sibling stand-in, and
-                // only the set's own decoder reaches it: the app's lossy decode is Standard's alone.
+                // only the set's own decoder reaches it ([`uri_original_audio_plays`]).
                 let audio_plays = source_audio.as_ref().is_some_and(|(position, codec, _)| {
                     match usize::try_from(*position).ok().and_then(|i| tracks.get(i)) {
-                        Some(track) => audio_natively_plays_with(&env.caps, env.direct_play_mode,
+                        Some(track) => uri_original_audio_plays(&env.caps, env.direct_play_mode,
                             &track.codec, track.channels, track.sampling_rate),
                         // No track list: the Media-level codec stands in, as the direct-play decision
                         // reads it, and no codec at all is a file with no audio.
-                        None => codec.is_empty() || audio_natively_plays_with(&env.caps,
+                        None => codec.is_empty() || uri_original_audio_plays(&env.caps,
                             env.direct_play_mode, codec, 0, 0),
                     }
                 });
@@ -2178,6 +2199,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                         .map_or_else(String::new, |track| track.lang_code.clone()),
                     subtitle_source: source_sub_stream.map(|sub| super::uri_preflight::SourceSubtitle {
                         codec: sub.codec.to_lowercase(), embedded: !sub.external }),
+                    subtitle_streams: uri_subtitle_streams(plan.playing.as_ref()),
                     subtitle_choice,
                     source_kbps: u32::try_from(source_kbps).ok().filter(|kbps| *kbps > 0),
                     raster: u32::try_from(width).ok().zip(u32::try_from(height).ok())
@@ -2210,6 +2232,19 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     plan.fps = plan.src_fps;
                     plan.audio = plan_track(tracks, source_selection.audio_sid, -1, true);
                     plan.sub_sid = source_selection.subtitle_sid;
+                    // A subtitle the certificate carries is drawn by the APP from the URI driver's
+                    // cues (`UriDriver::delivers_captions`; the adapter refuses such an offer on a
+                    // driver that delivers none): the landing tells the renderer its ordinal, as an
+                    // embedded track's on a Feed play. A pipeline that draws its own certifies none, and
+                    // only a build with such a driver (`uri-captions`, Tizen) has one to certify it.
+                    #[cfg(feature = "uri-captions")]
+                    if known.certified_subtitle_source.is_some() {
+                        plan.sub_render_ordinal = plan.playing.as_ref().and_then(|item| {
+                            let i = item.subs.iter().position(|sub|
+                                sub.id == source_selection.subtitle_sid && !sub.external)?;
+                            Some(plx_data::metadata::sub_render_ordinal(&item.subs, i)).filter(|ord| *ord >= 0)
+                        });
+                    }
                     plan.src_measure = (ceiling_source_kbps, width, height);
                     plan.transport_kbps = source_kbps;
                     plan.uri_original = Some(known);
@@ -3073,9 +3108,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 plan.acodec = "ac3".into();
             } else if remux {
                 // No pick: the server converts the intended track to the profile's first audio target.
-                let achosen = audio_sel
-                    .as_ref()
-                    .map(|(_, c, _)| c.clone())
+                let achosen = session_carried_acodec(&env.caps, tracks, audio_sel.as_ref())
                     .unwrap_or_else(|| if tracks.is_empty() { acodec.to_string() } else { "ac3".to_string() });
                 plan.vcodec = vcodec.to_string();
                 plan.acodec = achosen;
@@ -3162,11 +3195,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     fill_direct_plan(&mut plan, client, part, &session, vcodec, acodec, audio_sel.as_ref(), dovi, dv_decision, sub_pick);
                     return plan;
                 }
-                if let Some((_, c, _)) = audio_sel.as_ref() {
-                    plan.acodec = c.clone();
-                } else {
-                    plan.acodec = acodec.to_string();
-                }
+                plan.acodec = session_carried_acodec(&env.caps, tracks, audio_sel.as_ref())
+                    .unwrap_or_else(|| acodec.to_string());
                 sp = transcode_spec_carrying_burn(
                     &env.caps,
                     rk,
@@ -3900,6 +3930,19 @@ pub(super) fn audio_natively_plays_with(
     caps.native_audio_track(codec, channels, sample_rate, mode == DirectPlayMode::Forced)
 }
 
+/// Standard's audio verdict on an original the URI backend would hand to the set's own player: the
+/// set's decoder alone (the app's lossy decode is Standard's), and the stream WHOLE. Nothing strips a
+/// DTS-HD extension on that path, so Auto bounds a DTS track by its own layout
+/// ([`plx_os::devcaps::Caps::audio_layout_supports`]), not by the core the app's demuxer feeds
+/// (#1537); Force Direct Play applies no table ceiling on either path.
+pub(super) fn uri_original_audio_plays(
+    caps: &plx_os::devcaps::Caps, mode: DirectPlayMode, codec: &str, channels: i64,
+    sample_rate: i64,
+) -> bool {
+    audio_natively_plays_with(caps, mode, codec, channels, sample_rate)
+        && (mode == DirectPlayMode::Forced || caps.audio_layout_supports(codec, channels))
+}
+
 #[cfg(test)]
 fn pick_dp_audio_mode(
     caps: &plx_os::devcaps::Caps, tracks: &[plx_data::metadata::Stream], default_acodec: &str,
@@ -3947,6 +3990,22 @@ fn pick_source_audio(
     };
     let track = &tracks[selected];
     Some((selected as i32, track.codec.to_lowercase(), track.id))
+}
+
+/// The audio codec an encoder session is GUESSED to deliver for the direct-play pick `sel` when its
+/// `/decision` names none: the pick's own codec when the session profile copies it
+/// (`plex::is_session_audio_track_with`), else the profile's first target, `ac3`. The direct-play
+/// pick can name a track the session converts: a 7.1 DTS-HD MA on a `DTS/6` row is fed to the app's
+/// demuxer as its core, but the session profile bounds DTS by the layout (#1537), and a payload
+/// describing `dca` while the server sends AC3 is silent audio. `None` without a pick; a pick whose
+/// track is not in `tracks` keeps its codec.
+pub(super) fn session_carried_acodec(
+    caps: &plx_os::devcaps::Caps, tracks: &[plx_data::metadata::Stream], sel: Option<&(i32, String, i64)>,
+) -> Option<String> {
+    let (idx, codec, _) = sel?;
+    let track = usize::try_from(*idx).ok().and_then(|i| tracks.get(i));
+    let copied = track.is_none_or(|t| plx_plex::plex::is_session_audio_track_with(caps, &t.codec, t.channels, t.sampling_rate));
+    Some(if copied { codec.clone() } else { "ac3".to_owned() })
 }
 
 fn pick_dp_audio_eligible(
