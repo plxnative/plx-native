@@ -1,6 +1,20 @@
 {
  "flaky": [
   {
+   "count": 1,
+   "first_seen": "2026-11-27T20:51:17Z",
+   "job": "host unit tests (hostsim)",
+   "last": {
+    "pr": 1602,
+    "run": 46065634472,
+    "sha": "8fbfa73ac"
+   },
+   "last_seen": "2026-11-27T20:51:17Z",
+   "new": true,
+   "status": "Active",
+   "test": "plxnative_modules::app::bridge::restore_characterisation_tests::a_profile_publication_shows_the_stored_recent_row_with_no_tune"
+  },
+  {
    "count": 3,
    "first_seen": "2026-11-20T08:40:05Z",
    "job": "host unit tests (default features)",
@@ -295,7 +309,7 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-27T20:51:39Z",
+ "generated": "2026-11-27T20:55:39Z",
  "metrics": [
   {
    "change30_pct": 52.5,
@@ -344,15 +358,15 @@
    "change7_pct": 0.0,
    "d30": 368.5,
    "delta30": 52.5,
-   "delta7": 0,
+   "delta7": 0.0,
    "group": "ci",
    "id": "pr_wait",
    "kind": "wait",
    "label": "PR CI wait",
    "n_now": 209,
-   "n_prev": 167,
+   "n_prev": 166,
    "now": 421,
-   "prev7": 421,
+   "prev7": 421.0,
    "shown": true,
    "state": "flat",
    "state30": "flat",
