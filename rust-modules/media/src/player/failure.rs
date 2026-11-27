@@ -336,7 +336,7 @@ pub enum Refused {
     NoFailure,
     /// The failure's row does not offer this control (now).
     NotOffered(super::FailureAction),
-    /// A *Select Version* pick of the file the failed attempt already asked for, on a failure whose row withholds
+    /// A *Select Version* pick of the file the failed attempt already landed on, on a failure whose row withholds
     /// *Try again* (a refusal repeats): it would be that very retry through another door.
     SameVersion,
 }
@@ -518,7 +518,7 @@ mod tests {
         let _g = plx_base::testlock::serial();
         // Force offers *Play automatically* and *Try again* for a transient cause
         let mut forced = standing(PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Forced, OFFERS));
-        let door = |ps: &mut PlaybackSession, r: Recovery| crate::route::begin_recovery(ps, LIVE, &r);
+        let door = |ps: &mut PlaybackSession, r: Recovery| crate::route::begin_recovery(ps, LIVE, None, &r);
         assert_eq!(door(&mut forced, Recovery::PlayAutomatically),
             Ok(RetryOverrides { direct_play: Some(DirectPlayMode::Auto), version: None, origin: O::UserRetry }));
         assert_eq!(door(&mut forced, Recovery::RetrySame), Ok(RetryOverrides { direct_play: None, version: None, origin: O::UserRetry }));
@@ -531,7 +531,7 @@ mod tests {
         // a version pick names the version the new attempt asks for
         let mut versioned = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
         let media = plx_plex::plex::MediaId(3086);
-        assert_eq!(crate::route::begin_recovery(&mut versioned, LIVE, &Recovery::PickVersion(media)),
+        assert_eq!(crate::route::begin_recovery(&mut versioned, LIVE, None, &Recovery::PickVersion(media)),
             Ok(RetryOverrides { direct_play: None, version: Some(media), origin: O::ViewerReconfigure }));
     }
 
@@ -541,12 +541,12 @@ mod tests {
         let _g = plx_base::testlock::serial();
         let mut ps = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
         assert_eq!(crate::route::failed_pick(&ps), None, "rig");
-        assert!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickTracks(pick())).is_ok());
+        assert!(crate::route::begin_recovery(&mut ps, LIVE, None, &Recovery::PickTracks(pick())).is_ok());
         assert_eq!(crate::route::failed_pick(&ps), Some(pick()), "held ahead of the retry the caller starts");
 
         // a failure that offers no pair (the file has no picture) holds nothing
         let mut ps = standing(PlaybackFailure::for_test(FailureKind::NoVideoTrack, DirectPlayMode::Auto, OFFERS));
-        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickTracks(pick())),
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, None, &Recovery::PickTracks(pick())),
             Err(Refused::NotOffered(super::super::FailureAction::ChangeTracks)));
         assert_eq!(crate::route::failed_pick(&ps), None, "a refused pick is not held");
     }
@@ -561,18 +561,18 @@ mod tests {
         let no_rung = FrozenOffers { can_retry: true, quality_carriable: false };
         let mut ps = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, no_rung));
         let before = crate::route::failure(&ps).cloned();
-        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickQuality(crate::route::Quality::P720)),
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, None, &Recovery::PickQuality(crate::route::Quality::P720)),
             Err(Refused::NotOffered(A::ChangeQuality)));
         // not under Force or Disabled: the fix for those is not offered
-        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PlayAutomatically),
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, None, &Recovery::PlayAutomatically),
             Err(Refused::NotOffered(A::PlayAutomatically)));
         // and a deterministic refusal gets no *Try again*
         let mut refused = standing(PlaybackFailure::for_test(FailureKind::DecisionRefused, DirectPlayMode::Auto, OFFERS));
-        assert_eq!(crate::route::begin_recovery(&mut refused, LIVE, &Recovery::RetrySame), Err(Refused::NotOffered(A::TryAgain)));
+        assert_eq!(crate::route::begin_recovery(&mut refused, LIVE, None, &Recovery::RetrySame), Err(Refused::NotOffered(A::TryAgain)));
         assert_eq!(crate::route::failure(&ps).cloned(), before, "the failure stands, untouched");
         // nothing captured: nothing to offer
         let mut none = PlaybackSession::IDLE;
-        assert_eq!(crate::route::begin_recovery(&mut none, LIVE, &Recovery::RetrySame), Err(Refused::NoFailure));
+        assert_eq!(crate::route::begin_recovery(&mut none, LIVE, None, &Recovery::RetrySame), Err(Refused::NoFailure));
     }
 
     /// **Every control of the row that starts a new attempt answers exactly one recovery, and the door accepts the
@@ -603,7 +603,7 @@ mod tests {
                     "{:?} {recovery:?} {live:?}", failure.kind());
                 // and the DOOR itself, on a session standing on that failure, answers the same
                 let mut ps = standing(failure.clone());
-                assert_eq!(crate::route::begin_recovery(&mut ps, live, recovery).is_ok(), drawn.contains(&recovery.action()),
+                assert_eq!(crate::route::begin_recovery(&mut ps, live, None, recovery).is_ok(), drawn.contains(&recovery.action()),
                     "door: {:?} {recovery:?} {live:?}", failure.kind());
             }
         }

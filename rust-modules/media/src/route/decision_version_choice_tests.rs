@@ -213,7 +213,7 @@ fn a_version_picked_on_the_failure_screen_is_remembered_once_it_plays() {
     let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
 
     // The door answers the pick as an override: the retry's request names that file.
-    let overrides = begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))).expect("two files: the row offers it");
+    let overrides = begin_recovery(&mut ps, live, None, &Recovery::PickVersion(MediaId(3086))).expect("two files: the row offers it");
     assert_eq!(overrides.version, Some(MediaId(3086)));
     assert!(retry_current_play(&mut ps, &mut meta, 0, overrides), "the pick starts a new attempt");
     assert_eq!(attempt_version(&ps), Some(MediaId(3086)), "the attempt asks for the picked file");
@@ -247,7 +247,7 @@ fn a_picked_version_that_never_plays_is_not_remembered() {
     record_failure(&mut ps, PlaybackFailure::for_test(
         FailureKind::MediaSource, DirectPlayMode::Auto, FrozenOffers { can_retry: true, quality_carriable: true }));
     let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
-    let overrides = begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))).expect("offered");
+    let overrides = begin_recovery(&mut ps, live, None, &Recovery::PickVersion(MediaId(3086))).expect("offered");
     assert!(retry_current_play(&mut ps, &mut meta, 0, overrides));
     // The request in force is now another file of the item (the viewer picked again, or Try again named none).
     ps.request.as_mut().expect("in force").version = Some(MediaId(3082));
@@ -260,20 +260,38 @@ fn a_picked_version_that_never_plays_is_not_remembered() {
 
 /// **A refusal repeats, so picking the file that just failed is refused at the door** (`Refused::SameVersion`): the row
 /// withholds *Try again* there, and *Select Version* of the same file would be that retry. Another file is accepted, and a
-/// transient failure keeps the same file selectable (it is *Try again* there).
+/// transient failure keeps the same file selectable (it is *Try again* there). "The same file" is the one the attempt
+/// LANDED on (`attempt_media`), not the one the request named: with no version named the server's default played.
 #[test]
 fn a_refusal_does_not_take_the_same_version_again_but_a_stall_does() {
     use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery, Refused};
     let mut ps = PlaybackSession::IDLE;
     let _g = fresh_registry(&mut ps);
     seed_request_for_test(&mut ps, "10");
-    ps.request.as_mut().expect("seeded").version = Some(MediaId(3086));
+    ps.cur_rk = "10".into();
+    let versions = [MediaVersion { id: MediaId(3082), ..Default::default() }, MediaVersion { id: MediaId(3086), ..Default::default() }];
     let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
     let offers = FrozenOffers { can_retry: true, quality_carriable: true };
+
+    // No version named: the plan took the default (position 0), and that is the file a refusal repeats.
+    assert_eq!(attempt_version(&ps), None, "the request names no file");
+    assert_eq!(attempt_media(&ps, &versions), Some(MediaId(3082)), "the default file is the one that landed");
+    let landed = attempt_media(&ps, &versions);
     record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::DecisionRefused, DirectPlayMode::Auto, offers));
-    assert!(matches!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))), Err(Refused::SameVersion)),
-        "the file the refused request named repeats it");
-    assert!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3082))).is_ok(), "another file is a different request");
+    assert!(matches!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3082))), Err(Refused::SameVersion)),
+        "the server-default file the refused request landed on repeats it");
+    assert!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3086))).is_ok(), "another file is a different request");
     record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Auto, offers));
-    assert!(begin_recovery(&mut ps, live, &Recovery::PickVersion(MediaId(3086))).is_ok(), "a stall may be tried again, on the same file too");
+    assert!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3082))).is_ok(), "a stall may be tried again, on the same file too");
+
+    // A named version that landed at its own position is the same file.
+    ps.request.as_mut().expect("seeded").version = Some(MediaId(3086));
+    ps.cur_media_index = 1;
+    assert_eq!(attempt_media(&ps, &versions), Some(MediaId(3086)));
+    // Nothing landed for this request's item (another item's plan, or a position the list does not hold): no file is "the same".
+    ps.cur_media_index = 5;
+    assert_eq!(attempt_media(&ps, &versions), None, "a position the list does not hold");
+    ps.cur_media_index = 1;
+    ps.cur_rk = "11".into();
+    assert_eq!(attempt_media(&ps, &versions), None, "the plan is another item's");
 }
