@@ -183,7 +183,7 @@ fn anchors_ending_at_one_segment_edge_share_the_panels_edge() {
 /// The placer is a pure function of the anchor and the sizes: the same inputs give the same rect
 /// however often it is asked, and a different anchor gives a different one. This is the half of the
 /// latch the placer owns (it reads nothing live); the other half, that a menu keeps the anchor it
-/// was opened with, is structural (`with_anchor` sets a private field once) and is pinned where
+/// was opened with, is structural (the host carries it in `Host::Video { anchor, .. }` and no setter moves it) and is pinned where
 /// the menus are, by `every_menu_arm_latches_the_anchor_it_is_handed` and the menus' own tests.
 #[test]
 fn the_same_anchor_and_size_place_the_same_panel_every_time() {

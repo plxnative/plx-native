@@ -155,8 +155,11 @@ pub enum Host {
     /// **A card over the video plane** (the player's Tracks and More menus, the playback failure screen's Audio &
     /// Subtitles picker): flat, rising in from the side of its opener it took, placed by `placement`. The player stays
     /// flat over video (`docs/liquid-glass.md` §7), with the player's width floor and the neutral dim that casts no
-    /// artwork, at the weight `shade` names.
-    Video { anchor: [u32; 4], placement: Placement, shade: Shade },
+    /// artwork, at the weight `shade` names. `need_h` is the height the host's TALLEST page needs, which alone decides
+    /// the SIDE of the anchor the card takes ([`popover::anchor_panel`]): a menu whose pages differ in height keeps one
+    /// side for all of them, so the card never flips under a viewer who pushes a page (a list longer than the room
+    /// scrolls inside the card). `None`: each page decides by its own height.
+    Video { anchor: [u32; 4], placement: Placement, shade: Shade, need_h: Option<f32> },
 }
 
 /// **How dark the video goes behind a [`Host::Video`] card**: a rung of `theme::underlay`, named so a host picks one
@@ -309,8 +312,9 @@ pub enum Event<'a, Id> {
     Focused(u32),
     /// OK on the row `key`, or a click on it (the header's [`TITLE_KEY`] pops).
     Ok(u32),
-    /// RIGHT on the row `key`: enters it when it is a Nav row.
-    Right(u32),
+    /// RIGHT on the row `key` (`None`: no row is focused, the page has none): enters it when it is a Nav row; any
+    /// other answer is the host's ([`Out::Edge`]).
+    Right(Option<u32>),
     Back,
     Left,
     /// Replace the root's rows (the host's session changed what they are, or the player's tab switched):
@@ -335,8 +339,7 @@ pub enum Event<'a, Id> {
 pub enum Keyed<Id> {
     /// Step the menu with this.
     Event(Event<'static, Id>),
-    /// Consumed with no effect: a held LEFT or RIGHT must not walk through every page (only the press
-    /// acts), and RIGHT with no row focused has nothing to enter.
+    /// Consumed with no effect: a held LEFT or RIGHT must not walk through every page (only the press acts).
     Swallow,
     /// Not the menu's key.
     Pass,
@@ -349,7 +352,7 @@ pub fn keyed<K, Id>(kind: &InputKind<K>, focus: Option<u32>) -> Keyed<Id> {
         (Key::Back, _) if *edge == Edge::Down => Keyed::Event(Event::Back),
         (Key::Left | Key::Right, true) if *edge != Edge::Down => Keyed::Swallow,
         (Key::Left, true) => Keyed::Event(Event::Left),
-        (Key::Right, true) => focus.map_or(Keyed::Swallow, |row| Keyed::Event(Event::Right(row))),
+        (Key::Right, true) => Keyed::Event(Event::Right(focus)),
         _ => Keyed::Pass,
     }
 }
@@ -424,8 +427,8 @@ impl MenuCore {
             }
             Host::BesideGlass { anchor } => Mount::BesideGlass { anchor },
             Host::Sheet { anchor } => Mount::Sheet { anchor },
-            Host::Video { anchor, placement, shade } => {
-                Mount::Video { anchor, placement, shade, tallest: None, side: std::cell::Cell::new(popover::Side::Above) }
+            Host::Video { anchor, placement, shade, need_h } => {
+                Mount::Video { anchor, placement, shade, tallest: need_h, side: std::cell::Cell::new(popover::Side::Above) }
             }
         };
         Self { mount, class, motion }
@@ -755,52 +758,12 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     }
 
     /// The rect of the control the menu hangs from, `None` for a host that has none (a growing glass starts from its pill).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn anchor(&self) -> Option<Rect> {
         match &self.core.mount {
             Mount::BesideGlass { anchor } | Mount::Sheet { anchor } | Mount::Video { anchor, .. } => Some(rect_of(*anchor)),
             Mount::Grows { .. } => None,
         }
-    }
-
-    /// **Re-point the menu at the control that opened it** (`anchor`: its drawn rect): a host that learns the rect after
-    /// the menu was built (the player's HUD lays its controls out after it opens one). Inert for a host that does not hang
-    /// from an anchor. The layout is measured again.
-    pub fn reanchor(&mut self, anchor: Rect) {
-        let bits = [anchor.x, anchor.y, anchor.w, anchor.h].map(f32::to_bits);
-        let moved = match &mut self.core.mount {
-            Mount::BesideGlass { anchor } | Mount::Sheet { anchor } | Mount::Video { anchor, .. } if *anchor != bits => {
-                *anchor = bits;
-                true
-            }
-            _ => false,
-        };
-        if moved {
-            self.core.motion.forget_natural();
-        }
-    }
-
-    /// **The height of the tallest page the host shows**, which decides the SIDE of its opener a [`Host::Video`] card
-    /// takes ([`popover::anchor_panel`]'s `need_h`), so every page of a menu opens on the same side and none flips under a
-    /// viewer who pushes it; a list longer than the room scrolls inside the card. A host whose tallest page changes (a
-    /// root that grows a section) says so again. Inert for a host that decides by each page's own height.
-    pub fn set_tallest(&mut self, need_h: f32) {
-        let changed = match &mut self.core.mount {
-            Mount::Video { tallest, .. } if *tallest != Some(need_h) => {
-                *tallest = Some(need_h);
-                true
-            }
-            _ => false,
-        };
-        if changed {
-            self.core.motion.forget_natural();
-        }
-    }
-
-    /// **Rename the openers of the pages pushed over the root**: the rows of a page beneath changed shape while a page
-    /// above was open (a language that dropped to one track is a direct row now, and the reverse), and a pop must land on
-    /// the row that stands for the opener NOW. Identity otherwise.
-    pub fn retarget_openers(&mut self, f: impl Fn(&Id) -> Id) {
-        self.stack.map_openers(f);
     }
 
     /// **Lay out and queue the text of a page that is NOT showing** (the player's other tab), in the menu's own class,
@@ -818,6 +781,7 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     }
 
     /// The side of its opener a video host's card took (`None` for any other host).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn side(&self) -> Option<popover::Side> {
         match &self.core.mount {
             Mount::Video { side, .. } => Some(side.get()),
@@ -906,35 +870,6 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         self.core.stops(f, entry, &self.form.table, &|i| self.form.key_at(i).map(|k| k.0));
     }
 
-    /// **Flip the trailing On/Off word of the switch row `key` in place** (a Boost Dialog toggle the viewer just pressed,
-    /// before the host's own state settles): no rebuild, no slide. `false` when the page showing has no such row.
-    pub fn set_toggle(&mut self, key: u32, on: bool) -> bool {
-        let Some(i) = self.form.index_of_key(crate::form::RowKey(key)) else { return false };
-        match self.form.table.row_mut(i as i32) {
-            Some(row) => {
-                row.toggle = Some(on);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// **Walk the cursor to the absolute row `row`**, a step at a time as the D-pad would (clamped at either end): the dev
-    /// harness's "row N" contract, the one entry that speaks positions.
-    pub fn walk_to(&mut self, row: i32) {
-        let table = &mut self.form.table;
-        for _ in 0..64 {
-            if table.sel == row {
-                break;
-            }
-            let before = table.sel;
-            table.move_sel(if table.sel < row { 1 } else { -1 });
-            if table.sel == before {
-                break;
-            }
-        }
-    }
-
     /// The menu's one `Column` group: UP/DOWN stop at the ends, LEFT (pop a page) and RIGHT (enter a Nav
     /// row) are the host's, delivered as [`Event::Left`] / [`Event::Right`].
     pub fn groups(&self, group: GroupId, measure: &dyn Measure, out: &mut Vec<GroupSpec>) {
@@ -1008,7 +943,8 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
                 Out::Stay
             }
             Event::Ok(key) => self.ok(key, false, build),
-            Event::Right(key) => self.ok(key, true, build),
+            Event::Right(Some(key)) => self.ok(key, true, build),
+            Event::Right(None) => Out::Edge,
             // BACK pops, and closes where there is nothing to pop to: at the root, and on a page whose every
             // page beneath (the root too) can no longer be built, where the menu has nowhere to stand
             Event::Back => match self.stack.len() {
@@ -1030,9 +966,9 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         }
     }
 
-    /// **Move the cursor to the row `key`** of the page showing ([`Event::Focused`], and a host's own seat: the
+    /// **Move the cursor to the row `key`** of the page showing ([`Event::Focused`], the one way a host seats it: the
     /// cursor is where focus belongs, [`Self::reconcile`]); `false` when the page has no such row.
-    pub fn focus(&mut self, key: u32) -> bool {
+    fn focus(&mut self, key: u32) -> bool {
         let Some(i) = self.form.index_of_key(crate::form::RowKey(key)) else { return false };
         self.form.table.sel = i as i32;
         true
@@ -1073,6 +1009,9 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
             // a key that names no row (the separator has none) only closes the menu
             return if enter_only { Out::Stay } else { Out::Dismiss };
         };
+        // OK or a click on a row is the cursor on it (the engine moves focus to a clicked row first, a host without
+        // one says so with the same key)
+        self.focus(key);
         // a DISABLED row does nothing and the menu stays up, for OK and a click alike; RIGHT on one that opens no
         // page is the host's key like RIGHT on any other (the player's tab switch)
         let Some(activation) = self.form.activate(index) else {
@@ -1090,7 +1029,7 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     }
 
     /// **Stand on `page`, opened from the row `opener`**, as a press on it would: a test's way onto a page with no row to it
-    /// on the page showing (a live rebuild can leave one standing, [`Self::retarget_openers`]).
+    /// on the page showing (a live rebuild can leave one standing).
     #[cfg(any(test, feature = "test-support"))]
     pub fn open_page(&mut self, page: P, opener: Id, build: &mut Build<'_, P, Id, A>) -> bool {
         self.push(page, opener, build)
@@ -1127,7 +1066,8 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         };
         let Some(saved) = saved else { return false };
         let leaving = leave_page(&mut self.form);
-        self.form.restore(built.form, Some(&saved.return_id), saved.scroll);
+        let opener = built.form.stands_for(&saved.return_id);
+        self.form.restore(built.form, Some(&opener), saved.scroll);
         self.form.table.set_title((depth > 0).then_some(built.title));
         self.core.motion.begin_slide(leaving, -1.0);
         true
@@ -1158,7 +1098,8 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
             let Some(built) = build(below) else { return };
             let Some(saved) = self.stack.truncate(depth) else { return };
             self.core.motion.cancel_slide();
-            self.form.restore(built.form, Some(&saved.return_id), saved.scroll);
+            let opener = built.form.stands_for(&saved.return_id);
+            self.form.restore(built.form, Some(&opener), saved.scroll);
             self.form.table.set_title((depth > 0).then_some(built.title));
             return;
         }

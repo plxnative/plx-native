@@ -35,7 +35,7 @@
 //! longer moves focus BY HAND: a direction falls through (`Handled::No`) to the engine's own
 //! `neighbour`/`EdgeRule` unless this panel's own cadence gate is still waiting
 //! ([`PANEL_REPEAT_MS`]) or the engine has just reached this panel's group EDGE and re-delivered
-//! the key (`edge_key`, the one place a panel still decides something outside its own scope — a
+//! the key (`menu_key`, which feeds it to the menu component's one reader and acts on the answer — a
 //! tab switch, or dropping focus onto the HUD tabs below). OK is answered the same way: the
 //! engine's own `Activate`/press machinery (§7.4) fires `ScreenEvent::Activate`/`PressCommit`,
 //! which [`PlayerOverlayScreen::activate`] spends. A click resolves against the real per-row hit
@@ -51,12 +51,13 @@ use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, LogicalState,
     Machine, NavOp,
 };
-use plx_appkit::more_menu::MoreOk;
+use plx_appkit::more_menu::Action as MoreAction;
 use plx_ui::screen::{
     At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy,
     Screen, ScreenEvent, Step,
 };
 use plx_appkit::timing_capsule::{CapsuleOut, TimingCapsule};
+use plx_ui::menu::{keyed, Event, Keyed, Out};
 use plx_appkit::track_menu::TrackOk;
 
 use super::HudPolicy;
@@ -324,14 +325,14 @@ impl PlayerOverlayScreen {
         let panel = match kind {
             OverlayKind::Tracks { tab } => Panel::Tracks(plx_base::diag::spans::span("tmnew", || {
                 plx_appkit::track_menu::TrackMenuState::new_with_preferences(ps, meta, tab, subtitle_yours_langs(ps, meta), offer_search,
-                                    inputs.preference::<plx_plex::plex::session::SubtitleSizePref>(), inputs.preference::<plx_plex::plex::session::SubtitlePositionPref>())
-                    .with_anchor(anchor)
+                                    inputs.preference::<plx_plex::plex::session::SubtitleSizePref>(), inputs.preference::<plx_plex::plex::session::SubtitlePositionPref>(),
+                                    anchor)
             })),
             // A quality entry is the ordinary menu under Force Direct Play, which offers no
             // Quality section so there is no rung to land on, and so is a Speed entry when the
             // playback takes one speed only: `MoreMenuState::new_on` falls back to the root.
             OverlayKind::More { page } => {
-                Panel::More(plx_appkit::more_menu::MoreMenuState::new_folded_with_quality(ps, page, folded, inputs.preference::<plx_plex::plex::session::QualityPref>()).with_anchor(anchor))
+                Panel::More(plx_appkit::more_menu::MoreMenuState::new_folded_with_quality(ps, page, folded, inputs.preference::<plx_plex::plex::session::QualityPref>(), anchor))
             }
             OverlayKind::Timing => {
                 let (lo, hi) = plx_media::player::subtitle_offset_range_ms();
@@ -430,9 +431,13 @@ impl PlayerOverlayScreen {
     /// `moreosc`'s cursor seat: put the More cursor on the Quality row so the next real RIGHT key
     /// enters it.
     /// `false` when the panel is not More or its root offers no Quality row (Force Direct Play).
-    pub fn seat_more_quality(&mut self) -> bool {
+    pub fn seat_more_quality(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
         match &mut self.panel {
-            Panel::More(p) => p.focus_key(plx_ui::form::FormId::key(&plx_appkit::more_menu::MoreRow::OpenQuality).0),
+            Panel::More(p) => {
+                let key = plx_ui::form::FormId::key(&plx_appkit::more_menu::MoreRow::OpenQuality).0;
+                p.step(ps, Event::Focused(key));
+                p.menu().id_of(key).is_some()
+            }
             _ => false,
         }
     }
@@ -458,7 +463,7 @@ impl PlayerOverlayScreen {
             Panel::Tracks(p) => match p.commit_sub_track(i, meta) {
                 TrackOk::Commit { commit, .. } => Some(commit),
                 TrackOk::Dismiss | TrackOk::OpenTiming | TrackOk::Inert | TrackOk::Navigated
-                | TrackOk::Search(_) => None,
+                | TrackOk::Search(_) | TrackOk::Edge => None,
             },
             _ => None,
         }
@@ -474,15 +479,17 @@ impl PlayerOverlayScreen {
     /// trigger exists to leave the chosen track's panel on screen for a capture.
     pub fn pick_track_row(
         &mut self,
+        ps: &plx_media::route::PlaybackSession,
         meta: plx_data::metadata::MetadataView<'_>,
         row: c_int,
     ) -> Option<plx_appkit::track_menu::TrackCommit> {
         if let Panel::Tracks(p) = &mut self.panel {
             p.focus_row(row);
-            return match p.on_ok(meta) {
+            let key = p.menu().form().selected_key()?;
+            return match p.step(ps, meta, Event::Ok(key.0)) {
                 TrackOk::Commit { commit, .. } => Some(commit),
                 TrackOk::Dismiss | TrackOk::OpenTiming | TrackOk::Inert | TrackOk::Navigated
-                | TrackOk::Search(_) => None,
+                | TrackOk::Search(_) | TrackOk::Edge => None,
             };
         }
         None
@@ -507,18 +514,19 @@ impl PlayerOverlayScreen {
         Self::ask(fx, PlayerReq::ExtendHud(HUD_LINGER_MS));
     }
 
-    /// **Apply whatever the focused element decided, at once** (§7.4). Reached from a `Bare` row's
-    /// (`Tracks`/`More`) key-down/pointer-click `Activate`. The panel's own cursor is already correct — every `FocusMoved` this screen sees writes
-    /// it back (`step`'s own arm below) — so this reads the panel's OWN `on_ok`, exactly as the
-    /// old ladder's `Key::Ok` arms did.
+    /// **Apply whatever the row `elem` decided, at once** (§7.4). Reached from a `Bare` row's
+    /// (`Tracks`/`More`) key-down/pointer-click `Activate` and from the engine's press commit, both of which NAME the
+    /// row: the panel's menu is stepped with `Event::Ok(elem)` (the title band's key pops a page) and this acts on its
+    /// answer.
     fn activate<H: AppLike + crate::registry::MetadataLike>(
         &mut self,
         ps: &plx_media::route::PlaybackSession,
         cx: &Cx<'_, H>,
+        elem: u32,
         fx: &mut Effects<'_, H>,
     ) {
         match &mut self.panel {
-            Panel::Tracks(p) => match p.on_ok(H::metadata(cx)) {
+            Panel::Tracks(p) => match p.step(ps, H::metadata(cx), Event::Ok(elem)) {
                 TrackOk::Commit { commit, keep_open } => {
                     fx.push(Fx::App(AppFx::Player(PlayerReq::CommitTrack(commit))));
                     if keep_open {
@@ -536,7 +544,7 @@ impl PlayerOverlayScreen {
                 }
                 // a dim row (Timing while subtitles are Off, a locked Style row): nothing happens and
                 // the panel stays. A Nav row opened a page: the panel stays with its rows replaced.
-                TrackOk::Inert | TrackOk::Navigated => self.moved(fx),
+                TrackOk::Inert | TrackOk::Navigated | TrackOk::Edge => self.moved(fx),
                 // a search or a download: the store performs it, and the panel STAYS — the viewer
                 // is watching the result land
                 TrackOk::Search(cmd) => {
@@ -560,22 +568,29 @@ impl PlayerOverlayScreen {
                     }
                 }
             },
-            Panel::More(p) => match p.on_ok(ps) {
+            Panel::More(p) => match p.step(ps, Event::Ok(elem)) {
                 // A folded row is a HUD command: More closes FIRST, then the app's one performer runs it, the
                 // order the Tracks->Timing hand-off keeps, so a command that opens a panel or a section finds
                 // the menu gone (`open_player_overlay` presents a fresh entry rather than re-addressing this one).
-                MoreOk::Action(plx_appkit::more_menu::Action::Hud(command)) => {
+                Out::Picked(MoreAction::Hud(command)) => {
                     self.dismiss(fx);
                     Self::ask(fx, PlayerReq::Command(command));
                     self.closing(fx);
                 }
-                MoreOk::Action(action) => {
+                Out::Picked(action) => {
                     self.dismiss(fx);
                     Self::ask(fx, PlayerReq::More(action));
                     self.closing(fx);
                 }
                 // the Quality row opened its page: the panel stays with its rows replaced
-                MoreOk::Navigated => self.moved(fx),
+                Out::Moved => self.moved(fx),
+                // a key that names no row only closes the menu
+                Out::Dismiss => {
+                    self.dismiss(fx);
+                    self.closing(fx);
+                }
+                // a disabled row: nothing happens and the menu stays up
+                Out::Stay | Out::Edge => {}
             },
             // Unreachable in practice: Timing publishes no focus group and no `ElemKind::Bare`
             // row (`Focusable::groups` answers empty, `key()` returns `Handled::Yes` for every
@@ -585,42 +600,52 @@ impl PlayerOverlayScreen {
         }
     }
 
-    /// **The engine reached this panel's group EDGE and re-delivered the direction**
-    /// (`EdgeRule::Screen`, §7.3 step 3) — the one thing left that a panel decides outside its own
-    /// scope, because it re-addresses the
-    /// panel entirely (Tracks' LEFT/RIGHT: LEFT pops a sub-page, else switches tab
-    /// (`TrackMenuState::focus_tab`); RIGHT enters a Nav row, else switches tab). More's LEFT/RIGHT
-    /// are `Screen` edges too, for its Quality page: LEFT pops it, RIGHT enters the Quality row,
-    /// and either does nothing otherwise (no tabs to switch).
-    fn edge_key<H: AppLike + crate::registry::MetadataLike>(
+    /// **The menu's own keys** (BACK, and LEFT / RIGHT once the engine reached this panel's group EDGE and re-delivered
+    /// them under `EdgeRule::Screen`, §7.3 step 3): read by the menu component's one reader ([`keyed`]) and fed to the
+    /// panel's one `step`, and this acts on what it answers. BACK pops a page, else closes the panel (silently, as the
+    /// old ladder did); LEFT pops a page; RIGHT enters a Nav row. What no row answers is [`TrackOk::Edge`] for Tracks,
+    /// which spends it on the tab switch the keys re-address (LEFT shows Audio, RIGHT Subtitles); More has no tabs and
+    /// leaves it. A held LEFT or RIGHT is swallowed by the reader: only the press acts.
+    fn menu_key<H: AppLike + crate::registry::MetadataLike>(
         &mut self,
         ps: &plx_media::route::PlaybackSession,
         cx: &Cx<'_, H>,
-        key: consts::Key,
+        kind: &InputKind<u32>,
+        back: bool,
         fx: &mut Effects<'_, H>,
     ) -> Handled {
-        use consts::Key;
-        match (&mut self.panel, key) {
-            // LEFT pops a sub-page, else switches tab as before; RIGHT on a Nav row enters it (inert
-            // when that row is disabled), else switches tab as before
-            (Panel::Tracks(p), Key::Left { .. }) => {
-                p.on_left(ps, H::metadata(cx));
-                self.moved(fx);
-            }
-            (Panel::Tracks(p), Key::Right { .. }) => {
-                p.on_right(ps, H::metadata(cx));
-                self.moved(fx);
-            }
-            // More's one drill-in page: LEFT pops it (nothing at the root), RIGHT enters a Nav row
-            (Panel::More(p), Key::Left { .. }) => {
-                p.pop(ps);
-                self.moved(fx);
-            }
-            (Panel::More(p), Key::Right { .. }) => {
-                p.on_right(ps);
-                self.moved(fx);
-            }
-            _ => {} // no other panel declares any other edge escape
+        // BACK is classified by this screen (`consts::classify_input`, which reads the symbol and the scancode too):
+        // it names the event itself. The directions the engine re-delivered at the edge are the reader's.
+        fn read<Id>(back: bool, kind: &InputKind<u32>, focus: Option<u32>) -> Keyed<Id> {
+            if back { Keyed::Event(Event::Back) } else { keyed(kind, focus) }
+        }
+        let focus = cx.focus.current.filter(|key| key.entry == self.entry).map(|key| key.elem);
+        let closes = match &mut self.panel {
+            Panel::Tracks(p) => match read(back, kind, focus) {
+                Keyed::Event(ev) => {
+                    let right = matches!(ev, Event::Right(_));
+                    match p.step(ps, H::metadata(cx), ev) {
+                        TrackOk::Edge => {
+                            p.focus_tab(ps, H::metadata(cx), c_int::from(right));
+                            false
+                        }
+                        answer => answer == TrackOk::Dismiss,
+                    }
+                }
+                // a held LEFT or RIGHT, or a direction no row answers at the edge: answered, not a dead press
+                Keyed::Swallow | Keyed::Pass => return Handled::Yes,
+            },
+            Panel::More(p) => match read(back, kind, focus) {
+                Keyed::Event(ev) => matches!(p.step(ps, ev), Out::Dismiss),
+                Keyed::Swallow | Keyed::Pass => return Handled::Yes,
+            },
+            // the capsule owns every key itself (`key`, above): nothing reaches here
+            Panel::Timing(_) => return Handled::Yes,
+        };
+        if closes {
+            self.dismiss(fx);
+        } else {
+            self.moved(fx);
         }
         Handled::Yes
     }
@@ -629,7 +654,7 @@ impl PlayerOverlayScreen {
     /// (§7.3 step 1). Transport keys always fall through here first (module doc) — the only keys
     /// this ladder still fully owns. A direction is paced by [`PANEL_REPEAT_MS`] and then handed
     /// to the engine's own `neighbour`/`EdgeRule` (`Handled::No`) unless the engine has already
-    /// reached this panel's group edge and re-delivered it (`edge_key`, above). OK is likewise
+    /// reached this panel's group edge and re-delivered it (`menu_key`, above). OK is likewise
     /// left to the engine's own `Activate`/press machinery (§7.4; see [`Self::activate`]). BACK
     /// dismisses — except on a Tracks or More sub-page, where it pops one page first (the root, and the
     /// other panels, dismiss). Tracks and More close silently, exactly as the old ladder did.
@@ -637,6 +662,7 @@ impl PlayerOverlayScreen {
         &mut self,
         ps: &plx_media::route::PlaybackSession,
         cx: &Cx<'_, H>,
+        kind: &InputKind<u32>,
         key: consts::Key,
         edge: Edge,
         at_edge: bool,
@@ -703,7 +729,7 @@ impl PlayerOverlayScreen {
                 _ => {}
             }
             if at_edge {
-                return self.edge_key(ps, cx, key, fx);
+                return self.menu_key(ps, cx, kind, false, fx);
             }
             // an interior move: let the engine's own `neighbour`/`EdgeRule` answer it (§7.3 steps
             // 2-3) rather than moving the panel's cursor by hand.
@@ -713,23 +739,8 @@ impl PlayerOverlayScreen {
             return Handled::Yes;
         }
         match key {
-            Key::Back => {
-                // BACK on a Subtitles / Quality sub-page goes up one page; on a root it dismisses
-                if let Panel::Tracks(p) = &mut self.panel {
-                    if p.pop(ps, H::metadata(cx)) {
-                        self.moved(fx);
-                        return Handled::Yes;
-                    }
-                }
-                if let Panel::More(p) = &mut self.panel {
-                    if p.pop(ps) {
-                        self.moved(fx);
-                        return Handled::Yes;
-                    }
-                }
-                self.dismiss(fx);
-                Handled::Yes
-            }
+            // BACK on a Subtitles / Quality sub-page goes up one page; on a root it dismisses
+            Key::Back => self.menu_key(ps, cx, kind, true, fx),
             // Not consumed here: the engine's own `Activate`/`PressArm` machinery answers OK by
             // the focused element's `ElemKind` (§7.4), and `Machine::step`'s `Activate`/
             // `PressCommit` arms below spend what it decided (`Self::activate`).
@@ -751,14 +762,14 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
                 Handled::Yes
             }
             ScreenEvent::App(crate::registry::AppMsg::PlayerOverlayQuality) => {
-                if !self.seat_more_quality() { plx_base::eventlog::log("moreosc: no Quality row"); }
+                if !self.seat_more_quality(ps) { plx_base::eventlog::log("moreosc: no Quality row"); }
                 Handled::Yes
             }
             ScreenEvent::App(crate::registry::AppMsg::PlayerOverlayPick(target)) => {
                 let commit = if let Some(i) = self.resolve_menupick_track(target) {
                     self.pick_sub_track(H::metadata(cx), i)
                 } else if let Some(row) = self.resolve_menupick_row(target) {
-                    self.pick_track_row(H::metadata(cx), row)
+                    self.pick_track_row(ps, H::metadata(cx), row)
                 } else { None };
                 if let Some(commit) = commit { Self::ask(fx, PlayerReq::CommitTrack(commit)); }
                 else { plx_base::eventlog::log("menupick: target absent or already active — no commit"); }
@@ -776,7 +787,7 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
                     key, sym, wcode, edge, at_edge,
                 } = input.kind
                 {
-                    return self.key(ps, cx, consts::classify_input(key, sym, wcode), edge, at_edge, input.at.ms, fx);
+                    return self.key(ps, cx, &input.kind, consts::classify_input(key, sym, wcode), edge, at_edge, input.at.ms, fx);
                 }
                 // **An open panel owns the click and closes on it.** Four `modal_of` arms of
                 // the loop's pointer path said this — "the transport is partly hidden while a
@@ -801,12 +812,15 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
             }
             ScreenEvent::FocusMoved { to, .. } => {
                 // §7.3 step 5: the owner's `step` is the only place that mutates in response to a
-                // move the engine made — write the new cursor back into whichever panel is open,
-                // and extend the transport's read time exactly as a hand-moved cursor used to.
-                // Tracks' element is a row KEY (`appkit::track_menu::TrackRow`), the rest's an index.
+                // move the engine made — the menu's cursor follows ([`Event::Focused`]), and the transport's
+                // read time is extended exactly as a hand-moved cursor used to.
                 match &mut self.panel {
-                    Panel::Tracks(p) => p.focus_key(to.elem),
-                    Panel::More(p) => { p.focus_key(to.elem); }
+                    Panel::Tracks(p) => {
+                        p.step(ps, H::metadata(cx), Event::Focused(to.elem));
+                    }
+                    Panel::More(p) => {
+                        p.step(ps, Event::Focused(to.elem));
+                    }
                     // Timing has no cursor the engine could have moved — its own `key()` owns
                     // every press and always returns `Handled::Yes`, so this arm is unreached for
                     // it in practice.
@@ -815,35 +829,17 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
                 self.moved(fx);
                 Handled::No
             }
-            // A pointer click on ANY row (`Activate::Immediate`/`Direct`, every `Menu::stops` registration
-            // above) always applies at once.
+            // A pointer click on ANY row (`Activate::Immediate`, every `Menu::stops` registration above) always applies at
+            // once, on the row the event NAMES (the title band's key pops a page and acts on no row).
             ScreenEvent::Activate(elem) => {
-                // the event names the row that was hit (its key for Tracks): seat the panel on
-                // THAT row before `activate` reads the panel's own cursor, so a click never acts
-                // on a neighbour the cursor happened to still hold
-                if let Panel::Tracks(p) = &mut self.panel {
-                    if plx_ui::page_stack::is_title_key(*elem) {
-                        // the "< TITLE" band: a click goes back one page, and acts on no row
-                        p.pop(ps, H::metadata(cx));
-                        self.moved(fx);
-                        return Handled::No;
-                    }
-                    p.focus_key(*elem);
-                }
-                if let Panel::More(p) = &mut self.panel {
-                    if plx_ui::page_stack::is_title_key(*elem) {
-                        // the "< QUALITY" band: a click goes back one page, and acts on no row
-                        p.pop(ps);
-                        self.moved(fx);
-                        return Handled::No;
-                    }
-                    p.focus_key(*elem);
-                }
-                self.activate(ps, cx, fx);
+                self.activate(ps, cx, *elem, fx);
                 Handled::No
             }
+            // the engine's key-OK press: on the row the engine has focused here
             ScreenEvent::PressCommit(_) => {
-                self.activate(ps, cx, fx);
+                if let Some(key) = cx.focus.current.filter(|key| key.entry == self.entry) {
+                    self.activate(ps, cx, key.elem, fx);
+                }
                 Handled::No
             }
             ScreenEvent::Tick(tick) => {
@@ -1115,8 +1111,8 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Screen<H> f
     /// a hit on whatever sits under it nor a miss that would dismiss the surface.
     fn pointer_held(&self) -> bool {
         match &self.panel {
-            Panel::Tracks(p) => p.transitioning(),
-            Panel::More(p) => p.transitioning(),
+            Panel::Tracks(p) => p.menu().pointer_held(),
+            Panel::More(p) => p.menu().pointer_held(),
             Panel::Timing(_) => false,
         }
     }

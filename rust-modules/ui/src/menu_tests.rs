@@ -133,17 +133,18 @@ fn ok_on_any_other_row_picks_its_action_and_moves_nothing() {
 fn ok_on_a_disabled_row_does_nothing_and_on_no_row_closes() {
     let mut m = menu(grows(), Class::Action);
     assert_eq!(step(&mut m, Event::Ok(Id::Off.key().0)), Out::Stay);
-    assert_eq!(step(&mut m, Event::Right(Id::Off.key().0)), Out::Edge, "RIGHT on a row that opens no page is the host's key, disabled or not");
+    assert_eq!(step(&mut m, Event::Right(Some(Id::Off.key().0))), Out::Edge, "RIGHT on a row that opens no page is the host's key, disabled or not");
     assert_eq!(step(&mut m, Event::Ok(999)), Out::Dismiss, "a key that names no row only closes");
-    assert_eq!(step(&mut m, Event::Right(999)), Out::Stay, "RIGHT on nothing is inert");
+    assert_eq!(step(&mut m, Event::Right(Some(999))), Out::Stay, "RIGHT on a key that names no row is inert");
+    assert_eq!(step(&mut m, Event::Right(None)), Out::Edge, "RIGHT with no row focused is the host's key too");
 }
 
 #[test]
 fn right_enters_a_nav_row_and_hands_any_other_to_the_host() {
     let mut m = menu(grows(), Class::Action);
-    assert_eq!(step(&mut m, Event::Right(Id::Other.key().0)), Out::Edge);
+    assert_eq!(step(&mut m, Event::Right(Some(Id::Other.key().0))), Out::Edge);
     assert_eq!(m.depth(), 0);
-    assert_eq!(step(&mut m, Event::Right(Id::Go.key().0)), Out::Moved);
+    assert_eq!(step(&mut m, Event::Right(Some(Id::Go.key().0))), Out::Moved);
     assert_eq!(m.depth(), 1);
 }
 
@@ -293,7 +294,7 @@ fn the_glass_of_a_growing_host_opens_and_drains_and_no_other_host_has_one() {
         m.step(Event::Tick { dt: 1.0 / 60.0, measure: &M, focus: None }, &mut builder(false));
     }
     assert!(m.handed_back(), "the droplet drained into its control");
-    for host in [Host::BesideGlass { anchor: anchor() }, Host::Sheet { anchor: anchor() }, Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet }] {
+    for host in [Host::BesideGlass { anchor: anchor() }, Host::Sheet { anchor: anchor() }, Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet, need_h: None }] {
         let mut m = menu(host, Class::Picker);
         step(&mut m, Event::Opening);
         step(&mut m, Event::Closing);
@@ -311,7 +312,7 @@ fn every_host_derives_exactly_one_ground_and_glass_never_stands_on_video() {
         grows(),
         Host::BesideGlass { anchor: anchor() },
         Host::Sheet { anchor: anchor() },
-        Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet },
+        Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet, need_h: None },
     ];
     for host in hosts {
         let want = match host {
@@ -338,7 +339,7 @@ fn the_class_is_the_menus_and_a_pushed_page_takes_it() {
 
 #[test]
 fn the_width_floor_the_radius_and_the_dim_are_derived() {
-    let video = Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet };
+    let video = Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet, need_h: None };
     assert_eq!(menu(video, Class::Action).form().table.min_panel_w, crate::theme::layout::PLAYER_MENU_MIN_W);
     for host in [grows(), Host::BesideGlass { anchor: anchor() }, Host::Sheet { anchor: anchor() }] {
         assert_eq!(menu(host, Class::Action).form().table.min_panel_w, crate::table::MENU_MIN_W);
@@ -359,7 +360,7 @@ fn one_width_rule_for_every_host() {
         Host::Grows { pill: wide, clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill, width: GrowWidth::Catch },
         Host::BesideGlass { anchor: anchor() },
         Host::Sheet { anchor: anchor() },
-        Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet },
+        Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet, need_h: None },
     ];
     for host in hosts {
         let m = menu(host, Class::Action);
@@ -469,7 +470,7 @@ fn a_video_host_keeps_the_placed_side_for_its_rise() {
         ([100.0f32, 80.0, 200.0, 60.0], Side::Below),
         ([100.0f32, 900.0, 200.0, 60.0], Side::Above),
     ] {
-        let host = Host::Video { anchor: anchor.map(f32::to_bits), placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet };
+        let host = Host::Video { anchor: anchor.map(f32::to_bits), placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet, need_h: None };
         let m = menu(host, Class::Picker);
         let rect = m.panel_rect(&M);
         assert_eq!(m.side(), Some(side), "{anchor:?}");
@@ -488,7 +489,7 @@ fn a_video_host_under_or_above_fit_is_the_sheets_placement_on_a_flat_card() {
     use crate::popover::Placement;
     let a = anchor();
     let sheet = menu(Host::Sheet { anchor: a }, Class::Picker);
-    let video = menu(Host::Video { anchor: a, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet }, Class::Picker);
+    let video = menu(Host::Video { anchor: a, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet, need_h: None }, Class::Picker);
     assert_eq!(video.surface(), Surface::Flat);
     assert_eq!(video.form().table.min_panel_w, crate::theme::layout::PLAYER_MENU_MIN_W);
     let (r_video, r_sheet) = (video.panel_rect(&M), sheet.panel_rect(&M));
@@ -573,7 +574,8 @@ fn key(key: plx_machine::machine::Key, edge: plx_machine::machine::Edge, at_edge
 }
 
 /// `keyed`: BACK's down edge is `Back`; LEFT and RIGHT are acted on only when re-delivered at the edge and on the
-/// down edge, and swallowed on the up edge; RIGHT with no row focused is swallowed; every other input passes.
+/// down edge, and swallowed on the up edge; RIGHT with no row focused is the host's (`Event::Right(None)`); every other input
+/// passes.
 #[test]
 fn keyed_maps_back_left_right_and_passes_the_rest() {
     use plx_machine::machine::{Edge::*, Key};
@@ -590,7 +592,7 @@ fn keyed_maps_back_left_right_and_passes_the_rest() {
     assert_eq!(k(Key::Back, Up, false, None), "pass", "only the down edge of BACK is the menu's");
     assert_eq!(k(Key::Left, Down, true, Some(1)), "left");
     assert_eq!(k(Key::Right, Down, true, Some(1)), "right");
-    assert_eq!(k(Key::Right, Down, true, None), "swallow", "no row to enter: answered, not dead");
+    assert_eq!(k(Key::Right, Down, true, None), "right", "no row to enter: the menu answers Edge, so the press is not dead");
     assert_eq!(k(Key::Left, Up, true, Some(1)), "swallow");
     assert_eq!(k(Key::Right, Up, true, Some(1)), "swallow");
     assert_eq!(k(Key::Left, Down, false, Some(1)), "pass", "a LEFT the engine moved focus with is not ours");
@@ -718,7 +720,11 @@ fn the_pushed_pages_and_the_glass_are_readable() {
 // ---- what the player's menus need of a video card ---------------------------------------------------
 
 fn player(shade: Shade) -> Host {
-    Host::Video { anchor: [1500.0f32, 790.0, 120.0, 64.0].map(f32::to_bits), placement: crate::popover::Placement::PLAYER_MENU, shade }
+    player_needing(shade, None)
+}
+
+fn player_needing(shade: Shade, need_h: Option<f32>) -> Host {
+    Host::Video { anchor: [1500.0f32, 790.0, 120.0, 64.0].map(f32::to_bits), placement: crate::popover::Placement::PLAYER_MENU, shade, need_h }
 }
 
 /// The dim over the video is a rung the host names ([`Shade`]), never a weight of its own.
@@ -732,34 +738,32 @@ fn a_video_card_darkens_the_picture_by_the_shade_its_host_names() {
 /// the host says it shows, so it does not change between pages. Without one, each page decides for itself.
 #[test]
 fn a_video_card_keeps_one_side_for_every_page_when_the_host_names_its_tallest() {
-    let mut m = menu(player(Shade::Sheet), Class::Action);
     let anchor = rect_of([1500.0f32, 790.0, 120.0, 64.0].map(f32::to_bits));
+    let m = menu(player(Shade::Sheet), Class::Action);
     let root = m.panel_rect(&M);
     assert_eq!(root.y + root.h + crate::theme::layout::PLAYER_MENU_GAP, anchor.y, "the player's gap, above the opener");
     // a tallest page no side holds: the card goes beside its opener, and stays there on every page
-    m.set_tallest(2000.0);
+    let mut m = menu(player_needing(Shade::Sheet, Some(2000.0)), Class::Action);
     let beside = m.panel_rect(&M);
     assert_eq!(m.side(), Some(crate::popover::Side::Start));
     assert!(beside.x + beside.w + crate::theme::layout::PLAYER_MENU_GAP <= anchor.x);
     step(&mut m, Event::Ok(Id::Go.key().0));
     m.panel_rect(&M);
     assert_eq!(m.side(), Some(crate::popover::Side::Start), "a pushed page keeps the side");
-    m.set_tallest(600.0);
+    let m = menu(player_needing(Shade::Sheet, Some(600.0)), Class::Action);
     m.panel_rect(&M);
-    assert_eq!(m.side(), Some(crate::popover::Side::Above), "and a smaller need hangs it above again");
+    assert_eq!(m.side(), Some(crate::popover::Side::Above), "and a smaller need hangs it above");
 }
 
-/// A host that learns the opener's rect after building the menu points it there: the layout is measured again.
+/// The card hangs from the opener the host names, and from no other.
 #[test]
-fn reanchor_moves_a_video_card_to_the_opener_the_host_names_now() {
-    let mut m = menu(player(Shade::Sheet), Class::Action);
-    let before = m.panel_rect(&M);
-    let moved = Rect::new(900.0, 790.0, 120.0, 64.0);
-    m.reanchor(moved);
-    let after = m.panel_rect(&M);
-    assert_ne!(before.x, after.x, "the panel followed the anchor");
-    m.reanchor(moved);
-    assert_eq!(m.panel_rect(&M), after, "naming the same anchor again changes nothing");
+fn a_video_card_stands_at_the_anchor_its_host_names() {
+    let at_anchor = |x: f32| {
+        let host = Host::Video { anchor: [x, 790.0, 120.0, 64.0].map(f32::to_bits), placement: crate::popover::Placement::PLAYER_MENU, shade: Shade::Sheet, need_h: None };
+        menu(host, Class::Action).panel_rect(&M)
+    };
+    assert_ne!(at_anchor(1500.0).x, at_anchor(900.0).x, "the panel followed the anchor");
+    assert_eq!(at_anchor(900.0), at_anchor(900.0));
 }
 
 /// `Enter` opens straight on a page with no slide, from the row that names it, and BACK lands on that row.
@@ -777,16 +781,28 @@ fn enter_opens_a_page_with_no_slide_and_back_lands_on_the_row_that_named_it() {
     assert_eq!(m.depth(), 0);
 }
 
-/// The rows of a page beneath may change shape while a page above is open: the host renames the openers and the pop lands
-/// on the row that stands for them now.
+/// The rows of a page beneath may change shape while a page above is open: the page the host builds beneath says which
+/// row stands for the opener now ([`Form::alias`]), and the pop lands on it. A page that says nothing lands on the
+/// opener itself.
 #[test]
-fn a_pop_lands_on_the_opener_as_the_host_renamed_it() {
+fn a_pop_lands_on_the_row_the_page_beneath_says_stands_for_the_opener_now() {
     let mut m = menu(grows(), Class::Action);
     step(&mut m, Event::Ok(Id::Go.key().0));
     settle(&mut m);
-    m.retarget_openers(|id| if *id == Id::Go { Id::Other } else { *id });
-    assert_eq!(step(&mut m, Event::Back), Out::Moved);
+    let aliased = |p: Option<Pg>| match p {
+        None => {
+            let Page { form, title, initial } = root();
+            Some(Page { form: form.alias(Id::Go, Id::Other), title, initial })
+        }
+        page => builder(false)(page),
+    };
+    assert_eq!(m.step(Event::Back, &mut { aliased }), Out::Moved);
     assert_eq!(at(&m), Some(Id::Other.key().0));
+    // the other way: no alias, the opener itself
+    let mut m = menu(grows(), Class::Action);
+    step(&mut m, Event::Ok(Id::Go.key().0));
+    step(&mut m, Event::Back);
+    assert_eq!(at(&m), Some(Id::Go.key().0));
 }
 
 /// A page that is not showing is laid out and its text queued in the menu's own class and placement, and nothing of the
@@ -807,30 +823,27 @@ fn toggle_of(m: &Mn, id: Id) -> Option<bool> {
     m.form().table.sections.iter().flat_map(|s| s.rows.iter()).nth(i).and_then(|r| r.toggle)
 }
 
-/// A switch the viewer just pressed reads its new state at once, in place: no rebuild, no slide, the cursor where it was.
+/// A switch the viewer just pressed reads its new state through a refresh of the page: the cursor stays on it and no slide
+/// runs.
 #[test]
-fn set_toggle_flips_a_switch_row_in_place_and_names_no_row_it_does_not_have() {
-    let mut m = menu(grows(), Class::Action);
-    let before = (m.form().table.sel, m.state());
-    assert!(m.set_toggle(Id::Other.key().0, true));
-    assert_eq!(toggle_of(&m, Id::Other), Some(true));
-    assert!(m.set_toggle(Id::Other.key().0, false));
+fn a_refresh_rebuilds_a_switch_row_in_place_and_keeps_the_cursor() {
+    let on = std::cell::Cell::new(false);
+    let mut build = |p: Option<Pg>| match p {
+        None => Some(Page::root(Form::new().section(
+            FormSection::new("")
+                .item(Id::Go, RowKind::Nav(Pg::One), "go", Row::new("Go"))
+                .item(Id::Other, RowKind::Toggle, "other", Row::new("Other").toggle(on.get())),
+        ))),
+        Some(_) => None,
+    };
+    let mut m = Mn::new(grows(), Class::Picker, crate::table_screen::BAND_BASE);
+    m.step(Event::ReplaceRoot { slide: None }, &mut build);
+    m.step(Event::Focused(Id::Other.key().0), &mut build);
     assert_eq!(toggle_of(&m, Id::Other), Some(false));
-    assert!(!m.set_toggle(0xdead, true), "a key that names no row on the page showing flips nothing");
-    assert_eq!((m.form().table.sel, m.state()), before);
-}
-
-/// The dev harness's "row N": the cursor walks there a step at a time, clamped at either end.
-#[test]
-fn walk_to_moves_the_cursor_to_a_row_by_position_and_clamps_at_the_ends() {
-    let mut m = menu(grows(), Class::Action);
-    assert_eq!(at(&m), Some(Id::Go.key().0));
-    m.walk_to(1);
-    assert_eq!(at(&m), Some(Id::Other.key().0));
-    m.walk_to(99);
-    assert_eq!(at(&m), Some(Id::Off.key().0), "clamped at the last row");
-    m.walk_to(0);
-    assert_eq!(at(&m), Some(Id::Go.key().0));
+    on.set(true);
+    assert_eq!(m.step(Event::Refresh { keep: Some(Id::Other) }, &mut build), Out::Stay);
+    assert_eq!(toggle_of(&m, Id::Other), Some(true));
+    assert_eq!((at(&m), m.state()), (Some(Id::Other.key().0), State { stack: Stack::Root, motion: Motion::Rest }));
 }
 
 /// A video card has an anchor to read back; a growing glass starts from its pill and has none.
@@ -841,8 +854,8 @@ fn a_video_card_reads_back_its_anchor_and_a_growing_glass_has_none() {
     assert_eq!(menu(grows(), Class::Action).anchor(), None);
 }
 
-/// A page can be stood on without a row to it on the page showing (a live rebuild leaves one, `retarget_openers`): the
-/// opener the host names is what a pop returns to.
+/// A page can be stood on without a row to it on the page showing (a live rebuild can leave one): the opener the host
+/// names is what a pop returns to.
 #[test]
 fn open_page_stands_on_a_page_from_the_opener_the_host_names() {
     let mut m = menu(grows(), Class::Action);

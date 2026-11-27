@@ -117,7 +117,7 @@ impl LogicalState for PreplayArg {
 /// (glass, over the control), else hangs under or above its opener on the sheet ground.
 pub(crate) fn host_of(arg: &PreplayArg) -> Host {
     match (arg.source, arg.opener) {
-        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet },
+        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet, need_h: None },
         (Source::Page, Some(_)) => plx_ui::detail_layout::hero_host(arg.anchor),
         (Source::Page, None) => Host::Sheet { anchor: arg.anchor },
     }

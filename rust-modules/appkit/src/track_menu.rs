@@ -119,7 +119,7 @@ use plx_ui::geom::IndexElem;
 use plx_machine::machine::{Canon, GroupId};
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::menu::{Class, Event, Host, Menu, Motion, Out, Page, Shade, Stack, State};
-use plx_ui::page_stack::{popover_a11y, popover_a11y_elems};
+use plx_ui::page_stack::{popover_a11y, popover_a11y_elems, TITLE_KEY};
 use plx_ui::table::{Badge, Row, Section};
 use plx_ui::table_screen::BAND_BASE;
 use plx_ui::Rect;
@@ -722,6 +722,9 @@ pub enum TrackOk {
     /// A subtitle-search command for the screen to send to the store. The panel stays open: a
     /// search or a download is watched, not fired and forgotten.
     Search(plx_data::subsearch::SubSearchCmd),
+    /// LEFT at a root, or RIGHT on a row that opens no page: a key the menu has no meaning for, which this panel
+    /// spends on its tab switch ([`TrackMenuState::focus_tab`], the host's: it knows which key it was).
+    Edge,
 }
 
 impl Drop for TrackMenuState {
@@ -1098,7 +1101,13 @@ impl TrackCore {
                 sec.item(TrackRow::OpenLang(lang.id), RowKind::Nav(TrackPage::Language(lang.id.stream)), (), row)
             }
         });
-        Form::new().section(sec)
+        // a language changes shape under a viewer (a sidecar becomes offered or leaves): the page above it was opened
+        // from the row it WAS, and a pop lands on the row that stands for it now
+        self.other.iter().fold(Form::new().section(sec), |form, lang| {
+            let is = Self::other_lang_row(lang);
+            let was = std::iter::once(TrackRow::OpenLang(lang.id)).chain(lang.tracks.iter().map(|t| TrackRow::Sub(t.i)));
+            was.filter(|was| *was != is).fold(form, |form, was| form.alias(was, is))
+        })
     }
 
     /// A language page: its tracks ranked full < SDH < forced < commentary, a pick row each.
@@ -1596,9 +1605,14 @@ impl TrackMenuState {
         offer_search: bool,
     ) -> Self {
         Self::new_with_preferences(ps, meta, tab, yours, offer_search,
-            plx_plex::plex::session::SubtitleSize::Medium, plx_plex::plex::session::SubtitlePosition::Low)
+            plx_plex::plex::session::SubtitleSize::Medium, plx_plex::plex::session::SubtitlePosition::Low,
+            crate::player_hud::classic::ctrl_row_hit_rect())
     }
 
+    /// [`Self::new_with`] with the caption preferences the Style page reads out, and the rect `anchor` of the control
+    /// (widened to the end of its segment) the menu hangs from, as the player screen hands it over: the openers of one
+    /// segment share the panel's edge. The anchor is the host's for the menu's whole life ([`Host::Video`]); the plain
+    /// opens hang from the HUD's own control row, whose right edge is `CTRL_RIGHT`.
     pub fn new_with_preferences(
         ps: &plx_media::route::PlaybackSession,
         meta: metadata::MetadataView<'_>,
@@ -1607,6 +1621,7 @@ impl TrackMenuState {
         offer_search: bool,
         size: plx_plex::plex::session::SubtitleSize,
         position: plx_plex::plex::session::SubtitlePosition,
+        anchor: Rect,
     ) -> Self {
         let core = TrackCore {
             tab,
@@ -1634,22 +1649,11 @@ impl TrackMenuState {
             item_sidecars: Vec::new(),
         };
         // both tabs' pages are choices with sub-lines: a picker (HEADLINE rows)
-        let mut menu = Menu::new(host(), Class::Picker, BAND_BASE);
-        menu.set_tallest(NEED_H);
+        let menu = Menu::new(host(anchor), Class::Picker, BAND_BASE);
         let mut s = TrackMenuState { core, menu, background_owner: None };
         s.sync_item(ps, meta);
         s.rebuild(ps, meta, tab);
         s
-    }
-
-    /// Open beside `anchor`, the rect of the control (widened to the end of its segment) that
-    /// opened the menu, as the player screen hands it over. Without it the menu opens where classic
-    /// does: the control row's rect, whose right edge is `CTRL_RIGHT`. Called once, on the
-    /// freshly built menu and before its first frame: the placement is cached against the table's
-    /// layout, and the anchor is latched for the menu's whole life.
-    pub fn with_anchor(mut self, anchor: Rect) -> Self {
-        self.menu.reanchor(anchor);
-        self
     }
 
     /// **The one menu component** this panel is: the form, the stack of pages, the card and its motion
@@ -1720,17 +1724,8 @@ impl TrackMenuState {
     /// Move focus onto the row `id` names (a test's, or the `submenuosc` trigger's, way of
     /// pressing DOWN to it); `false` when this tab has no such row.
     pub fn focus_id(&mut self, id: TrackRow) -> bool {
-        self.focus_key(id.key().0);
+        self.step_pages(Event::Focused(id.key().0));
         self.menu.form().selected_id() == Some(&id)
-    }
-
-    /// **Write back the engine's own focus cursor** (restructure phase 12): the Column group
-    /// [`Menu::groups`] answers is the source of geometry, but the ENGINE owns the current
-    /// element (§7.3 step 5) — the owner's `step` is the only place that mutates in response to a
-    /// `FocusMoved`, and this is `screens::player::overlay::PlayerOverlayScreen::step`'s write.
-    /// The element is a row's [`RowKey`] number; a key this tab does not know moves nothing.
-    pub fn focus_key(&mut self, elem: u32) {
-        self.menu.focus(elem);
     }
 
     /// The Subtitles tab's half of the live poll `Self::update` runs every tick, mirroring the
@@ -1825,7 +1820,9 @@ impl TrackMenuState {
     /// path always moves relatively; this exists because the initial focus is the ACTIVE row
     /// (derived from playback state), so a relative walk from it would land elsewhere.
     pub fn focus_row(&mut self, row: c_int) {
-        self.menu.walk_to(row);
+        if let Some(key) = usize::try_from(row).ok().and_then(|i| self.menu.form().key_at(i)) {
+            self.step_pages(Event::Focused(key.0));
+        }
     }
 
     /// Resolve a NAMED Audio-tab target (`"boost"`/`"loudness"`) to its absolute table row, for
@@ -1854,15 +1851,39 @@ impl TrackMenuState {
         }
     }
 
-    /// commit the focused row as the active track for its tab — dismissing the panel afterward is
-    /// the container's job now, not this method's; the answer says whether it should. The row is
-    /// read back by its [`TrackRow`] (never by position), and a row the form declared DISABLED (the
-    /// dim Timing/Style under a live burn, a Size/Position row the renderer cannot reach) is inert
-    /// at the form layer.
-    pub fn on_ok(&mut self, meta: metadata::MetadataView<'_>) -> TrackOk {
+    /// **The one entry of a key, a click or a focus move** ([`Event`]): the screen feeds the panel what the viewer did
+    /// and acts on the answer. OK (or a click) on the row `key` commits it as the active track for its tab, opens its
+    /// page or says what the screen is to do ([`TrackOk`]); BACK and LEFT pop a page, RIGHT enters a Nav row, and a key
+    /// the menu has no meaning for is [`TrackOk::Edge`], which the screen spends on the tab switch
+    /// ([`Self::focus_tab`]). The title band's key pops. Dismissing the panel afterward is the container's job, not
+    /// this method's; the answer says whether it should.
+    pub fn step(
+        &mut self,
+        ps: &plx_media::route::PlaybackSession,
+        meta: metadata::MetadataView<'_>,
+        ev: Event<'_, TrackRow>,
+    ) -> TrackOk {
+        let out = match ev {
+            Event::Ok(key) if key != TITLE_KEY => return self.ok(key, ps, meta),
+            // a focus move asks for no page, so it needs no session
+            Event::Focused(_) => self.step_pages(ev),
+            ev => self.step_full(ps, meta, ev, RootCtx::default()),
+        };
+        match out {
+            Out::Moved => TrackOk::Navigated,
+            Out::Dismiss => TrackOk::Dismiss,
+            Out::Edge => TrackOk::Edge,
+            Out::Stay | Out::Picked(()) => TrackOk::Inert,
+        }
+    }
+
+    /// OK on the row `key`. The row is read back by its [`TrackRow`] (never by position), and a row the form declared
+    /// DISABLED (the dim Timing/Style under a live burn, a Size/Position row the renderer cannot reach) is inert at the
+    /// form layer.
+    fn ok(&mut self, key: u32, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) -> TrackOk {
         let tab = self.tab;
-        let cursor = self.menu.form().selected_key().map(|k| k.0);
-        let focused = self.menu.form().selected_id().copied();
+        let cursor = Some(key);
+        let focused = self.menu.id_of(key).copied();
         if tab == 0 {
             // The two Plex Pass DSP rows (issue #266), after the audio tracks — see
             // `Self::audio_form`, which declares them beside the tracks, so a track pick below is
@@ -1882,10 +1903,9 @@ impl TrackMenuState {
                         a.normalize_loudness = !a.normalize_loudness;
                     }
                     self.enhance_shown = Some(a);
-                    // the switch reads its new state at once, before the route settles it
-                    if let Some(key) = cursor {
-                        self.menu.set_toggle(key, if target == Some(TrackRow::Boost) { a.boost_dialog } else { a.normalize_loudness });
-                    }
+                    // the switch reads its new state at once, before the route settles it: the page is built again from
+                    // it, the cursor kept on the row
+                    self.step_full(ps, meta, Event::Refresh { keep: target }, RootCtx { audio_keep: target, ..RootCtx::default() });
                     plx_telemetry::diag::event(plx_telemetry::diag::schema::DiagEvent::FeatureUsed {
                         feature: plx_telemetry::diag::schema::Feature::AudioEnhancement,
                     });
@@ -2036,31 +2056,6 @@ impl TrackMenuState {
         self.menu.pages().any(|saved| matches!(saved.page, TrackPage::Search | TrackPage::SearchLanguage))
     }
 
-    /// **LEFT**: pop a sub-page, else (on a root) the tab switch as before.
-    pub fn on_left(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) {
-        if matches!(self.step_full(ps, meta, Event::Left, RootCtx::default()), Out::Edge) {
-            self.focus_tab(ps, meta, 0);
-        }
-    }
-
-    /// Pop the top page: the page beneath comes back exactly as it was left — the opener focused
-    /// by id, the scroll reinstated. `false` at the root (nothing popped).
-    pub fn pop(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) -> bool {
-        matches!(self.step_full(ps, meta, Event::Left, RootCtx::default()), Out::Moved)
-    }
-
-    /// **RIGHT**: on a Nav row it enters — the same as OK, and inert on a disabled one at the form
-    /// layer — else the tab switch as before.
-    pub fn on_right(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) {
-        let edge = match self.menu.form().selected_key() {
-            Some(key) => matches!(self.step_full(ps, meta, Event::Right(key.0), RootCtx::default()), Out::Edge),
-            None => true,
-        };
-        if edge {
-            self.focus_tab(ps, meta, 1);
-        }
-    }
-
     /// One step of the menu machine for an event that never asks for the ROOT's rows (a push, a refresh of a pushed
     /// page, a pop onto a page): the pages are built from the panel's own read-outs, no session in hand.
     fn step_pages(&mut self, ev: Event<'_, TrackRow>) -> Out<()> {
@@ -2076,12 +2071,7 @@ impl TrackMenuState {
         ev: Event<'_, TrackRow>,
         ctx: RootCtx,
     ) -> Out<()> {
-        // the rows of the pages beneath may have changed shape while a page above was open (a language that dropped to
-        // one track is a direct row now, and the reverse): a pop lands on the row that stands for the opener NOW
         let core = &mut self.core;
-        if self.menu.depth() > 0 {
-            self.menu.retarget_openers(|id| core.other_row_for(*id));
-        }
         self.menu.step(ev, &mut |page| match page {
             Some(_) if ctx.drop_pages => None,
             Some(page) => Some(core.build_page(page)),
@@ -2158,27 +2148,6 @@ impl TrackMenuState {
         } else {
             self.step_full(ps, meta, Event::Refresh { keep: Some(keep) }, ctx);
         }
-    }
-
-    /// The panel's NATURAL geometry — the layout of the page that is showing, shared by `update`,
-    /// `draw` and the focus queries so scrolling math matches. Cached against the table's
-    /// layout revision: text is measured when the table changed, not once per caller per frame. What is on screen is
-    /// [`Self::shown_rect`], which springs toward this.
-    fn panel_rect(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        self.menu.panel_rect(measure)
-    }
-
-    /// The card as it is drawn this frame: its top and left edges on their springs toward
-    /// [`Self::panel_rect`], the bottom and right on the anchor.
-    fn shown_rect(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        self.menu.shown_rect(measure)
-    }
-
-    /// **Is the panel mid-transition** — resizing to a new layout or sliding a page? The player
-    /// overlay holds the pointer while this is true (`Screen::pointer_held`): hover and clicks are
-    /// swallowed rather than resolved against pages in motion.
-    pub fn transitioning(&self) -> bool {
-        self.menu.pointer_held()
     }
 
     /// `ps`/`meta` are read only for the Audio tab, and only to notice a LIVE change: a request
@@ -2259,6 +2228,44 @@ impl TrackMenuState {
         let core = &mut self.core;
         self.menu.open_page(page, opener, &mut |p| p.map(|p| core.build_page(p)));
     }
+
+    /// OK on the row the cursor is on, as the screen feeds it ([`Self::step`]) with no session in hand: a test whose
+    /// answer rebuilds a root names its own ([`Self::ok_with`]).
+    fn on_ok(&mut self, meta: metadata::MetadataView<'_>) -> TrackOk {
+        self.ok_with(&plx_media::route::PlaybackSession::IDLE, meta)
+    }
+
+    fn ok_with(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) -> TrackOk {
+        match self.menu.form().selected_key() {
+            Some(key) => self.step(ps, meta, Event::Ok(key.0)),
+            None => TrackOk::Inert,
+        }
+    }
+
+    /// The focus engine moved to the row `key` ([`Event::Focused`]).
+    fn focus_key(&mut self, key: u32) {
+        self.step_pages(Event::Focused(key));
+    }
+
+    /// LEFT: pops a page; `false` at a root, where it is the tab switch's ([`Self::on_left`]).
+    fn pop(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) -> bool {
+        matches!(self.step(ps, meta, Event::Left), TrackOk::Navigated)
+    }
+
+    /// LEFT as the screen spends it: a page pops, a root switches to Audio.
+    fn on_left(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) {
+        if self.step(ps, meta, Event::Left) == TrackOk::Edge {
+            self.focus_tab(ps, meta, 0);
+        }
+    }
+
+    /// RIGHT as the screen spends it: a Nav row opens, any other answer switches to Subtitles.
+    fn on_right(&mut self, ps: &plx_media::route::PlaybackSession, meta: metadata::MetadataView<'_>) {
+        let key = self.menu.form().selected_key().map(|k| k.0);
+        if self.step(ps, meta, Event::Right(key)) == TrackOk::Edge {
+            self.focus_tab(ps, meta, 1);
+        }
+    }
 }
 
 /// **What a root build is asked for** ([`TrackMenuState::step_full`]): the row the Audio root lands on, and a refresh that
@@ -2294,13 +2301,14 @@ impl TrackCore {
 }
 
 /// **The Tracks menu's card over the video plane**: flat, hung from the control row by the player's placement, at the
-/// player's dim weight. The anchor is the HUD's own control row until the host names the segment's rect
-/// ([`TrackMenuState::with_anchor`]).
-fn host() -> Host {
+/// player's dim weight. The anchor is the rect the host names, the segment's ([`TrackMenuState::new_with_preferences`]).
+fn host(anchor: Rect) -> Host {
     Host::Video {
-        anchor: [crate::player_hud::classic::ctrl_row_hit_rect()].map(|r| [r.x, r.y, r.w, r.h].map(f32::to_bits))[0],
+        anchor: [anchor.x, anchor.y, anchor.w, anchor.h].map(f32::to_bits),
         placement: plx_ui::popover::Placement::PLAYER_MENU,
         shade: Shade::Player,
+        // every page of the menu opens on the side the tallest one holds
+        need_h: Some(NEED_H),
     }
 }
 
@@ -5569,7 +5577,7 @@ mod focus_tests {
             search_watching: false,
             item_sidecars: Vec::new(),
         };
-        let mut menu = Menu::new(host(), Class::Picker, BAND_BASE);
+        let mut menu = Menu::new(host(crate::player_hud::classic::ctrl_row_hit_rect()), Class::Picker, BAND_BASE);
         *menu.form_mut() = form;
         TrackMenuState { core, menu, background_owner: None }
     }
@@ -5704,7 +5712,7 @@ mod focus_tests {
     fn place_matches_the_tables_own_row_frame() {
         let e = EntryId(5);
         let st = three_row_menu();
-        let r = st.panel_rect(&plx_ui::fixture::FixtureMeasure);
+        let r = st.menu.panel_rect(&plx_ui::fixture::FixtureMeasure);
         let want = st.menu.form().table.row_frame(r, 2);
         let part = TrackMenuPart { state: &st, entry: e, group: GroupId(0) };
         with_cx(e, |cx| {
@@ -6985,7 +6993,7 @@ mod motion_tests {
         let mut menu = TrackMenuState::new(&ps, store.view(), 1, vec!["eng".into()]);
         // the first update places the card AT its layout: the open is the appear animation's
         frame(&mut menu, &ps, &store);
-        assert!(!menu.transitioning(), "a freshly opened panel is at rest");
+        assert!(!menu.menu.pointer_held(), "a freshly opened panel is at rest");
         (menu, ps, store)
     }
 
@@ -7004,11 +7012,11 @@ mod motion_tests {
     }
 
     fn shown(menu: &TrackMenuState) -> Rect {
-        menu.shown_rect(&ShippedMeasure)
+        menu.menu.shown_rect(&ShippedMeasure)
     }
 
     fn natural(menu: &TrackMenuState) -> Rect {
-        menu.panel_rect(&ShippedMeasure)
+        menu.menu.panel_rect(&ShippedMeasure)
     }
 
     fn push_style(menu: &mut TrackMenuState, store: &plx_data::stores::metadata::MetadataStore) {
@@ -7024,7 +7032,7 @@ mod motion_tests {
         let (mut menu, ps, store) = open();
         let root = natural(&menu);
         push_style(&mut menu, &store);
-        assert!(menu.transitioning(), "the page slide is running the moment the page is pushed");
+        assert!(menu.menu.pointer_held(), "the page slide is running the moment the page is pushed");
         assert!(frame(&mut menu, &ps, &store), "a running transition keeps the present gate awake");
         assert!(menu.menu.motion().sliding());
         assert_ne!(shown(&menu), natural(&menu), "the card is between the two layouts");
@@ -7036,7 +7044,7 @@ mod motion_tests {
             assert!(frames_moving < 240, "the transition never settles");
         }
         assert!((6..120).contains(&frames_moving), "a transition spans a handful of frames, not {frames_moving}");
-        assert!(!menu.transitioning());
+        assert!(!menu.menu.pointer_held());
         assert!(!menu.menu.motion().sliding());
         assert_eq!(shown(&menu), natural(&menu), "the card lands EXACTLY on the layout");
         // idle is truly idle: a settled panel steps without a single frame requested
@@ -7074,7 +7082,7 @@ mod motion_tests {
         assert_eq!(live_after, revived, "the page returned to continues from its own alpha");
         let after = menu.menu.motion().live_dx();
         assert!(after <= 0.0, "a pop returns the root from the left, not the right: {after}");
-        assert!(menu.transitioning());
+        assert!(menu.menu.pointer_held());
 
         let mut n = 0;
         while frame(&mut menu, &ps, &store) {
@@ -7082,7 +7090,7 @@ mod motion_tests {
             assert!(n < 240, "the reversed transition never settles");
         }
         assert_eq!(shown(&menu), root, "settles on the root layout");
-        assert!(!menu.transitioning());
+        assert!(!menu.menu.pointer_held());
         assert!(menu.menu.depth() == 0);
         assert_eq!(menu.selected_id(), Some(TrackRow::Style), "the opener is focused again");
         teardown(&ps);
@@ -7182,13 +7190,13 @@ mod motion_tests {
         assert_eq!(menu.on_ok(store.view()), TrackOk::Navigated);
         assert_eq!(menu.menu.depth(), 2);
         run(&mut menu, &ps, &store, 240);
-        assert!(!menu.transitioning());
+        assert!(!menu.menu.pointer_held());
         assert_eq!(shown(&menu), natural(&menu));
         assert!(menu.pop(&ps, store.view()));
         assert!(menu.pop(&ps, store.view()));
         run(&mut menu, &ps, &store, 240);
         assert_eq!(shown(&menu), root);
-        assert!(!menu.transitioning());
+        assert!(!menu.menu.pointer_held());
         teardown(&ps);
     }
 
@@ -7563,12 +7571,12 @@ mod classic_placement_tests {
         let mut out = Vec::new();
         for (tab, name) in [(0, "audio root"), (1, "subtitles root")] {
             let mut menu = TrackMenuState::new(&ps, store.view(), tab, vec!["eng".into()]);
-            let r = menu.panel_rect(&ShippedMeasure);
+            let r = menu.menu.panel_rect(&ShippedMeasure);
             out.push((format!("{name} ({audio} dubs)"), [r.x + r.w, r.y + r.h, r.w, r.h]));
             if let Some(i) = menu.menu.form().index_of(&TrackRow::Style) {
                 menu.focus_row(i as c_int);
                 assert_eq!(menu.on_ok(store.view()), TrackOk::Navigated);
-                let r = menu.panel_rect(&ShippedMeasure);
+                let r = menu.menu.panel_rect(&ShippedMeasure);
                 out.push((format!("style page ({audio} dubs)"), [r.x + r.w, r.y + r.h, r.w, r.h]));
             }
         }
@@ -7617,7 +7625,9 @@ mod classic_placement_tests {
     fn menu_at(anchor: Rect, tab: c_int) -> (TrackMenuState, plx_data::stores::metadata::MetadataStore) {
         let ps = plx_media::route::PlaybackSession::IDLE;
         let store = item(3);
-        (TrackMenuState::new(&ps, store.view(), tab, vec!["eng".into()]).with_anchor(anchor), store)
+        let st = TrackMenuState::new_with_preferences(&ps, store.view(), tab, vec!["eng".into()], false,
+            plx_plex::plex::session::SubtitleSize::Medium, plx_plex::plex::session::SubtitlePosition::Low, anchor);
+        (st, store)
     }
 
     /// The panel opens beside the anchor it was handed, whichever side that is.
@@ -7629,13 +7639,13 @@ mod classic_placement_tests {
         // an opener high on the screen: the panel hangs BELOW it, from its right edge
         let high = Rect::new(1500.0, 120.0, 324.0, 64.0);
         let (menu, _store) = menu_at(high, 1);
-        let r = menu.panel_rect(&ShippedMeasure);
+        let r = menu.menu.panel_rect(&ShippedMeasure);
         assert_eq!(menu.menu.side().expect("a video card has a side"), Side::Below);
         assert_eq!((r.y, r.x + r.w), (high.y + high.h + gap, high.x + high.w));
         // an opener in the middle of the right edge with no room above or below for NEED_H: to its left
         let mid = Rect::new(1700.0, 560.0, 64.0, 64.0);
         let (menu, _store) = menu_at(mid, 1);
-        let r = menu.panel_rect(&ShippedMeasure);
+        let r = menu.menu.panel_rect(&ShippedMeasure);
         assert_eq!(menu.menu.side().expect("a video card has a side"), Side::Start);
         assert_eq!(r.x + r.w, mid.x - gap);
         assert!(plx_ui::consts::SAFE.contains(r.x, r.y) && r.y + r.h <= plx_ui::consts::SAFE.y + plx_ui::consts::SAFE.h);
@@ -7649,13 +7659,13 @@ mod classic_placement_tests {
     fn the_panel_does_not_move_off_its_anchor_while_it_is_open() {
         let _g = plx_base::testlock::serial();
         let (mut menu, store) = menu_at(Rect::new(1500.0, 300.0, 324.0, 64.0), 1);
-        let first = menu.panel_rect(&ShippedMeasure);
+        let first = menu.menu.panel_rect(&ShippedMeasure);
         let side = menu.menu.side().expect("a video card has a side");
         assert_eq!(side, plx_ui::popover::Side::Below, "the opener is high: the panel hangs under it");
         let i = menu.menu.form().index_of(&TrackRow::Style).expect("Style row");
         menu.focus_row(i as c_int);
         assert_eq!(menu.on_ok(store.view()), TrackOk::Navigated);
-        let pushed = menu.panel_rect(&ShippedMeasure);
+        let pushed = menu.menu.panel_rect(&ShippedMeasure);
         assert_ne!((pushed.w, pushed.h), (first.w, first.h), "the page changed the panel's size");
         assert_eq!(menu.menu.side().expect("a video card has a side"), side);
         assert_eq!(pushed.x + pushed.w, first.x + first.w, "the edge by the opener");
@@ -7694,9 +7704,9 @@ mod classic_placement_tests {
         let ps = plx_media::route::PlaybackSession::IDLE;
         let meta = plx_data::stores::metadata::MetadataStore::default();
         let mut a = TrackMenuState::new_with_preferences(&ps, meta.view(), 0, Vec::new(), false,
-            SubtitleSize::Large, SubtitlePosition::Low);
+            SubtitleSize::Large, SubtitlePosition::Low, crate::player_hud::classic::ctrl_row_hit_rect());
         let b = TrackMenuState::new_with_preferences(&ps, meta.view(), 0, Vec::new(), false,
-            SubtitleSize::Small, SubtitlePosition::Low);
+            SubtitleSize::Small, SubtitlePosition::Low, crate::player_hud::classic::ctrl_row_hit_rect());
         a.update(0.016, &plx_ui::fixture::FixtureMeasure, &ps, meta.view());
         assert_eq!(a.size, SubtitleSize::Large);
         assert_eq!(b.size, SubtitleSize::Small);

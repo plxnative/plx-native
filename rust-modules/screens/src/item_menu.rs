@@ -2018,7 +2018,8 @@ pub(crate) mod tests {
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
         assert_eq!(unseated.elem, ItemRow::GoToItem.key().0, "the cursor wins over a live row the menu never saw");
         let mut screen = screen;
-        assert!(screen.menu.focus(live.elem));
+        screen.menu.step(Event::Focused(live.elem), &mut |_| None);
+        assert_eq!(screen.menu.form().selected_key().map(|k| k.0), Some(live.elem));
         let kept =
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
         assert_eq!(kept.elem, live.elem, "a row the cursor is on is left where it is");
