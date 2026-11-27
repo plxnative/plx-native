@@ -7,14 +7,15 @@
 //! [`language_page`]. What they are built from is plain values: the item's streams, the grouping
 //! `metadata::sub_layout::sub_sections` answered (the one source of what sits under which header, which
 //! languages are behind the Other languages row and in what order) and a [`TrackCx`], the context the rows are
-//! for. A host that has its own alphabet adapts a page with [`plx_ui::form::Form::map_aliased`] (Detail's
-//! `PickRow`); the player uses the page as it is.
+//! for. A host that has its own alphabet adapts a page with [`plx_ui::form::Form::map`] (Detail's
+//! `PickRow`), which carries the language aliases across; the player uses the page as it is.
 //!
 //! **The context says what exists.** [`TrackCx::Preplay`] is a viewer choosing before a playback exists: the two
 //! pages hold tracks and Off and nothing else, because Forced only, Timing, Style, the remembered-subtitle note,
 //! the Plex Pass DSP rows and the per-route marks on an audio row all act on, or read, a session. The builders
-//! leave those out for it (they are not demoted, they are not declared). [`TrackCx::Playing`] carries the facts
-//! of the playback ([`PlayingFacts`]). What is checked is read off the context only ([`TrackCx::checked`]), so
+//! leave those out for it (they are not demoted, they are not declared). [`TrackCx::Playing`] carries what every page reads (the checked audio and subtitle); what only one page reads
+//! comes in as that page's own argument ([`AudioRoute`] for the Audio page, [`SubtitleRoute`] for the Subtitles
+//! page), present exactly when the context is playing. What is checked is read off the context only ([`TrackCx::checked`]), so
 //! "Forced only holds the one checkmark, the forced track it drew is not also checked" is one rule for the root,
 //! the Other languages page and a language page.
 //!
@@ -108,11 +109,17 @@ pub enum Dsp {
     Disabled { reason: String },
 }
 
-/// **What only a playback knows**: the pages read the ones they show.
-pub struct PlayingFacts<'a> {
-    /// The audio track playing (an index into the item's audio list); `None` when the route names none.
-    pub audio: Option<usize>,
-    pub sub: SubState<'a>,
+/// **What only the route knows about the Audio page**: the Plex Pass DSP pair and each track's mark. Passed to
+/// [`audio_page`] while playing, never otherwise.
+pub struct AudioRoute<'a> {
+    pub dsp: Dsp,
+    /// Per audio track, what its sub-line says about the route (a track past the end is [`AudioMark::Plain`]).
+    pub marks: &'a [AudioMark],
+}
+
+/// **What only the route knows about the Subtitles page**: the Timing read-out, whether the server draws the
+/// subtitle, and the remembered-subtitle note. Passed to [`subtitles_page`] while playing, never otherwise.
+pub struct SubtitleRoute {
     /// The Timing row's read-out, in ms.
     pub offset_ms: i64,
     /// Why the server draws the subtitle into the picture, when it does (Timing and Style are then disabled).
@@ -120,18 +127,16 @@ pub struct PlayingFacts<'a> {
     /// The show's remembered subtitle was chosen for this play and the route shows none of it: one inert note
     /// closes the first group.
     pub memory_note: bool,
-    pub dsp: Dsp,
-    /// Per audio track, what its sub-line says about the route (a track past the end is [`AudioMark::Plain`]).
-    pub marks: &'a [AudioMark],
 }
 
-/// **The context a page's rows are built for.**
+/// **The context a page's rows are built for**: what every page reads, the checked audio and subtitle.
 #[derive(Clone, Copy)]
 pub enum TrackCx<'a> {
     /// Choosing before playback (Detail): `audio` and `sub` are what is chosen; no session, no route.
     Preplay { audio: usize, sub: Option<usize> },
-    /// The in-player menu.
-    Playing(&'a PlayingFacts<'a>),
+    /// The in-player menu: the audio track playing (an index into the item's audio list; `None` when the route
+    /// names none) and the subtitle ([`SubState`]).
+    Playing { audio: Option<usize>, sub: SubState<'a> },
 }
 
 impl<'a> TrackCx<'a> {
@@ -139,7 +144,7 @@ impl<'a> TrackCx<'a> {
     pub fn audio(&self) -> Option<usize> {
         match self {
             TrackCx::Preplay { audio, .. } => Some(*audio),
-            TrackCx::Playing(f) => f.audio,
+            TrackCx::Playing { audio, .. } => *audio,
         }
     }
 
@@ -147,7 +152,7 @@ impl<'a> TrackCx<'a> {
         match self {
             TrackCx::Preplay { sub: Some(i), .. } => SubState::Track(*i),
             TrackCx::Preplay { sub: None, .. } => SubState::Off,
-            TrackCx::Playing(f) => f.sub,
+            TrackCx::Playing { sub, .. } => *sub,
         }
     }
 
@@ -156,24 +161,23 @@ impl<'a> TrackCx<'a> {
         self.sub().checked()
     }
 
-    fn playing(&self) -> Option<&'a PlayingFacts<'a>> {
-        match self {
-            TrackCx::Preplay { .. } => None,
-            TrackCx::Playing(f) => Some(f),
-        }
+    fn is_playing(&self) -> bool {
+        matches!(self, TrackCx::Playing { .. })
     }
 }
 
 // ---- the pages ---------------------------------------------------------------------------------
 
 /// **The Audio page**: a checked [`TrackRow::Audio`] per track, then, while playing, the DSP pair (its own
-/// headerless section with its note) the route offers. Opens on the checked track.
-pub fn audio_page(cx: &TrackCx<'_>, audio: &[Stream], names: &TrackNames) -> TrackPageOf {
+/// headerless section with its note) the route offers. Opens on the checked track. `route` is `Some` exactly when
+/// `cx` is playing.
+pub fn audio_page(cx: &TrackCx<'_>, audio: &[Stream], names: &TrackNames, route: Option<&AudioRoute<'_>>) -> TrackPageOf {
     use plx_os::i18n::msg;
+    debug_assert_eq!(cx.is_playing(), route.is_some(), "the route's facts come with a playing context, and only then");
     let checked = cx.audio();
     let mut sec = FormSection::new(msg::widgets_tracks_audio());
     for i in 0..audio.len() {
-        let mark = cx.playing().and_then(|f| f.marks.get(i).copied()).unwrap_or_default();
+        let mark = route.and_then(|r| r.marks.get(i).copied()).unwrap_or_default();
         sec = sec.item(
             TrackRow::Audio(i),
             RowKind::Choice,
@@ -182,8 +186,8 @@ pub fn audio_page(cx: &TrackCx<'_>, audio: &[Stream], names: &TrackNames) -> Tra
         );
     }
     let mut form = Form::new().section(sec);
-    if let Some(f) = cx.playing() {
-        form = match &f.dsp {
+    if let Some(route) = route {
+        form = match &route.dsp {
             Dsp::Hidden => form,
             Dsp::Offered { shown, note } => {
                 let mut dsp = FormSection::new("")
@@ -232,16 +236,16 @@ pub fn audio_page(cx: &TrackCx<'_>, audio: &[Stream], names: &TrackNames) -> Tra
 /// own section, ONE *Other languages* drill-in, and, while playing, Timing and Style (disabled with the reason
 /// while the server draws the subtitle) and the remembered-subtitle note. Opens on the row that stands for the
 /// checked subtitle: Forced only while it is the mode, the Other languages row when the checked track lives
-/// behind it, else its own row or Off.
-pub fn subtitles_page(cx: &TrackCx<'_>, model: &SubModel) -> TrackPageOf {
+/// behind it, else its own row or Off. `route` is `Some` exactly when `cx` is playing.
+pub fn subtitles_page(cx: &TrackCx<'_>, model: &SubModel, route: Option<&SubtitleRoute>) -> TrackPageOf {
     use plx_os::i18n::msg;
+    debug_assert_eq!(cx.is_playing(), route.is_some(), "the route's facts come with a playing context, and only then");
     let sub = cx.sub();
     let checked = sub.checked();
     let forced = match sub {
         SubState::ForcedOnly { readout, .. } => Some(readout),
         _ => None,
     };
-    let playing = cx.playing();
     let active_other = model.other.iter().find(|o| o.tracks.iter().any(|t| checked == Some(t.i)));
     let form = model.sections.iter().enumerate().fold(Form::new(), |form, (at, sec)| {
         let head = match &sec.header {
@@ -254,7 +258,7 @@ pub fn subtitles_page(cx: &TrackCx<'_>, model: &SubModel) -> TrackPageOf {
         let out = sec.rows.iter().fold(FormSection::from_head(head), |out, row| {
             // the identity comes from the model's own row target, never from the position
             let id = TrackRow::from(row.target());
-            match (row, playing) {
+            match (row, route) {
                 (SubRow::Off, _) => out.item(
                     id,
                     RowKind::Choice,
@@ -306,7 +310,7 @@ pub fn subtitles_page(cx: &TrackCx<'_>, model: &SubModel) -> TrackPageOf {
                 }
             }
         });
-        let remembered = playing.is_some_and(|f| f.memory_note);
+        let remembered = route.is_some_and(|r| r.memory_note);
         form.section(if at == 0 && remembered { out.note(msg::widgets_tracks_sub_remembered_note()) } else { out })
     });
     let initial = match sub {

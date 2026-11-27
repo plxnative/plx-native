@@ -124,7 +124,7 @@ re-recorded.
   `TrackCore::build_page`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs. The
   track pages (Audio, Subtitles, Other languages, a language) are not built there but in
   `appkit::track_rows`, which Detail's Audio & Subtitles picker builds from too (`TrackCx::Preplay`,
-  adapted with `Form::map_aliased`): one place turns an item's tracks into rows.
+  adapted with `Form::map`, which carries the language aliases): one place turns an item's tracks into rows.
 - **Form extensions**, reusable by Settings PRs 3-5 (`docs/settings-form.md`): a Nav row gets the
   chevron from its kind; Choice rows derive `checked` from a current-value predicate; an item can be
   disabled (`Row::disabled`: focusable, ghost pill under focus, inert).

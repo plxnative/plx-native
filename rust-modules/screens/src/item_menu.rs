@@ -77,7 +77,7 @@ use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
 use crate::registry::{commit_pick, hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
-use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::form::{Form, FormId, FormSection, FormTable, Rebind, RowKey, RowKind};
 use plx_ui::icons::Icon;
 use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
@@ -739,19 +739,6 @@ pub enum MenuPage {
     Tracks(PickPage),
 }
 
-impl MenuPage {
-    /// The page's header (drawn after the back mark, which every pushed page has): Select Version's, and the
-    /// Audio & Subtitles root's (named as the row that opened it is). The pages under that root name themselves
-    /// (`PickerCore::page`'s title, the shared builders').
-    fn title(self) -> Option<String> {
-        match self {
-            MenuPage::Versions => Some(plx_appkit::version_list::title().to_string()),
-            MenuPage::Tracks(PickPage::Root) => Some(tracks::title().to_string()),
-            MenuPage::Tracks(_) => None,
-        }
-    }
-}
-
 /// **The state only a hero control's menu has**: the content of the pages its rows open, Select Version's
 /// versions and Audio & Subtitles' tracks, of the page the menu hangs off, read when the menu was built (the
 /// SAME pages the standalone panels show, built by the same code, `plx_appkit::version_list` and
@@ -868,16 +855,12 @@ impl PageSource<'_> {
         (versions, plx_media::route::taken_version(versions, chosen), true)
     }
 
-    /// The rows of `page` (`None`: the menu's own), by the code the standalone panels use.
-    fn form(&self, page: Option<MenuPage>) -> ItemForm {
-        match page {
-            None => self.root_form(),
-            Some(MenuPage::Versions) => {
-                let (versions, taken, can_play) = self.versions();
-                build_versions(&self.arg.rk, versions, taken, can_play)
-            }
-            Some(MenuPage::Tracks(page)) => self.pick_page(page).map_or_else(Form::new, |p| p.form),
-        }
+    /// **Select Version's page**: the rows by the code the standalone panel uses, its header, and focus opening on
+    /// the check mark's row, so the viewer sees what is chosen.
+    fn versions_page(&self) -> Page<ItemRow, Action, MenuPage> {
+        let (versions, taken, can_play) = self.versions();
+        let initial = taken.and_then(|id| versions.iter().position(|v| v.id == id)).map(|n| ItemRow::Version(n as u16));
+        Page::new(build_versions(&self.arg.rk, versions, taken, can_play), plx_appkit::version_list::title()).initial(initial)
     }
 
     /// An Audio & Subtitles page of the picker's core ([`PickerCore::page`]) as this menu's: its rows
@@ -885,38 +868,20 @@ impl PageSource<'_> {
     /// menu's one rule. `None` off a hero menu, and for a language the item no longer offers.
     fn pick_page(&self, page: PickPage) -> Option<Page<ItemRow, Action, MenuPage>> {
         let built = self.hero?.tracks.page(page)?;
-        // the aliases (a language that shrank to one track: the pop lands on its direct row) survive the re-typing
-        let form = built.form.map_aliased(
-            |b| {
-                let id = ItemRow::Pick(b.id);
-                Some(plx_ui::form::Binding {
-                    key: id.key(),
-                    id,
-                    kind: match b.kind {
-                        RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
-                        RowKind::Toggle => RowKind::Toggle,
-                        RowKind::Choice => RowKind::Choice,
-                        RowKind::Button => RowKind::Button,
-                    },
-                    action: Action::Pick(b.id),
-                    disabled: b.disabled,
-                })
-            },
+        let form = built.form.map(
             |id| Some(ItemRow::Pick(*id)),
+            |pick, id, kind, ()| Rebind {
+                key: id.key(),
+                kind: match kind {
+                    RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
+                    RowKind::Toggle => RowKind::Toggle,
+                    RowKind::Choice => RowKind::Choice,
+                    RowKind::Button => RowKind::Button,
+                },
+                action: Action::Pick(*pick),
+            },
         );
         Some(Page::new(form, built.title).initial(built.initial.map(ItemRow::Pick)))
-    }
-
-    /// Where focus opens on `page`: the check mark's row, so the viewer sees what is chosen.
-    fn initial(&self, page: MenuPage) -> Option<ItemRow> {
-        match page {
-            MenuPage::Versions => {
-                let (versions, taken, _) = self.versions();
-                let n = taken.and_then(|id| versions.iter().position(|v| v.id == id))?;
-                Some(ItemRow::Version(n as u16))
-            }
-            MenuPage::Tracks(page) => self.pick_page(page)?.initial,
-        }
     }
 
     /// `page` ready to show (`None`: the root): its rows, its header and where focus opens. The size class is
@@ -924,8 +889,14 @@ impl PageSource<'_> {
     fn page(&self, page: Option<MenuPage>) -> Option<Page<ItemRow, Action, MenuPage>> {
         Some(match page {
             None => Page::root(self.root_form()),
-            Some(MenuPage::Tracks(page)) if page != PickPage::Root => self.pick_page(page)?,
-            Some(page) => Page::new(self.form(Some(page)), page.title().unwrap_or_default()).initial(self.initial(page)),
+            Some(MenuPage::Versions) => self.versions_page(),
+            // the Audio & Subtitles root is named as the row that opened it is; the pages under it name themselves
+            Some(MenuPage::Tracks(PickPage::Root)) => {
+                let mut page = self.pick_page(PickPage::Root)?;
+                page.title = tracks::title().to_string();
+                page
+            }
+            Some(MenuPage::Tracks(page)) => self.pick_page(page)?,
         })
     }
 }

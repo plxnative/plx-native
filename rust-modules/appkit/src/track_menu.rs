@@ -63,7 +63,7 @@
 //! the show's track memory at once, a pick that rides a server rebuild when its claim is accepted
 //! (and not when the server refuses it, #1522), and the next episode's plan reads it back. When the memory chose a subtitle for this play and the route can show none of it (a copy
 //! remux the app cannot draw), Off is on screen, so the first group closes with one inert
-//! reason ([`track_rows::PlayingFacts::memory_note`], `route::cur_memory_note`), absent everywhere else.
+//! reason ([`track_rows::SubtitleRoute::memory_note`], `route::cur_memory_note`), absent everywhere else.
 //!
 //! **Style is a drill-in, and the Subtitles tab is a page stack** (`docs/player-submenus.md`). The
 //! Style row is a [`RowKind::Nav`] onto [`TrackPage::Style`], whose Size, Position and Color rows
@@ -119,7 +119,7 @@ use plx_ui::geom::IndexElem;
 use plx_machine::machine::{Canon, GroupId};
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::menu::{Class, Event, Host, Menu, Motion, Out, Page, Shade, Stack, State};
-use crate::track_rows::{self, AudioMark, Dsp, PlayingFacts, SubState, TrackCx, TrackPageOf};
+use crate::track_rows::{self, AudioMark, AudioRoute, Dsp, SubState, SubtitleRoute, TrackCx, TrackPageOf};
 use plx_ui::page_stack::{popover_a11y, popover_a11y_elems, TITLE_KEY};
 use plx_ui::table::{Badge, Row};
 use plx_ui::table_screen::BAND_BASE;
@@ -761,18 +761,11 @@ impl TrackCore {
         self.forced_only.then(|| self.sub_sig.as_ref().and_then(|sig| sig.forced_only.as_deref()).unwrap_or_default())
     }
 
-    /// **The facts the pushed pages read** (Other languages, a language): what is checked. The root builds add the
-    /// route's own facts on top ([`Self::audio_page_for`], [`Self::sub_root_page`]).
-    fn facts(&self) -> PlayingFacts<'_> {
-        PlayingFacts {
-            audio: usize::try_from(self.active_audio).ok(),
-            sub: self.sub_state(self.mode_readout()),
-            offset_ms: self.offset_ms,
-            burn: None,
-            memory_note: false,
-            dsp: Dsp::Hidden,
-            marks: &[],
-        }
+    /// **The context every page reads** ([`TrackCx::Playing`]): what is checked, the audio track and the subtitle
+    /// (`readout`: Forced only's read-out while it is the mode, see [`Self::sub_state`]). What only the Audio or the
+    /// Subtitles page reads is built where that page is ([`Self::audio_page_for`], [`Self::sub_root_page`]).
+    fn cx<'a>(&self, readout: Option<&'a str>) -> TrackCx<'a> {
+        TrackCx::Playing { audio: usize::try_from(self.active_audio).ok(), sub: self.sub_state(readout) }
     }
     /// Plex stream id of the chosen audio track (for &audioStreamID), or 0
     pub fn audio_stream_id(&self, meta: metadata::MetadataView<'_>) -> i64 {
@@ -1342,9 +1335,8 @@ impl TrackCore {
             (_, None, Some(reason)) => Dsp::Disabled { reason: Self::enh_reason_text(reason) },
         };
         let marks: Vec<AudioMark> = audio.iter().map(|s| audio_mark(ps, s)).collect();
-        let facts = PlayingFacts { dsp, marks: &marks, ..self.facts() };
         let names = plx_media::player::SHARED.track_names.lock().unwrap();
-        track_rows::audio_page(&TrackCx::Playing(&facts), audio, &names)
+        track_rows::audio_page(&self.cx(self.mode_readout()), audio, &names, Some(&AudioRoute { dsp, marks: &marks }))
     }
 
     /// Build the Subtitles root from the CURRENT state — the one place the model
@@ -1395,13 +1387,8 @@ impl TrackCore {
         let show_timing = !plx_media::route::is_transcoding(ps)
             || presenter != plx_media::route::SubtitlePresenter::None;
         let model = self.sub_model(ps, meta, show_timing);
-        let facts = PlayingFacts {
-            sub: self.sub_state(forced),
-            burn,
-            memory_note: plx_media::route::cur_memory_note(ps),
-            ..self.facts()
-        };
-        let mut page = track_rows::subtitles_page(&TrackCx::Playing(&facts), &model);
+        let route = SubtitleRoute { offset_ms: self.offset_ms, burn, memory_note: plx_media::route::cur_memory_note(ps) };
+        let mut page = track_rows::subtitles_page(&self.cx(forced), &model, Some(&route));
         if self.search.is_some() {
             // offered on direct play AND during a transcode: a downloaded sidecar is drawn by the
             // client on one and burned by the server on the other, so it reaches the picture either way
@@ -2150,8 +2137,7 @@ impl TrackCore {
     /// menu's own.
     fn build_page(&self, page: TrackPage) -> TrackPageOf {
         use plx_os::i18n::msg;
-        let facts = self.facts();
-        let cx = TrackCx::Playing(&facts);
+        let cx = self.cx(self.mode_readout());
         match page {
             TrackPage::OtherLanguages => track_rows::other_languages_page(&cx, &self.other),
             TrackPage::Language(stream) => track_rows::language_page(&cx, &self.other, stream),
@@ -2371,16 +2357,12 @@ mod tests {
         let yours: Vec<String> = yours.iter().map(|y| y.to_string()).collect();
         let model = sub_layout::sub_sections(subs, offered, names, &yours, show_timing);
         let mut built = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        let facts = PlayingFacts {
+        let cx = TrackCx::Playing {
             audio: None,
             sub: if active_sub < 0 { SubState::Off } else { SubState::Track(active_sub as usize) },
-            offset_ms,
-            burn: None,
-            memory_note: false,
-            dsp: Dsp::Hidden,
-            marks: &[],
         };
-        built.set(track_rows::subtitles_page(&TrackCx::Playing(&facts), &model).form, None);
+        let route = SubtitleRoute { offset_ms, burn: None, memory_note: false };
+        built.set(track_rows::subtitles_page(&cx, &model, Some(&route)).form, None);
         let ids = (0..built.table.n_rows() as usize).map(|i| built.id_at(i).copied()).collect();
         (std::mem::take(&mut built.table.sections), ids)
     }

@@ -13,7 +13,7 @@
 //! [`TrackCx::Preplay`] context (`metadata::sub_layout::sub_sections`' grouping: Off, your languages, one section
 //! per multi-track language, ONE Other languages drill-in to a page of languages A-Z, each a pick or a drill-in to
 //! its tracks). This module adapts them to its own row alphabet ([`PickRow`], [`PickPage`]) with
-//! [`plx_ui::form::Form::map_aliased`] and builds only what is Detail's alone: the two-row root. What there is no
+//! [`plx_ui::form::Form::map`] and builds only what is Detail's alone: the two-row root. What there is no
 //! playback for is not declared by the builders: no Timing / Style / Forced only (they act on a drawn subtitle or
 //! on the audio that plays) and no "converted by the server" sub-line (no route).
 //!
@@ -41,7 +41,7 @@ use plx_data::metadata::track_names::TrackNames;
 use plx_data::metadata::{PreplayPick, Stream, SubPick};
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
 use plx_machine::machine::Measure;
-use plx_ui::form::{Binding, Form, FormId, FormSection, RowKey, RowKind};
+use plx_ui::form::{Form, FormId, FormSection, Rebind, RowKey, RowKind};
 use plx_ui::menu::{Class, Event, Host, Menu, Out, Page};
 use plx_ui::table::{Row, Section};
 use plx_ui::Rect;
@@ -131,7 +131,7 @@ pub fn chosen(set: TrackSet<'_>, pick: Option<&PreplayPick>) -> Chosen {
         .unwrap_or(0);
     // The server's selected subtitle, even a sidecar the app cannot draw: Off must not read as
     // checked while the server still has a track selected (the page then lists it, see
-    // `subtitle_form`).
+    // `PickerCore::model`).
     let sub = match pick.map_or(SubPick::Server, |p| p.sub) {
         SubPick::Server => set.subs.iter().position(|s| s.selected),
         SubPick::Off => None,
@@ -207,31 +207,31 @@ fn pick_row(id: &TrackRow) -> Option<PickRow> {
     })
 }
 
-/// A page a shared builder's drill-in names, as this panel's.
-fn pick_page(page: TrackPage) -> Option<PickPage> {
+/// A page a shared builder's drill-in names, as this panel's. The pages behind Style and the search are reached
+/// only by rows [`pick_row`] has no row for, so no page of this panel declares a drill-in to them.
+fn pick_page(page: TrackPage) -> PickPage {
     match page {
-        TrackPage::OtherLanguages => Some(PickPage::OtherLanguages),
-        TrackPage::Language(stream) => Some(PickPage::Language(stream)),
-        TrackPage::Style | TrackPage::Picker(_) | TrackPage::Search | TrackPage::SearchLanguage => None,
+        TrackPage::OtherLanguages => PickPage::OtherLanguages,
+        TrackPage::Language(stream) => PickPage::Language(stream),
+        TrackPage::Style | TrackPage::Picker(_) | TrackPage::Search | TrackPage::SearchLanguage => {
+            unreachable!("a row that opens {page:?} has no row in this panel, so it is demoted before its kind is read")
+        }
     }
 }
 
 /// A shared page in this panel's alphabet: every row re-identified ([`pick_row`], its focus key this alphabet's
 /// own), the language aliases kept, the title and the opening row carried across.
 fn adapt(page: TrackPageOf) -> Page<PickRow, (), PickPage> {
-    let form = page.form.map_aliased(
-        |b| {
-            let id = pick_row(&b.id)?;
-            let kind = match b.kind {
-                RowKind::Nav(page) => RowKind::Nav(pick_page(page)?),
-                RowKind::Toggle => RowKind::Toggle,
-                RowKind::Choice => RowKind::Choice,
-                RowKind::Button => RowKind::Button,
-            };
-            Some(Binding { key: id.key(), id, kind, action: (), disabled: b.disabled })
+    let form = page.form.map(pick_row, |_, id, kind, ()| Rebind {
+        key: id.key(),
+        kind: match kind {
+            RowKind::Nav(page) => RowKind::Nav(pick_page(page)),
+            RowKind::Toggle => RowKind::Toggle,
+            RowKind::Choice => RowKind::Choice,
+            RowKind::Button => RowKind::Button,
         },
-        pick_row,
-    );
+        action: (),
+    });
     Page::new(form, page.title).initial(page.initial.as_ref().and_then(pick_row))
 }
 
@@ -383,8 +383,8 @@ impl PickerCore {
         let cx = TrackCx::Preplay { audio: now.audio, sub: now.sub };
         Some(match page {
             PickPage::Root => Page::root(root_form(self.set(), now)),
-            PickPage::Audio => adapt(track_rows::audio_page(&cx, &self.tracks.audio, &TrackNames::new())),
-            PickPage::Subtitles => adapt(track_rows::subtitles_page(&cx, &self.model(now))),
+            PickPage::Audio => adapt(track_rows::audio_page(&cx, &self.tracks.audio, &TrackNames::new(), None)),
+            PickPage::Subtitles => adapt(track_rows::subtitles_page(&cx, &self.model(now), None)),
             PickPage::OtherLanguages => adapt(track_rows::other_languages_page(&cx, &self.model(now).other)),
             PickPage::Language(stream) => {
                 let model = self.model(now);
@@ -603,8 +603,8 @@ mod tests {
         let cx = TrackCx::Preplay { audio: now.audio, sub: now.sub };
         let model = core.model(now);
         let pages = [
-            (PickPage::Audio, track_rows::audio_page(&cx, &audio, &TrackNames::new())),
-            (PickPage::Subtitles, track_rows::subtitles_page(&cx, &model)),
+            (PickPage::Audio, track_rows::audio_page(&cx, &audio, &TrackNames::new(), None)),
+            (PickPage::Subtitles, track_rows::subtitles_page(&cx, &model, None)),
             (PickPage::OtherLanguages, track_rows::other_languages_page(&cx, &model.other)),
             (PickPage::Language(302), track_rows::language_page(&cx, &model.other, 302)),
         ];
@@ -636,6 +636,22 @@ mod tests {
         let row = built.table.sections.iter().flat_map(|sec| &sec.rows).find(|r| r.label == "French").expect("the French row");
         assert!(row.checked, "the language holding the chosen track is checked");
         assert_eq!(row.value.as_deref(), Some("SDH"));
+    }
+
+    /// **The keys are distinct and stay below the item menu's ceiling**: the fixed rows, a language's drill-in per
+    /// slot, and both track families, so no two rows of the panel (or, offset by `PICK_KEY_BASE`, of the item menu
+    /// it is hosted in) share a focus key.
+    #[test]
+    fn pick_row_keys_are_distinct_and_below_the_ceiling() {
+        let lang = |slot| PickRow::OpenLang(LangId { stream: 1000 + slot as i64, slot });
+        let mut ids = vec![PickRow::OpenAudio, PickRow::OpenSubtitles, PickRow::SubOff, PickRow::OpenOther];
+        ids.extend((0..899).map(lang));
+        ids.extend((0..200).flat_map(|i| [PickRow::Audio(i), PickRow::Sub(i)]));
+        let keys: Vec<u32> = ids.iter().map(|i| i.key().0).collect();
+        for (n, a) in keys.iter().enumerate() {
+            assert!(*a < 3000, "{a} is below the item menu's own keys");
+            assert!(!keys[n + 1..].contains(a), "duplicate key {a}");
+        }
     }
 
     /// A language that changes shape under a viewer: the chosen track is shown even when it is not offered (a
@@ -729,7 +745,7 @@ mod tests {
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.step(Event::Ok(PickRow::OpenSubtitles.key().0)), Out::Moved, "a drill-in pushes");
         assert_eq!((p.page(), p.depth()), (PickPage::Subtitles, 1));
-        assert_eq!(p.menu().form().focusable_len(), 3, "Off and the two tracks");
+        assert_eq!(p.menu().form().focusable_len(), 3, "Off, the track in the audio's language and the Other languages row");
         assert_eq!(p.step(Event::Back), Out::Moved, "BACK pops");
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.step(Event::Back), Out::Dismiss, "at the root BACK leaves the panel");
