@@ -535,7 +535,9 @@ fn with_nothing_parked_the_rematch_commits_with_its_own_put() {
     assert_eq!((cur_sub_sid(&w.ps), cur_sub_mode(&w.ps)), (55001, SubMode::ForcedOnly));
     let puts = w.pms.puts();
     assert_eq!(puts.len(), 1, "the commit's own PUT: {puts:?}\n{}", w.log());
-    assert_eq!(param(&puts[0], "audioStreamID"), Some("36014"));
+    // A subtitle change names the subtitle only: the audio the server holds is left as it is (the
+    // session's audio may be a pick whose claim has not been made yet).
+    assert_eq!(param(&puts[0], "audioStreamID"), None);
     assert_eq!(param(&puts[0], "subtitleStreamID"), Some("55001"));
     assert_eq!(w.pms.selection(PART), (36014, 55001));
     assert!(!w.log().contains("track-memory: write-back"), "{}", w.log());
