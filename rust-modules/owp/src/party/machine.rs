@@ -579,7 +579,7 @@ impl Party {
                         },
                         Request::Pause => match member(false, true, true) {
                             Ok(conn) => {
-                                let local = bound_player.and(self.reads.as_ref()).map(|reads| reads.position_ms.checked_sub(self.offset_ms).filter(|local| local.abs() <= json::MAX_SAFE_INT));
+                                let local = bound_player.and(self.reads.as_ref()).map(|reads| reads.position_ms.checked_sub(self.offset_ms).filter(|local| local.unsigned_abs() <= json::MAX_SAFE_INT.unsigned_abs()));
                                 if local == Some(None) {
                                     effects.push(PartyEffect::Done { call, outcome: failed("invalid_message", "the player's position minus the offset is not an int") });
                                     continue;
@@ -598,7 +598,7 @@ impl Party {
                         },
                         Request::Seek { position_ms } => match member(false, true, true) {
                             Ok(conn) => {
-                                let local = position_ms.checked_sub(self.offset_ms).filter(|local| local.abs() <= json::MAX_SAFE_INT);
+                                let local = position_ms.checked_sub(self.offset_ms).filter(|local| local.unsigned_abs() <= json::MAX_SAFE_INT.unsigned_abs());
                                 let (true, Some(local)) = ((0..=json::MAX_SAFE_INT).contains(&position_ms), local) else {
                                     effects.push(PartyEffect::Done { call, outcome: failed("invalid_message", "positionMs must be an integer ≥ 0") });
                                     continue;
@@ -639,7 +639,7 @@ impl Party {
                             Err(error) => effects.push(PartyEffect::Done { call, outcome: Outcome::Failed(error) }),
                         },
                         Request::SetOffset { offset_ms } => {
-                            if offset_ms.abs() > MAX_OFFSET_MS {
+                            if !(-MAX_OFFSET_MS..=MAX_OFFSET_MS).contains(&offset_ms) {
                                 effects.push(PartyEffect::Done { call, outcome: failed("invalid_message", "offsetMs must be within ±604800000") });
                             } else {
                                 self.offset_ms = offset_ms;

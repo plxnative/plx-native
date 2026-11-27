@@ -868,6 +868,27 @@ fn a_computed_wire_position_past_2_pow_53_is_refused_before_any_local_effect() {
     assert_eq!(text(&out.done[0], "error").as_deref(), Some("invalid_message"));
 }
 
+fn refused(effects: &[PartyEffect], call: u64) -> bool {
+    matches!(effects, [PartyEffect::Done { call: done, outcome: Outcome::Failed(error) }] if *done == call && error.code == "invalid_message")
+}
+
+#[test]
+fn an_offset_or_position_at_i64_min_is_refused_without_overflow() {
+    let mut party = one_relay();
+    let mut effects = Vec::new();
+    party.step(PartyInput::Call { at: at(0), call: 1, request: Request::SetOffset { offset_ms: i64::MIN } }, &mut effects);
+    assert!(refused(&effects, 1), "{effects:?}");
+    let mut driver = driver_after(2, 7);
+    effects.clear();
+    driver.party.step(PartyInput::Call { at: driver.at(), call: 900, request: Request::Seek { position_ms: i64::MIN } }, &mut effects);
+    assert!(refused(&effects, 900), "{effects:?}");
+    let mut moment = driver.at();
+    moment.player.as_mut().expect("reads").position_ms = i64::MIN;
+    effects.clear();
+    driver.party.step(PartyInput::Call { at: moment, call: 901, request: Request::Pause }, &mut effects);
+    assert!(refused(&effects, 901), "{effects:?}");
+}
+
 #[test]
 fn a_wake_before_any_deadline_changes_nothing() {
     let mut party = one_relay();
