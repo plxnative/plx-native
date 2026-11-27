@@ -40,8 +40,8 @@ pub struct LiveChannel {
     pub begins_at: i64,
     /// Unix seconds the current airing ends; 0 when nothing is airing. The row is stale after it.
     pub ends_at: i64,
-    /// The programmes after the current one that begin by the end the last read asked for ([`guide_path`]: at
-    /// least [`window_end`], further while the Guide is scrolled ahead), earliest first. Empty when the guide has
+    /// The programmes after the current one that begin by the end the held reads asked for (the live window's, or the reach's while a page reaches further: [`guide_path`], at
+    /// least [`window_end`]), earliest first. Empty when the guide has
     /// none (a guide of current airings only, or a channel with no data).
     pub later: Vec<LiveAiring>,
 }

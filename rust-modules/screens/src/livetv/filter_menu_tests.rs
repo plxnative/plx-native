@@ -1,5 +1,8 @@
 use super::*;
-use plx_machine::machine::{FocusRead, Host, InputEvent, InputOwner, PressRead, ScreenId, Source, Tick};
+use crate::registry::PageMemory;
+use plx_machine::machine::{Cx, Edge, FocusKey, FocusRead, Host, InputEvent, InputKind, InputOwner, Key, Machine, NavOp, PressRead, ScreenId, Source, Tick};
+use plx_ui::a11y::{A11yPath, Role};
+use plx_ui::screen::{Dir, Focusable, Screen, Step};
 use plx_ui::screen::ScreenArg;
 
 #[derive(Clone)]
@@ -38,7 +41,7 @@ const ENTRY: EntryId = EntryId(3);
 
 fn menu(chosen: Filter) -> LiveTvFilterScreen {
     let anchor = [1500.0f32, 148.0, 270.0, 56.0].map(f32::to_bits);
-    LiveTvFilterScreen::new(ENTRY, LiveTvFilterArg { host: InstanceId(9), chosen, anchor, opener: (PAGE, 5) })
+    new(ENTRY, LiveTvFilterArg { host: InstanceId(9), chosen, anchor, opener: (PAGE, 5) })
 }
 
 fn cx() -> Cx<'static, HostFixture> {
@@ -91,24 +94,35 @@ fn the_menu_lists_the_four_filters_and_opens_on_the_one_in_force() {
     let _lang = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
     for chosen in Filter::ALL {
         let m = mounted(chosen);
-        let rows: Vec<(String, bool)> = m.table.sections.iter().flat_map(|s| s.rows.iter()).map(|row| (row.label.clone(), row.checked)).collect();
-        let want: Vec<(String, bool)> = [("On now", Filter::OnNow), ("Just started", Filter::JustStarted), ("Ending soon", Filter::EndingSoon), ("Later today", Filter::LaterToday)]
-            .into_iter().map(|(label, filter)| (label.to_owned(), filter == chosen)).collect();
-        assert_eq!(rows, want, "{chosen:?}");
-        assert_eq!(m.sel, chosen.code() as usize, "{chosen:?}: opens on its own row");
+        let panel = m.probe_panel();
+        let labels: Vec<&str> = panel.iter().flat_map(|(_, rows)| rows.iter().map(|(label, _)| label.as_str())).collect();
+        assert_eq!(labels, ["On now", "Just started", "Ending soon", "Later today"], "{chosen:?}");
+        let want: Vec<bool> = Filter::ALL.iter().map(|filter| *filter == chosen).collect();
+        assert_eq!(m.probe_checked(), want, "{chosen:?}");
+        assert_eq!(m.highlighted(), chosen.code() as usize, "{chosen:?}: opens on its own row");
     }
 }
 
-/// OK on another row closes the menu and reports THAT filter to the page that opened it; the page owns the change.
+/// **A pick is reported and the menu STAYS UP with the check moved**, as the Library's and the Watchlist's menus do (the page
+/// reflows under it); the row that is already checked reports nothing. Red while the menu closed on a pick.
 #[test]
-fn a_row_reports_its_filter_to_the_host_page_and_closes() {
+fn a_row_reports_its_filter_to_the_host_page_and_stays_up_with_the_check_moved() {
     for (row, filter) in Filter::ALL.into_iter().enumerate() {
         let mut m = mounted(Filter::OnNow);
         let fx = drive(&mut m, ScreenEvent::Activate(row as u32));
-        assert!(closes(&fx), "row {row} closes the menu");
+        assert!(!closes(&fx), "row {row}: the menu stays up");
         let want = if filter == Filter::OnNow { Vec::new() } else { vec![filter] };
         assert_eq!(reported(&fx), want, "row {row}: the page is told the filter, and nothing for the one in force");
+        let checked: Vec<bool> = Filter::ALL.iter().map(|f| *f == filter).collect();
+        assert_eq!(m.probe_checked(), checked, "row {row}: the check follows the pick");
+        assert!(reported(&drive(&mut m, ScreenEvent::Activate(row as u32))).is_empty(), "row {row} again reports nothing");
     }
+}
+
+/// A pick shows its effect at once: the host follows the page's reflow under the open menu, as the Watchlist's menu asks.
+#[test]
+fn the_menu_lets_the_host_reflow_under_it() {
+    assert!(Screen::<HostFixture>::lets_host_reflow(&menu(Filter::OnNow)));
 }
 
 /// BACK closes the menu and reports nothing.

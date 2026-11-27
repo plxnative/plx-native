@@ -29,10 +29,8 @@ use super::CellSrc;
 
 /// How many minutes before its end a programme is "ending soon" (SPEC-6 default: 15).
 pub const ENDING_SOON_MINUTES: i64 = 15;
-/// How many minutes after its start a programme is "just started" (SPEC-6 default: 10, the airing phase's own rule).
-pub const JUST_STARTED_MINUTES: i64 = 10;
 /// Seconds in a day: the length of the day an instant with no zone is read in.
-const DAY: i64 = 86_400;
+pub(super) const DAY: i64 = 86_400;
 
 /// **Which programmes Browse shows.** The page's one filter; it is the scope's (`Scope::Browse(Filter)`), so a scope that
 /// is not Browse has no filter to disagree with.
@@ -72,7 +70,7 @@ impl Filter {
     pub fn admits(self, stand: Stand, begins_at: i64, day_end: i64) -> bool {
         match (self, stand) {
             (Filter::OnNow, Stand::OnAir { .. }) => true,
-            (Filter::JustStarted, Stand::OnAir { minutes_in, .. }) => minutes_in <= JUST_STARTED_MINUTES,
+            (Filter::JustStarted, Stand::OnAir { minutes_in, .. }) => minutes_in <= fmt::JUST_STARTED_MINUTES,
             (Filter::EndingSoon, Stand::OnAir { left: Some(left), .. }) => left <= ENDING_SOON_MINUTES,
             (Filter::LaterToday, Stand::Upcoming) => begins_at < day_end,
             _ => false,
@@ -162,7 +160,7 @@ pub fn next_change(channels: &[Channel], now: i64, day_end: i64) -> i64 {
     let minute = 60;
     let mut next = if day_end > now { day_end } else { i64::MAX };
     for p in channels.iter().enumerate().flat_map(|(i, c)| programmes(c, i)) {
-        let mut edges = [p.begins_at, p.begins_at + (JUST_STARTED_MINUTES + 1) * minute, p.ends_at, p.ends_at - ENDING_SOON_MINUTES * minute];
+        let mut edges = [p.begins_at, p.begins_at + (fmt::JUST_STARTED_MINUTES + 1) * minute, p.ends_at, p.ends_at - ENDING_SOON_MINUTES * minute];
         if p.ends_at == 0 { edges[2] = 0; edges[3] = 0; }
         for edge in edges {
             if edge > now { next = next.min(edge); }

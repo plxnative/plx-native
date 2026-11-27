@@ -2786,7 +2786,7 @@ where
             AppArg::ChannelEntry(arg) => {
                 Box::new(crate::channel_entry_panel::ChannelEntryScreen::new(entry, arg.clone(), H::livetv(cx).channels))
             }
-            AppArg::LiveTvFilter(arg) => Box::new(crate::livetv::filter_menu::LiveTvFilterScreen::new(entry, *arg)),
+            AppArg::LiveTvFilter(arg) => Box::new(crate::livetv::filter_menu::new(entry, *arg)),
             AppArg::TracksPanel(arg) => Box::new(
                 crate::tracks_panel::TracksPanelScreen::new(entry, *arg),
             ),
@@ -3350,9 +3350,10 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // The Live TV Guide (PR6) joins the Live TV screen's canon: the scope and the board's page, window start and whether the
 // reader holds the window ahead (`scope`, `guide:Option<(page,window,ahead)>`). Previous pin: 0x1990_0160_ac8b_0137.
 // Live TV Browse (PR7) widens the Live TV screen's canon (the scope's filter, the empty-filter mode) and joins its filter menu
-// as `AppArg::LiveTvFilter` (canon tag 17) with `livetv::filter_menu::SHAPE`. Previous pin: 0xd1ed_8cb4_ad5b_5093.
+// as `AppArg::LiveTvFilter` (canon tag 17) with `livetv::filter_menu::SHAPE`, which carries the checked filter (a host of the shared `plx_ui::menu::Menu`, which
+// stays up with the check moved). Previous pin: 0xd1ed_8cb4_ad5b_5093.
 // Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0xba05_b95a_c8fe_c0cd;
+const SCREEN_SHAPES_PIN: u64 = 0x0c73_d7b2_0b49_1548;
 
 #[cfg(test)]
 mod arg_tests {

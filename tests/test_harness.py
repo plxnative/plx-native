@@ -462,15 +462,15 @@ class ReplayFixtures(unittest.TestCase):
         """Actual CLI and actual guard, without executing any outbound operation."""
         source = os.path.join(self.FIXTURES, 'v13-owned-input-content')
         expected = {
-            'manifest.json': '776850694ee3e55de866d14ffa6a4d92f774a8c1eaa22d17212d2d994bdd293a',
-            'rec-0000.jsonl': 'bd8664c769c71edfe2619e16c0973e21138e0d57f6f752f4d233fd9d4ee13aa1',
+            'manifest.json': 'f9adabb20df57e315ddc8fd0867b9db39c300ca4aeaeb2a3a94d1f1c3b071f06',
+            'rec-0000.jsonl': '547a2bc225dd1ece202640e96d39d9cd18f7c9010df978e390ea6ee1dd8ec041',
         }
         for name, digest in expected.items():
             with open(os.path.join(source, name), 'rb') as f:
                 self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest)
         with open(os.path.join(source, 'manifest.json'), encoding='utf-8') as f:
             original = json.load(f)
-        self.assertEqual((original['schema'], original['state_fp']), (3, 17626434610726812954))
+        self.assertEqual((original['schema'], original['state_fp']), (3, 9368468189897822625))
         with tempfile.TemporaryDirectory() as root:
             subprocess.run(['git', 'init', '-q', root], check=True)
             fixtures = os.path.join(root, 'tests', 'fixtures', 'replay')
@@ -705,8 +705,8 @@ class ReplayFixtures(unittest.TestCase):
             '6-settings-family': 4239819007634745513,
             '12-filmography-detail-return': 4239819007634745513,
             '12-filmography-detail-return-current': 13512213413816145485,
-            'v13-owned-input-content': 17626434610726812954,
-            '13-by-id-filmography': 17626434610726812954,
+            'v13-owned-input-content': 9368468189897822625,
+            '13-by-id-filmography': 9368468189897822625,
         })
 
     def _tool(self, *args):

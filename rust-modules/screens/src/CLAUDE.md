@@ -443,13 +443,18 @@ on and at most 15 minutes left (whole minutes, rounded up; an open-ended airing 
 local day (`browse::day_end`: the next local midnight from the frame's zone offset, the UTC day without one). The count reads "shown of on now" for the
 two narrowing filters only. The set is rebuilt by `Page::sync` when the store, the scope or the day changes and when the clock reaches the first instant
 anything can change (`browse::next_change`: a start, ten minutes after it, fifteen before the end, the end), so the grid follows the clock with no event.
-**A card's element is its programme's** (`Idents`: server, DVR, channel key and start, allocated the first time it is shown, counting up from
-`BROWSE_FIRST_ELEM`, never reused in the page's life and not capped), so the focus follows the programme across filters, clocks and refreshes. A focused
+**A card's element is its programme's** (`Idents`, `livetv/idents.rs`: server, DVR, channel key and start, allocated the first time it is shown, counting up from
+`BROWSE_FIRST_ELEM`, never reused in the page's life and not capped, looked up by borrowing the channel's strings; when the local day turns it forgets the
+programmes that began before the previous day and are not on show), so the focus follows the programme across filters, clocks and refreshes. A focused
 card that leaves the set (`StackPage::recover`) goes to its channel's card, else the one where the channel would stand (`browse::seat_for`); with nothing
 shown it falls to the filter control (`Mode::BrowseNone`, the empty read-out under the row, the control the one stop). OK on a programme on air tunes
 its channel (the page's play path) and does nothing on a later one, as the Guide does; BACK from the player seats the card of the programme tuned
 (`left_elem`, the same rule). Later today asks the store to read to the end of the day through `LiveTvCmd::Reach` (the Guide's own re-read path; the
-other filters ask for nothing). The grid is the shared `cards::Grid` (six columns of `RowStyle::PROGRAMME` posters on the Library's 280 pitch from y 244) and
-the row above it is **pinned**: the grid scrolls a row at a time under it, so the row is drawn after the stack over a mask of the page's own ground
-(`LiveTvScreen::draw_pinned_row`), and the control it opens the menu from is the opener lift's (`redraw_opener`). The next row stands under the focused row's label
+other filters ask for nothing): that far read is made once when the reach grows and again every window step (30 minutes), while the scheduled refresh of what
+is on now asks the live window alone and keeps the far programmes the last far read answered (`data/src/livetv.rs`, `merge_far`). The grid is the shared `cards::Grid` (six columns of `RowStyle::PROGRAMME` posters on the Library's 280 pitch from y 244) and
+the row above it **rides the page as the Library's does** (owner decision 2026-11-27; `library/header.rs`: "the row scrolls away with the page"): from the second row
+it scrolls off with the grid and the top bar tucks through the one `scroll_chrome::Handoff`, and UP from the first row reaches the filter and the scope row and scrolls the
+page back; the control it opens the menu from is the opener lift's (`redraw_opener`, shifted by the page's scroll). The row is built with `SharedRow::get_replacing`
+and a `HeaderSwap`, so the filter word and the count dissolve; the filter menu is a host of the shared `plx_ui::menu::Menu`, built by `Menu::from_header_pill` as the Watchlist's Sort & Filter menu
+is: a pick is reported to the page and the menu stays up with the check moved. The next row stands under the focused row's label
 band as every shipped grid's does (`caption_policy::BAND_TWO_LINES`, 112: y 731), not at the board's 735.

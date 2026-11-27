@@ -1755,7 +1755,7 @@ fn the_grid_is_six_posters_a_row_on_the_280_pitch_from_244_and_the_next_row_peek
 }
 
 /// **The grid's moves**: RIGHT and LEFT along a row, DOWN and UP between rows, UP from the first row to the header row (the filter control's
-/// neighbours on the row: the scopes to its left), and the row stays where it is while the grid scrolls a row under it.
+/// neighbours on the row: the scopes to its left), and the row rides the page as the Library's does (it scrolls away with the grid).
 #[test]
 fn the_grid_moves_along_and_between_rows_and_up_from_the_first_row_reaches_the_header() {
     let lineup: Vec<Channel> = (0..14).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect();
@@ -1776,7 +1776,7 @@ fn the_grid_moves_along_and_between_rows_and_up_from_the_first_row_reaches_the_h
     assert_eq!(move_from(&screen, view, GUIDE_ELEM, Dir::Right), Some(BROWSE_ELEM));
     assert_eq!(move_from(&screen, view, BROWSE_ELEM, Dir::Right), Some(FILTER_ELEM));
     assert_eq!(move_from(&screen, view, FILTER_ELEM, Dir::Right), None);
-    // the grid scrolls a row under the header, which stays where it is drawn
+    // the grid scrolls a row and the header row goes up with it
     let header = |screen: &LiveTvScreen| Focusable::<TestHost>::place(screen, &FILTER_ELEM, &cx(view, None), At::Drawn).expect("the control is placed").rect;
     for frame in 1..=60 {
         step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
@@ -1788,7 +1788,95 @@ fn the_grid_moves_along_and_between_rows_and_up_from_the_first_row_reaches_the_h
         step(&mut screen, view, Some(second), &ScreenEvent::Tick(Tick { ms: 2000 + frame * 16, dt_us: 16_667 }));
     }
     assert!(screen.stack.scroll() > 100.0, "the grid scrolled a row: {}", screen.stack.scroll());
-    assert_eq!(header(&screen), at_rest, "the header row did not move");
+    assert!(header(&screen).y < at_rest.y - 100.0, "the header row rides the page: {:?} from {at_rest:?}", header(&screen));
     let rect = Focusable::<TestHost>::place(&screen, &second, &cx(view, Some(second)), At::Drawn).expect("placed").rect;
-    assert!(near(rect.y + rect.h * 0.5, 244.0 + 375.0 * 0.5), "the focused row rests under the header at 244 (its lift grows about the centre): {rect:?}");
+    assert!(rect.y >= 0.0 && rect.y + rect.h <= SCR_H, "the focused row stands inside the screen: {rect:?}");
+}
+
+/// Scroll Browse's grid to the second row: focus its first card and let the page settle.
+fn scrolled_to_second_row(screen: &mut LiveTvScreen, view: LiveTvView<'_>) -> Vec<u32> {
+    let elems = browse_set(screen).elems.clone();
+    let second = elems[6];
+    step(screen, view, Some(second), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: second }, by: By::Dir });
+    for frame in 1..=120 {
+        step(screen, view, Some(second), &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() > 100.0, "the grid scrolled a row: {}", screen.stack.scroll());
+    elems
+}
+
+/// A Browse lineup of fourteen channels on air: three rows of the six-wide grid.
+fn browse_fourteen() -> (LiveTvStore, LiveTvScreen) {
+    browse_over((0..14).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect())
+}
+
+/// **Browse's header row rides the page as the Library's does** (owner decision 2026-11-27): scrolled to the second row the row has
+/// left with the page and the top bar has tucked through the one `Handoff`, as on What's on. Red while the row stood on a mask and
+/// the bar stayed.
+#[test]
+fn the_header_row_scrolls_away_with_browses_grid_and_the_top_bar_tucks_with_it() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    let header = |screen: &LiveTvScreen| Focusable::<TestHost>::place(screen, &FILTER_ELEM, &cx(view, None), At::Drawn).expect("the control is placed").rect;
+    let at_rest = header(&screen);
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 0.0, "at the top: the chrome shown");
+    scrolled_to_second_row(&mut screen, view);
+    assert!(header(&screen).y < at_rest.y - 100.0, "the row went up with the page: {:?} from {at_rest:?}", header(&screen));
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "row two: the bar has tucked with the row");
+}
+
+/// **UP from the first row reaches the filter and the scope row, and the page scrolls back** as the Library's does.
+#[test]
+fn focus_on_the_header_row_scrolls_the_grid_home() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    scrolled_to_second_row(&mut screen, view);
+    step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: FILTER_ELEM }, by: By::Dir });
+    for frame in 1..=240 {
+        step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: 3000 + frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() < 1.0, "the page went home to show the row: {}", screen.stack.scroll());
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 0.0, "and the bar is back");
+}
+
+/// **A filter picked dissolves the header's words instead of cutting them** (the row's `HeaderSwap`, as the Watchlist's):
+/// the row rebuilt for a new filter and count begins a swap that runs out. Red while the row was built with no swap.
+#[test]
+fn a_filter_pick_swaps_the_header_words_and_the_swap_runs_out() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    screen.page.header_row(&FixtureMeasure);
+    assert!(!screen.page.header_swap.borrow().is_active(), "a row first built has nothing to swap from");
+    pick(&mut screen, view, Filter::JustStarted);
+    screen.page.header_row(&FixtureMeasure);
+    assert!(screen.page.header_swap.borrow().is_active(), "the filter word and the count dissolve");
+    for frame in 1..=120 {
+        step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    assert!(!screen.page.header_swap.borrow().is_active(), "and the swap ends");
+}
+
+/// **A programme's caption is one composition wherever a poster shows it**: Browse's card and What's on's On now card word the same
+/// programme alike, a long channel name included, whole and in order on one line (the line a band cannot hold is the shared
+/// caption's to glide from its head, not Browse's to cut).
+#[test]
+fn a_programme_caption_is_one_composition_on_browse_and_on_now() {
+    let _guards = browse_guards();
+    let mut long = airing("2006", "Pluto TV Star Trek: The Next Generation", 49, 60);
+    long.now = "Star Trek: The Next Generation".into();
+    let (store, mut screen) = browse_over(vec![long]);
+    let view = store.view();
+    WALL.with(|w| w.set(Some(Wall::from_secs(NOW, 0))));
+    let words = |label: &TileLabel| (label.title.as_ref().map(|t| t.to_str().unwrap().to_owned()), label.caption.as_ref().map(|c| c.to_str().unwrap().to_owned()));
+    let context = cx(view, None);
+    let browse = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Browse).unwrap();
+    let on_browse = words(&CardSource::<TestHost>::label(&browse, 0));
+    assert_eq!(on_browse, (Some("Star Trek: The Next Generation".into()), Some("Ch 2006 \u{b7} Pluto TV Star Trek: The Next Generation \u{b7} 11m left".into())));
+    choose(&mut screen, view, WHATS_ON_ELEM);
+    let context = cx(view, None);
+    let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).unwrap();
+    assert_eq!(words(&CardSource::<TestHost>::label(&now, 0)), on_browse, "the same words as On now's");
 }
