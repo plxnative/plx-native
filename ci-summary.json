@@ -295,21 +295,21 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-27T05:47:23Z",
+ "generated": "2026-11-27T05:54:34Z",
  "metrics": [
   {
-   "change30_pct": 50.0,
-   "change7_pct": 45.7,
+   "change30_pct": 49.0,
+   "change7_pct": 44.7,
    "d30": 202,
-   "delta30": 101.0,
-   "delta7": 95.0,
+   "delta30": 99,
+   "delta7": 93,
    "group": "ci",
    "id": "sim|macOS simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: macOS simulator build + launch",
-   "n_now": 72,
+   "n_now": 73,
    "n_prev": 49,
-   "now": 303.0,
+   "now": 301,
    "prev7": 208,
    "shown": true,
    "state": "worse",
@@ -340,19 +340,19 @@
    "unit": "s"
   },
   {
-   "change30_pct": 14.6,
-   "change7_pct": -0.4,
+   "change30_pct": 14.5,
+   "change7_pct": -0.5,
    "d30": 366,
-   "delta30": 53.5,
-   "delta7": -1.5,
+   "delta30": 53,
+   "delta7": -2.0,
    "group": "ci",
    "id": "pr_wait",
    "kind": "wait",
    "label": "PR CI wait",
-   "n_now": 206,
-   "n_prev": 149,
-   "now": 419.5,
-   "prev7": 421,
+   "n_now": 205,
+   "n_prev": 150,
+   "now": 419,
+   "prev7": 421.0,
    "shown": true,
    "state": "flat",
    "state30": "flat",
@@ -361,18 +361,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 21.8,
-   "change7_pct": 3.6,
+   "change30_pct": 21.7,
+   "change7_pct": 3.4,
    "d30": 346,
-   "delta30": 75.5,
-   "delta7": 14.5,
+   "delta30": 75,
+   "delta7": 14,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 78,
+   "n_now": 79,
    "n_prev": 63,
-   "now": 421.5,
+   "now": 421,
    "prev7": 407,
    "shown": true,
    "state": "flat",
@@ -604,18 +604,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 31.9,
-   "change7_pct": -0.9,
+   "change30_pct": 33.1,
+   "change7_pct": 0.0,
    "d30": 264.5,
-   "delta30": 84.5,
-   "delta7": -3.0,
+   "delta30": 87.5,
+   "delta7": 0,
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "kind": "job",
    "label": "Simulator CI: Linux simulator build + launch",
-   "n_now": 72,
+   "n_now": 73,
    "n_prev": 49,
-   "now": 349.0,
+   "now": 352,
    "prev7": 352,
    "shown": true,
    "state": "flat",
@@ -709,18 +709,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 36.3,
-   "change7_pct": 2.7,
+   "change30_pct": 35.1,
+   "change7_pct": 1.8,
    "d30": 166.5,
-   "delta30": 60.5,
-   "delta7": 6.0,
+   "delta30": 58.5,
+   "delta7": 4,
    "group": "ci",
    "id": "sim|macOS tests against bundled FFmpeg and ASS",
    "kind": "job",
    "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
-   "n_now": 72,
+   "n_now": 73,
    "n_prev": 49,
-   "now": 227.0,
+   "now": 225,
    "prev7": 221,
    "shown": true,
    "state": "flat",
@@ -820,14 +820,14 @@
    "change7_pct": 0.0,
    "d30": 18.0,
    "delta30": 2.0,
-   "delta7": 0.0,
+   "delta7": 0,
    "group": "ci",
    "id": "sim|Windows launcher syntax",
    "kind": "job",
    "label": "Simulator CI: Windows launcher syntax",
-   "n_now": 72,
+   "n_now": 73,
    "n_prev": 49,
-   "now": 20.0,
+   "now": 20,
    "prev7": 20,
    "shown": false,
    "state": "flat",
@@ -923,13 +923,8 @@
  ],
  "regressions": [
   {
-   "change_pct": 45.7,
+   "change_pct": 44.7,
    "commits": [
-    {
-     "pr": 1573,
-     "sha": "3581c40ae",
-     "title": "Live TV: channel logos are sized by their ink, not their canvas"
-    },
     {
      "pr": 1576,
      "sha": "c3e3ffa67",
@@ -974,6 +969,11 @@
      "pr": 1583,
      "sha": "4b038895d",
      "title": "One menu component: plx_ui::menu, with the Detail menus on it"
+    },
+    {
+     "pr": 1556,
+     "sha": "88ac32db5",
+     "title": "Failure screens: offer a way forward where only Back or a useless retry was left"
     }
    ],
    "from": 208,
@@ -981,16 +981,11 @@
    "label": "Simulator CI: macOS simulator build + launch",
    "since": "2026-11-27",
    "threshold_pct": 20.0,
-   "to": 303.0
+   "to": 301
   },
   {
    "change_pct": 26.5,
    "commits": [
-    {
-     "pr": 1573,
-     "sha": "3581c40ae",
-     "title": "Live TV: channel logos are sized by their ink, not their canvas"
-    },
     {
      "pr": 1576,
      "sha": "c3e3ffa67",
@@ -1035,6 +1030,11 @@
      "pr": 1583,
      "sha": "4b038895d",
      "title": "One menu component: plx_ui::menu, with the Detail menus on it"
+    },
+    {
+     "pr": 1556,
+     "sha": "88ac32db5",
+     "title": "Failure screens: offer a way forward where only Back or a useless retry was left"
     }
    ],
    "from": 205.5,
@@ -1069,7 +1069,7 @@
    "group": "ci",
    "id": "sim|Linux simulator build + launch",
    "label": "Simulator CI: Linux simulator build + launch",
-   "now": 349.0
+   "now": 352
   },
   {
    "group": "ci",
