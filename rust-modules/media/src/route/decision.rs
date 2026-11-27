@@ -2133,7 +2133,8 @@ impl PlaybackSession {
             cur_audio,
             source_selection,
             server_selection,
-            provisional_selection,
+            // The owner's own pending effect, settled once by the main thread: a screen's copy has none.
+            provisional_selection: _,
             cur_sub_sid,
             selection_known,
             carried_selection,
@@ -2232,7 +2233,7 @@ impl PlaybackSession {
             cur_audio: cur_audio.clone(),
             source_selection: *source_selection,
             server_selection: *server_selection,
-            provisional_selection: *provisional_selection,
+            provisional_selection: None,
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,

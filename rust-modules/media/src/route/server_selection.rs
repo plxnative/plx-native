@@ -179,6 +179,23 @@ pub fn settle_start_selection(ps: &mut PlaybackSession) {
     }
 }
 
+/// Is a start's selection PUT still waiting for its attempt's first picture or its failure
+/// ([`settle_start_selection`])?
+pub fn start_selection_pending(ps: &PlaybackSession) -> bool {
+    ps.provisional_selection.is_some()
+}
+
+/// Test-only: leave `ps` as a landing whose plan PUT `sent` (audio, subtitle) over a Part that held `before` does,
+/// on no server.
+#[cfg(any(test, feature = "test-support"))]
+pub fn arm_start_selection_for_test(ps: &mut PlaybackSession, part_id: i64, before: (i64, i64), sent: (i64, i64)) {
+    ps.provisional_selection = Some(FlightSelection {
+        sid: ServerId::UNSET,
+        before: Some(ServerSelection { part_id, audio: Some(before.0), subtitle: Some(before.1) }),
+        sent: Some(ServerSelection::put(part_id, sent.0, Some(sent.1))),
+    });
+}
+
 /// The PUTs a flight's worker has sent so far, merged ([`ServerSelection::after`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PutTrail(Option<ServerSelection>);

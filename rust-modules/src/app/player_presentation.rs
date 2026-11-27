@@ -92,3 +92,24 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod start_selection_tests {
+    use super::*;
+
+    /// **The capture boundary settles the attempt's selection PUT.** A start's PUT is provisional until a picture
+    /// shows or the attempt fails: the app's frame step is the door's only caller, so a refused plan that stands at
+    /// the capture is taken here, and a start that has not failed is left alone.
+    #[test]
+    fn capturing_a_failure_settles_the_start_selection() {
+        let _serial = plx_base::testlock::serial();
+        let mut ps = route::PlaybackSession::IDLE;
+        route::arm_start_selection_for_test(&mut ps, 960_001, (36_014, 55), (36_014, 88));
+        capture_failure_of(&mut ps, false);
+        assert!(route::start_selection_pending(&ps), "an attempt that has not failed keeps its PUT provisional");
+
+        route::refuse_for_test(&mut ps, route::PlayVerdict::DirectPlayDisabled);
+        capture_failure_of(&mut ps, false);
+        assert!(!route::start_selection_pending(&ps), "the failure's capture settles it, once");
+    }
+}

@@ -203,3 +203,55 @@ fn a_retry_after_a_transient_revert_still_plays_the_pick() {
     assert_eq!(lane.puts().len(), 3, "{:?}", lane.puts());
     lane.finish();
 }
+
+/// **The real resolve, end to end.** A 720p re-encode of an item whose server selection is English audio and
+/// subtitle 9, started with subtitles Off: `build_stream` PUTs the selection (audio kept, subtitle Off) before its
+/// `/decision`, the server refuses the conversion, and the REFUSED plan still carries what the landing needs (the
+/// verdict, the PUT it sent, what the server held before it, the Part and the server). Landed and captured as a
+/// frame does, the server's subtitle goes back to 9.
+#[test]
+fn a_refused_resolve_hands_its_put_to_the_landing_and_is_undone() {
+    const AUDIO: i64 = 2669;
+    const SELECTED_SUB: i64 = 9;
+    const REAL_PART: i64 = 36_013;
+    let mut lane = Lane::start();
+    lane.rig.refuse_decisions(16);
+    restore_quality(Quality::P720);
+    let sid = cur_sid(&lane.ps);
+    let mut env = ResolveEnv::snapshot(&lane.ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "rk-4k");
+    env.quality = Quality::P720;
+    env.src_kbps = 48_000;
+    env.audio_sid = 0;
+    env.sub_sid = 0;
+    let stream = |id, kind: &str| plx_data::metadata::Stream {
+        id, index: 0, lang_code: "eng".into(), codec: kind.into(), channels: 6, selected: true, ..Default::default()
+    };
+    env.cached_item = Some(fourk_item_with_subs(sid, vec![stream(AUDIO, "dca")], vec![stream(SELECTED_SUB, "srt")]));
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "rk-4k", "/library/parts/36013/1/file.mkv", "hevc", "dca", &env);
+
+    assert!(matches!(plan.verdict, Some(PlayVerdict::Server(..))), "the server refused the conversion: {:?}", plan.verdict);
+    assert!(plan.url.is_empty(), "a refused plan has nothing to play");
+    assert_eq!((plan.sid, plan.part_id), (sid, REAL_PART));
+    assert_eq!(
+        plan.selection_fetched,
+        Some(ServerSelection { part_id: REAL_PART, audio: Some(AUDIO), subtitle: Some(SELECTED_SUB) }),
+        "what the server held before the resolve's PUT"
+    );
+    assert_eq!(
+        plan.selection_sent,
+        Some(ServerSelection { part_id: REAL_PART, audio: Some(AUDIO), subtitle: Some(0) }),
+        "the PUT the resolve sent before its refused /decision"
+    );
+
+    apply_plan(&mut lane.ps, plan, "rk-4k");
+    assert_eq!(crate::player::state(&lane.ps), crate::player::PlaybackState::Error);
+    lane.frame();
+    lane.wait_for_puts(2);
+    plx_base::task::drain_workers_for_test();
+    let puts = lane.puts();
+    assert_eq!(puts.len(), 2, "the resolve's PUT, then its undoing: {puts:?}");
+    assert_eq!(param(&puts[0], "subtitleStreamID"), Some("0"), "{}", puts[0]);
+    assert_eq!(param(&puts[1], "subtitleStreamID"), Some("9"), "the selected subtitle goes back: {}", puts[1]);
+    assert_eq!(param(&puts[1], "audioStreamID"), None, "the audio never changed: {}", puts[1]);
+    lane.finish();
+}
