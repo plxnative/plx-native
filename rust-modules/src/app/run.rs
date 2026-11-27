@@ -10180,9 +10180,15 @@ pub(in crate::app) mod lifecycle_regression_tests {
             return;
         };
         let mut fr = refuse_restore(&mut rig);
-        // the frame captures the failure the read-out draws *Try again* on; the press is a recovery of that failure
-        super::player_presentation::capture_failure(&mut rig.app);
-        assert!(plx_media::route::failure(&rig.app.player.session).is_some(), "the refused restore is a captured failure");
+        // The refused restore leaves no engine and no read-out of its own, so the press this test makes has no button to
+        // come from: capture the transient failure the read-out would draw *Try again* on (the door judges a recovery
+        // against the captured failure), exactly as the frame does for the dev trigger's "connection" arm.
+        plx_media::player::observe_failure(
+            &mut rig.app.player.session,
+            plx_media::player::FailureTrigger { arm: Some("connection"), armed: false },
+            plx_media::player::report::attempt_id(),
+        );
+        assert!(plx_media::route::failure(&rig.app.player.session).is_some(), "rig: the failure is captured");
 
         player_requests(
             &mut rig.app.player,
