@@ -2945,6 +2945,17 @@ mod failed_pick_tests {
         PreplayPick { part_id: 9001, audio_sid: 21, sub: SubPick::Off }
     }
 
+    /// The failure the viewer picked tracks on: the attempt of `m1` ended in an interrupted stream (the dev trigger's
+    /// `connection` arm, captured the way a frame captures it), whose row offers *Audio & Subtitles*. A pick is
+    /// refused where the failure does not offer it, so a session that performs one has captured its failure first.
+    fn capture_the_failure(session: &mut PlaybackSession) {
+        plx_media::player::observe_failure(
+            session,
+            plx_media::player::FailureTrigger { arm: Some("connection"), armed: false },
+            plx_media::player::report::attempt_id(),
+        );
+    }
+
     /// **The failure panel closes only on a retry that STARTED**: the pair is held on the session either way
     /// (a refused retry leaves the panel up, with the pair held for Try again), but the panel goes only when
     /// the retry returned `true`.
@@ -2953,6 +2964,7 @@ mod failed_pick_tests {
         for started in [true, false] {
             let mut session = PlaybackSession::default();
             plx_media::route::seed_request_for_test(&mut session, "m1");
+            capture_the_failure(&mut session);
             let (mut asked, mut closed) = (0, 0);
             commit_failed_pick(&mut session, &pick(), |_| { asked += 1; started }, || closed += 1);
             assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the pair is held either way");
@@ -2991,6 +3003,7 @@ mod failed_pick_tests {
         let _guard = plx_base::testlock::serial();
         let mut session = PlaybackSession::default();
         plx_media::route::seed_request_for_test(&mut session, "m1");
+        capture_the_failure(&mut session);
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut meta = plx_data::stores::metadata::MetadataStore::default();
@@ -3006,6 +3019,8 @@ mod failed_pick_tests {
             || {},
         );
         assert!(retried, "the retry was taken: it stopped and started a resolve");
+        assert_eq!(plx_media::player::report::error_context_for_test(&session).attempt_origin,
+            plx_media::player::report::AttemptOrigin::UserRetry, "the retry is the one the test asked for");
         assert_eq!(plx_media::route::failed_pick(&session), Some(pick()),
             "the retry stopped and resolved again with the viewer's pick, which the failure screen still reads");
         // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
@@ -3041,6 +3056,7 @@ mod failed_pick_tests {
         };
         let mut resources = crate::app::bridge::test_support::TestCommandResources::new();
         plx_media::route::seed_request_for_test(resources.session_mut(), "1");
+        capture_the_failure(resources.session_mut());
         assert_eq!(plx_media::route::failed_pick(resources.session()), None, "nothing held before the commit");
         let outcome = super::execute_resource_command(
             &mut d, &mut rig, &mut resources.borrow(), MachineId::Instance(instance),
@@ -3051,6 +3067,10 @@ mod failed_pick_tests {
         );
         assert_eq!(outcome, plx_machine::machine::AppCommandOutcome::Completed);
         assert_eq!(plx_media::route::failed_pick(resources.session()), Some(pick()), "the arm held the pick on the session");
+        assert!(plx_media::route::play_pending(), "and its retry started a resolve of the request");
+        assert_eq!(plx_media::player::report::error_context_for_test(resources.session()).attempt_origin,
+            plx_media::player::report::AttemptOrigin::ViewerReconfigure, "as the viewer's reconfiguration, not a retry press");
+        assert!(plx_media::route::failure(resources.session()).is_none(), "the failed attempt's failure went with it");
         // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
         plx_media::route::cancel_play(resources.session_mut());
     }

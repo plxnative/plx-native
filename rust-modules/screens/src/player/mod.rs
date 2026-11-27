@@ -4920,6 +4920,44 @@ pub(crate) mod step_ladder_tests {
         assert_eq!(plx_appkit::player_hud::failure_action_word(Fail::ChangeTracks), "change_tracks");
     }
 
+    /// **Each control of the failure row asks the app for exactly one thing**, the same for a key and a click (one
+    /// resolution, `failure_activate`): *Play automatically* and *Try again* ask to start the failed request again, the
+    /// two pickers ask to be opened (the rung and the pair are chosen there, and come back as their own requests), and
+    /// *Back* leaves.
+    #[test]
+    fn each_failure_control_asks_the_app_for_its_one_request() {
+        use plx_media::player::FailureAction as Fail;
+        let _g = plx_base::testlock::serial();
+        let ps = super::overlay_tests::middle_episode_session();
+        let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
+        let show = |page: &mut PlayerScreen, actions: Vec<Fail>| {
+            let readout = plx_appkit::player_hud::FailureReadout::captured(
+                0, plx_media::player::error_for_test(&ps), actions, String::new(), ps.repair_status);
+            page.presentation = player_hud::Presentation {
+                busy: player_hud::Busy::Readout(plx_ui::widgets::StatusKind::Failed, c"Playback failed"),
+                failure: Some(std::sync::Arc::new(readout)),
+            };
+        };
+        show(&mut page, vec![Fail::PlayAutomatically, Fail::TryAgain, Fail::ChangeQuality, Fail::ChangeTracks]);
+        let asked = |page: &mut PlayerScreen, idx: usize| {
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx = Effects::new(&mut out, MachineId::Instance(INST), &mut present);
+            page.failure_activate::<TestHost>(&ps, idx, &plx_ui::fixture::FixtureMeasure, &mut fx);
+            out.into_iter().filter_map(|e| match e.fx {
+                Fx::App(AppFx::Player(req)) => Some(req),
+                _ => None,
+            }).collect::<Vec<_>>()
+        };
+        assert_eq!(asked(&mut page, 0), [PlayerReq::PlayAutomatically]);
+        assert_eq!(asked(&mut page, 1), [PlayerReq::RetryPlayback]);
+        assert_eq!(asked(&mut page, 2), [PlayerReq::OpenOverlay(overlay::OverlayKind::More {
+            page: Some(plx_appkit::more_menu::MorePage::Quality) })]);
+        assert!(matches!(asked(&mut page, 3).as_slice(), [PlayerReq::OpenFailedTracks { .. }]));
+        show(&mut page, vec![Fail::TryAgain, Fail::Back]);
+        assert_eq!(asked(&mut page, 1), [PlayerReq::Exit]);
+    }
+
     /// **A second failure reseats the row.** The row's focus is the viewer's own while one failure stands, and a failure
     /// that follows a retry is a different value (its attempt is new), so the row starts at the primary again; a standing
     /// failure's frames never move it. (The edge used to be "a failure took the frame", which a failure replacing another
