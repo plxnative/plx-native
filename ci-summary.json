@@ -295,7 +295,7 @@
    "test": "plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once"
   }
  ],
- "generated": "2026-11-27T16:05:06Z",
+ "generated": "2026-11-27T16:12:33Z",
  "metrics": [
   {
    "change30_pct": 50.7,
@@ -328,9 +328,9 @@
    "id": "ci|host harness tests",
    "kind": "job",
    "label": "CI: host harness tests",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 261.0,
+   "now": 261,
    "prev7": 211.5,
    "shown": true,
    "state": "worse",
@@ -361,18 +361,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 19.6,
-   "change7_pct": 2.9,
+   "change30_pct": 19.7,
+   "change7_pct": 3.1,
    "d30": 352,
-   "delta30": 69,
-   "delta7": 12,
+   "delta30": 69.5,
+   "delta7": 12.5,
    "group": "ci",
    "id": "push_wait",
    "kind": "wait",
    "label": "Wait after merge",
-   "n_now": 73,
+   "n_now": 74,
    "n_prev": 71,
-   "now": 421,
+   "now": 421.5,
    "prev7": 409,
    "shown": true,
    "state": "flat",
@@ -571,9 +571,9 @@
    "id": "ci|armv7 cross-build and artifact assertions",
    "kind": "job",
    "label": "CI: armv7 cross-build and artifact assertions",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 407.0,
+   "now": 407,
    "prev7": 397.5,
    "shown": true,
    "state": "flat",
@@ -583,18 +583,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 11.3,
-   "change7_pct": 17.2,
+   "change30_pct": 11.0,
+   "change7_pct": 16.9,
    "d30": 349.5,
-   "delta30": 39.5,
-   "delta7": 57.0,
+   "delta30": 38.5,
+   "delta7": 56.0,
    "group": "ci",
    "id": "ci|host unit tests (default features)",
    "kind": "job",
    "label": "CI: host unit tests (default features)",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 389.0,
+   "now": 388,
    "prev7": 332.0,
    "shown": true,
    "state": "flat",
@@ -646,18 +646,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 26.2,
-   "change7_pct": 12.5,
+   "change30_pct": 26.4,
+   "change7_pct": 12.7,
    "d30": 217.5,
-   "delta30": 57.0,
-   "delta7": 30.5,
+   "delta30": 57.5,
+   "delta7": 31.0,
    "group": "ci",
    "id": "ci|host python/shell/C gates",
    "kind": "job",
    "label": "CI: host python/shell/C gates",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 274.5,
+   "now": 275,
    "prev7": 244.0,
    "shown": true,
    "state": "flat",
@@ -670,15 +670,15 @@
    "change30_pct": -17.0,
    "change7_pct": 10.7,
    "d30": 311,
-   "delta30": -53.0,
+   "delta30": -53,
    "delta7": 25.0,
    "group": "ci",
    "id": "ci|host unit tests (hostsim)",
    "kind": "job",
    "label": "CI: host unit tests (hostsim)",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 258.0,
+   "now": 258,
    "prev7": 233.0,
    "shown": true,
    "state": "flat",
@@ -688,18 +688,18 @@
    "unit": "s"
   },
   {
-   "change30_pct": 50.0,
-   "change7_pct": -5.5,
+   "change30_pct": 50.3,
+   "change7_pct": -5.3,
    "d30": 165.0,
-   "delta30": 82.5,
-   "delta7": -14.5,
+   "delta30": 83.0,
+   "delta7": -14.0,
    "group": "ci",
    "id": "ci|host lint + type-checks",
    "kind": "job",
    "label": "CI: host lint + type-checks",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 247.5,
+   "now": 248,
    "prev7": 262.0,
    "shown": true,
    "state": "flat",
@@ -846,9 +846,9 @@
    "id": "ci|which gates apply",
    "kind": "job",
    "label": "CI: which gates apply",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 5.0,
+   "now": 5,
    "prev7": 5.0,
    "shown": false,
    "state": "flat",
@@ -861,15 +861,15 @@
    "change30_pct": 0.0,
    "change7_pct": 0.0,
    "d30": 3,
-   "delta30": 0.0,
+   "delta30": 0,
    "delta7": 0.0,
    "group": "ci",
    "id": "ci|cross-build (armv7) + artifact assertions",
    "kind": "job",
    "label": "CI: cross-build (armv7) + artifact assertions",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 3.0,
+   "now": 3,
    "prev7": 3.0,
    "shown": false,
    "state": "flat",
@@ -882,15 +882,15 @@
    "change30_pct": 0.0,
    "change7_pct": 0.0,
    "d30": 3,
-   "delta30": 0.0,
+   "delta30": 0,
    "delta7": 0.0,
    "group": "ci",
    "id": "ci|host checks (NOT a device gate)",
    "kind": "job",
    "label": "CI: host checks (NOT a device gate)",
-   "n_now": 74,
+   "n_now": 75,
    "n_prev": 70,
-   "now": 3.0,
+   "now": 3,
    "prev7": 3.0,
    "shown": false,
    "state": "flat",
@@ -926,11 +926,6 @@
    "change_pct": 43.7,
    "commits": [
     {
-     "pr": 1578,
-     "sha": "ada31c221",
-     "title": "Live TV: the Guide"
-    },
-    {
      "pr": 1582,
      "sha": "ccd8731c3",
      "title": "Tizen: a packet-player probe in Settings > Diagnostics, and the Feed port's design"
@@ -974,6 +969,11 @@
      "pr": 1593,
      "sha": "14785c8fb",
      "title": "Player Tracks and More menus on plx_ui::menu"
+    },
+    {
+     "pr": 1595,
+     "sha": "4918597a7",
+     "title": "Playback: the failure read-out is one captured value, not a per-frame derivation"
     }
    ],
    "from": 213,
@@ -987,11 +987,6 @@
    "change_pct": 23.4,
    "commits": [
     {
-     "pr": 1578,
-     "sha": "ada31c221",
-     "title": "Live TV: the Guide"
-    },
-    {
      "pr": 1582,
      "sha": "ccd8731c3",
      "title": "Tizen: a packet-player probe in Settings > Diagnostics, and the Feed port's design"
@@ -1035,6 +1030,11 @@
      "pr": 1593,
      "sha": "14785c8fb",
      "title": "Player Tracks and More menus on plx_ui::menu"
+    },
+    {
+     "pr": 1595,
+     "sha": "4918597a7",
+     "title": "Playback: the failure read-out is one captured value, not a per-frame derivation"
     }
    ],
    "from": 211.5,
@@ -1042,7 +1042,7 @@
    "label": "CI: host harness tests",
    "since": "2026-11-27",
    "threshold_pct": 20.0,
-   "to": 261.0
+   "to": 261
   }
  ],
  "schema": 2,
@@ -1057,13 +1057,13 @@
    "group": "ci",
    "id": "ci|armv7 cross-build and artifact assertions",
    "label": "CI: armv7 cross-build and artifact assertions",
-   "now": 407.0
+   "now": 407
   },
   {
    "group": "ci",
    "id": "ci|host unit tests (default features)",
    "label": "CI: host unit tests (default features)",
-   "now": 389.0
+   "now": 388
   },
   {
    "group": "ci",
