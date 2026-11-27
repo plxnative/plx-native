@@ -1082,6 +1082,28 @@ something.
   its own PUT as before. It holds itself to the
   subtitle the landing put on screen (`owed.landed_sub`, settled from the session by
   `settle_landing_selection`), so it never replaces a remembered sidecar the restore drew.
+- **A track pick the server refuses is not kept, on the server or in the show's memory (#1522).** A
+  pick that needs a conversion (a burn, a transcoded audio, a displaced pick under an Original) PUTs
+  the Part's selection BEFORE `/decision` answers, so a refusal has to undo what the claim wrote.
+  `PlaybackSession::server_selection` (`route/server_selection.rs`) is the ONE value for what the
+  server holds: seeded from the fetched item's `selected` streams (`apply_plan`, plus the resolve's own
+  PUTs), reset by another Part, and moved only by a selection PUT: a claim worker records its PUTs
+  (`PutTrail`) and the landing settles them (`FlightSelection::settle`, in `install_claim_landing` and
+  `take_ready_recovery_flight`), the serial queue's sites record theirs at queue time
+  (`queue_session_selection`, `note_queued_selection`; that worker has no way back, so a PUT it fails
+  stays recorded). It is NOT `source_selection` (source intent, overwritten at the pick's commit) and
+  not the applied projection (a fall-through auto-pick is shown and never PUT). A REFUSED claim writes
+  back only the fields its PUT changed and the value knows (an unknown audio is never guessed, the
+  wire drops `audioStreamID` for 0), through `queue_selection` on the main thread at the landing, and
+  not at all when `server_selection` moved since the claim captured it (an in-place pick queued behind
+  the flight is the newer word). The memo half rides the claim: `PlayerControl::pending_memos` (beside
+  `pending_user`, latest wins, merged on coalesce, taken into `claimed_user`, handed back on teardown)
+  is written by `finish_route_action(Prepared)`, or at `install_claim_landing`'s `OriginalRecovery`
+  arm (a displaced pick under an Original lands through `original_tail`, which never settles
+  `Prepared`), and dropped on Rejected or Cancelled. A pick applied in place or natively writes at
+  commit, as before (`commit_audio_pick`, `commit_subtitle_pick`; a subtitle rides a rebuild only when
+  `transcoding && !in_place`), and a pick deferred behind a pending Original holds its memo in
+  `PendingOriginal::deferred_audio_memo` for `apply_deferred_original_effects` to write.
 - **App-switch lifecycle** (handled in `app/run.rs`, the frame loop; the machine is
   `player/lifecycle.rs`, its drivers (`drive_foreground` and the `poll_`/`park_` fns) are
   `player/foreground.rs`, and the transport-pause contract is `player/transport.rs`; `app::lifecycle`

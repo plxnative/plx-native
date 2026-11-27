@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use super::flight::*;
 use super::plan::*;
 use super::prefs::*;
+use super::server_selection::{PutTrail, ServerSelection};
 use super::track_memory::{SubMode, TrackContext};
 
 // The track memory's effects: the recall at a resolve, the parked write-back and the track menu's
@@ -420,6 +421,11 @@ pub struct PlaybackSession {
     /// physical backend chooses a different effective stream. Both backends use this one intent;
     /// `cur_audio` remains the stream the current Feed route actually carries.
     source_selection: Option<SourceSelection>,
+    /// What PMS holds as the playing Part's selected audio and subtitle streams (see
+    /// [`ServerSelection`]): the fetched item's own `selected` streams, then every selection PUT the
+    /// server answered. What a refused rebuild's restore writes back. Unlike
+    /// [`Self::source_selection`] a pick's commit never writes it: only a PUT does.
+    pub(super) server_selection: Option<ServerSelection>,
     /// The playback backends composed for this session: `BackendSet::FEED` until the composition installs
     /// the set its drivers form (`install_backends`). Policy asks it which physical backend can be offered,
     /// never which drivers were compiled in.
@@ -1991,6 +1997,7 @@ impl PlaybackSession {
         cur_sid: ServerId::UNSET,
         cur_audio: None,
         source_selection: None,
+        server_selection: None,
         cur_sub_sid: 0,
         selection_known: false,
         carried_selection: None,
@@ -2105,6 +2112,7 @@ impl PlaybackSession {
             cur_sid,
             cur_audio,
             source_selection,
+            server_selection,
             cur_sub_sid,
             selection_known,
             carried_selection,
@@ -2201,6 +2209,7 @@ impl PlaybackSession {
             cur_sid: *cur_sid,
             cur_audio: cur_audio.clone(),
             source_selection: *source_selection,
+            server_selection: *server_selection,
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,
@@ -2841,6 +2850,50 @@ impl TimelineSnapshot {
     }
 }
 
+/// **The track memory a viewer's pick owes, held until the server has agreed to it.** A pick that rides
+/// a server rebuild (an audio pick that needs a conversion, a subtitle burn) is written to the show's
+/// memory only once the claim that carries it is accepted ([`settle_claim_memos`]): written at commit,
+/// a refused pick stayed remembered and the next start of the show planned from it (#1522). One
+/// memo per half, the newest wins: a rebuild applies the whole projection, so two picks of one half
+/// before it are one pick.
+///
+/// It lives beside [`PlayerControl::pending_user`] exactly as `displaced_pick` does: taken with the
+/// intent at the claim ([`PlayerControl::claimed_user`] keeps it under the claim's serial), written
+/// when the claim lands accepted, dropped when it is refused or cancelled, handed back with the
+/// intent when a teardown drops the flight, merged when picks coalesce, and cleared wherever
+/// `pending_user` is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PickMemos {
+    audio: Option<plx_plex::plex::session::prefs::AudioMemo>,
+    subtitle: Option<plx_plex::plex::session::prefs::SubtitleMemo>,
+}
+
+impl PickMemos {
+    const NONE: Self = Self { audio: None, subtitle: None };
+
+    pub(super) fn audio(memo: Option<plx_plex::plex::session::prefs::AudioMemo>) -> Self {
+        Self { audio: memo, subtitle: None }
+    }
+
+    pub(super) fn subtitle(memo: Option<plx_plex::plex::session::prefs::SubtitleMemo>) -> Self {
+        Self { audio: None, subtitle: memo }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.audio.is_none() && self.subtitle.is_none()
+    }
+
+    /// Fold `newer` over `self`: each half the newer one names replaces the older's.
+    fn merge(&mut self, newer: PickMemos) {
+        if newer.audio.is_some() {
+            self.audio = newer.audio;
+        }
+        if newer.subtitle.is_some() {
+            self.subtitle = newer.subtitle;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlPhase {
     Idle,
@@ -2918,11 +2971,14 @@ pub(super) struct PlayerControl {
     /// suspend drops ([`begin_engine_teardown`]) still owes the viewer's pick, so the teardown puts
     /// the intent back in `pending_user` for the foreground restore's Engine to claim. Only read
     /// under a matching `Applying(serial)`; a settled claim's record is dead weight, never consulted.
-    claimed_user: Option<(u64, UserRouteIntent, bool)>,
+    claimed_user: Option<(u64, UserRouteIntent, bool, PickMemos)>,
     /// Issue #266: the pending user intent stands in for a track pick's reload (see
     /// [`reconcile_enhancement`]). Lives and dies with `pending_user`: cleared at every site that
     /// clears it, taken with it at claim, so it can never outlive the pick it describes.
     displaced_pick: bool,
+    /// The track memory the pending user intent's picks owe ([`PickMemos`]). Lives and dies with
+    /// `pending_user`, like `displaced_pick`.
+    pending_memos: PickMemos,
     pending_auto: Option<AutomaticRouteIntent>,
     /// Latest requested playhead which has not yet crossed a real media discontinuity.
     pending_seek_ns: Option<i64>,
@@ -3032,6 +3088,7 @@ static PLAYER_CONTROL: std::sync::Mutex<PlayerControl> = std::sync::Mutex::new(P
     pending_user: None,
     claimed_user: None,
     displaced_pick: false,
+    pending_memos: PickMemos::NONE,
     pending_auto: None,
     pending_seek_ns: None,
     phase: ControlPhase::Stable,
@@ -3230,6 +3287,7 @@ fn begin_playback_request() -> Option<u64> {
     control.desired_quality = quality();
     control.pending_user = None;
     control.displaced_pick = false;
+    control.pending_memos = PickMemos::NONE;
     control.pending_auto = None;
     control.pending_seek_ns = None;
     control.original_refused_on = None;
@@ -3449,6 +3507,36 @@ pub fn cancel_user_route_intent(intent: UserRouteIntent) {
     if control.pending_user == Some(intent) {
         control.pending_user = None;
         control.displaced_pick = false;
+        control.pending_memos = PickMemos::NONE;
+    }
+}
+
+/// Hand the memos of a pick that rides a rebuild to the pending intent ([`PickMemos`]). Called right
+/// after the commit queued the intent, on the same thread, so no claim can take the intent first.
+pub(super) fn queue_pick_memos(memos: PickMemos) {
+    if memos.is_empty() {
+        return;
+    }
+    let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    control.pending_memos.merge(memos);
+}
+
+/// Settle the memos the claim `serial` carried: write them when the server agreed (the claim is
+/// accepted, [`finish_route_action`]'s `Prepared`, or an Original trial it started), drop them when it
+/// did not. Nothing for another claim's serial.
+pub(super) fn settle_claim_memos(ps: &PlaybackSession, serial: u64, accepted: bool) {
+    let memos = {
+        let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+        match control.claimed_user.take() {
+            Some((claimed, _, _, memos)) if claimed == serial => memos,
+            other => {
+                control.claimed_user = other;
+                return;
+            }
+        }
+    };
+    if accepted {
+        memory::write_pick_memos(ps, memos);
     }
 }
 
@@ -3460,8 +3548,10 @@ pub fn claim_route_action() -> Option<ClaimedRouteAction> {
         return None;
     }
     let mut displaced_pick = false;
+    let mut memos = PickMemos::NONE;
     let intent = if let Some(user) = control.pending_user.take() {
         displaced_pick = std::mem::take(&mut control.displaced_pick);
+        memos = std::mem::take(&mut control.pending_memos);
         RouteIntent::User(user)
     } else {
         let automatic = control.pending_auto.take()?;
@@ -3475,7 +3565,7 @@ pub fn claim_route_action() -> Option<ClaimedRouteAction> {
     let ticket = worker_ticket_of(&control);
     control.phase = ControlPhase::Applying(serial);
     control.claimed_user = match intent {
-        RouteIntent::User(user) => Some((serial, user, displaced_pick)),
+        RouteIntent::User(user) => Some((serial, user, displaced_pick, memos)),
         RouteIntent::Automatic(_) => None,
     };
     Some(ClaimedRouteAction {
@@ -3525,6 +3615,9 @@ pub fn finish_route_action(ps: &mut PlaybackSession, action: &ClaimedRouteAction
         // user desire would immediately revoke the worker which the automatic action created.
         control.applied_projection = Some(projection);
         control.phase = ControlPhase::Prepared(action.serial);
+        drop(control);
+        // The server agreed: the picks this claim carried are now the show's memory.
+        settle_claim_memos(ps, action.serial, true);
         return true;
     }
     // A refused automatic Original recovery is remembered against the HLS encoder it was asked
@@ -3541,6 +3634,9 @@ pub fn finish_route_action(ps: &mut PlaybackSession, action: &ClaimedRouteAction
     if let Some(applied) = restore {
         install_route_projection(ps, &applied);
     }
+    // Refused or cancelled: the picks this claim carried are not the viewer's choice any more than
+    // the route is, and nothing of them was written.
+    settle_claim_memos(ps, action.serial, false);
     let mut control = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner());
     if control.phase == ControlPhase::Applying(action.serial) {
         control.phase = ControlPhase::Stable;
@@ -4009,6 +4105,7 @@ pub fn begin_engine_teardown(for_reload: bool) {
         control.desired_revision = next_generation(control.desired_revision);
         control.pending_user = None;
         control.displaced_pick = false;
+        control.pending_memos = PickMemos::NONE;
         control.pending_seek_ns = None;
         control.phase = ControlPhase::Stopping;
         control.clear_flight();
@@ -4033,13 +4130,17 @@ pub fn begin_engine_teardown(for_reload: bool) {
             ControlPhase::Applying(serial) if control.flight == Some(serial) => {
                 control.clear_flight();
                 dropped_claim_flight = true;
-                if let Some((claimed, intent, displaced)) = control.claimed_user.take() {
+                if let Some((claimed, intent, displaced, memos)) = control.claimed_user.take() {
                     if claimed == serial {
                         control.pending_user = Some(match control.pending_user.take() {
                             Some(newer) => merge_user_route_intent(Some(intent), newer, false),
                             None => intent,
                         });
                         control.displaced_pick |= displaced;
+                        // The claim's memos are the older picks; any newer ones queued meanwhile win.
+                        let mut handed_back = memos;
+                        handed_back.merge(std::mem::take(&mut control.pending_memos));
+                        control.pending_memos = handed_back;
                     }
                 }
                 ControlPhase::Stable
@@ -4257,6 +4358,7 @@ pub fn reset_player_control_for_test(ps: &PlaybackSession) {
     control.pending_user = None;
     control.claimed_user = None;
     control.displaced_pick = false;
+    control.pending_memos = PickMemos::NONE;
     control.pending_auto = None;
     control.pending_seek_ns = None;
     control.phase = ControlPhase::Stable;
@@ -5710,7 +5812,7 @@ pub fn fallback_auto_to_hls_for(
     offset_secs: i64,
 ) -> Option<String> {
     let plan = plan_auto_hls(ps, expected, measured_kbps, offset_secs)?;
-    let outcome = run_auto_hls(&plx_base::task::OffFrame::for_test(), &plan);
+    let outcome = run_auto_hls(&plx_base::task::OffFrame::for_test(), &plan, &mut PutTrail::default());
     let installed = install_auto_hls_outcome(ps, plan, outcome)?;
     installed.retire_replaced();
     Some(installed.url())
@@ -6026,7 +6128,7 @@ pub fn dispatch_refusal_conversion(ps: &mut PlaybackSession, offset_secs: i64, v
 #[cfg(any(test, feature = "test-support"))]
 pub fn fallback_unopened_auto_to_hls(ps: &mut PlaybackSession, offset_secs: i64) -> Option<String> {
     let plan = plan_unopened_auto_hls(ps, offset_secs)?;
-    let outcome = run_auto_hls(&plx_base::task::OffFrame::for_test(), &plan);
+    let outcome = run_auto_hls(&plx_base::task::OffFrame::for_test(), &plan, &mut PutTrail::default());
     let installed = install_auto_hls_outcome(ps, plan, outcome)?;
     installed.retire_replaced();
     Some(installed.url())
@@ -6057,6 +6159,16 @@ pub(super) struct AutoHlsPlan {
     visible_switch: bool,
     reason: crate::player::report::DeliveryReason,
     route: AutoHlsRoute,
+}
+
+impl AutoHlsPlan {
+    /// The server its selection PUT goes to and what it held (`None` for the fixture tier, which has no PMS).
+    pub(super) fn selection_context(&self) -> Option<(ServerId, Option<ServerSelection>)> {
+        match &self.route {
+            AutoHlsRoute::Fixture { .. } => None,
+            AutoHlsRoute::Encode { inputs, .. } => Some((inputs.sid, inputs.server_before)),
+        }
+    }
 }
 
 enum AutoHlsRoute {
@@ -6141,8 +6253,13 @@ fn plan_auto_hls_for(
 /// The PMS half of the fallback — everything that blocks on the server and nothing that touches a
 /// `PlaybackSession` or the route, so it runs on a worker (`_off` is the proof: the frame thread
 /// cannot mint one). It sends the selection PUT and registers the replacement encoder with
-/// `/decision`; the COMMIT is [`install_auto_hls_outcome`]'s, on the frame thread.
-pub(super) fn run_auto_hls(off: &plx_base::task::OffFrame, plan: &AutoHlsPlan) -> AutoHlsOutcome {
+/// `/decision`; the COMMIT is [`install_auto_hls_outcome`]'s, on the frame thread. The selection PUT
+/// is recorded in `puts`, so the claim's landing can undo it when the fallback is refused.
+pub(super) fn run_auto_hls(
+    off: &plx_base::task::OffFrame,
+    plan: &AutoHlsPlan,
+    puts: &mut PutTrail,
+) -> AutoHlsOutcome {
     match &plan.route {
         AutoHlsRoute::Fixture { base } => AutoHlsOutcome::Fixture {
             encoder: format!("auto-fixture-{}", plan.rung.kbps()),
@@ -6153,7 +6270,7 @@ pub(super) fn run_auto_hls(off: &plx_base::task::OffFrame, plan: &AutoHlsPlan) -
             ),
         },
         AutoHlsRoute::Encode { inputs, contract } => {
-            select_streams_for_encode(off, inputs);
+            puts.note(select_streams_for_encode(off, inputs));
             request_retranscode(off, inputs, *contract).map_or(AutoHlsOutcome::Refused, AutoHlsOutcome::Prepared)
         }
     }
@@ -6390,7 +6507,7 @@ pub fn recover_auto_to_original_for(
     cause: RecoveryCause,
 ) -> Option<AutoOriginalReload> {
     let plan = plan_original_recovery(ps, expected, offset_secs, cause)?;
-    let net = run_original_recovery(&plx_base::task::OffFrame::for_test(), &plan)?;
+    let net = run_original_recovery(&plx_base::task::OffFrame::for_test(), &plan, &mut PutTrail::default())?;
     install_original_recovery(ps, plan, net)
 }
 
@@ -6415,11 +6532,15 @@ pub(super) struct OriginalRecoveryPlan {
     /// The attempt's capability value ([`PlaybackSession::attempt_caps`]) the replacement remux's profile
     /// and grading are derived from.
     caps: std::sync::Arc<plx_os::devcaps::Caps>,
-    sid: ServerId,
+    pub(super) sid: ServerId,
     rk: String,
     media_index: usize,
     part_id: i64,
     subtitle_sid: i64,
+    /// What the server held of this Part when the recovery was planned, the same capture a claim's
+    /// [`RetranscodeClaimInputs::server_before`] holds: a recovery claim with no encode to fly with
+    /// carries no inputs, and its candidate PUT can still end refused.
+    pub(super) server_before: Option<ServerSelection>,
     /// The namespace the replacement encoder's session id is minted under.
     namespace: String,
     /// The session id a DIRECT trial's Part reads (the admission probe and the trial URL) and the
@@ -6539,6 +6660,7 @@ fn plan_original_recovery(
         media_index: cur_media_index(ps),
         part_id: cur_part_id(ps),
             subtitle_sid: cur_sub_sid(ps),
+        server_before: ps.server_selection,
         namespace,
         direct_session,
         src_acodec: ps.src_acodec.clone(),
@@ -6582,10 +6704,12 @@ pub(super) struct PreparedOriginalRemux {
 /// The PMS half of an Original recovery — everything that blocks on the server and nothing that
 /// touches a `PlaybackSession`, so it runs on a worker (`_off` is the proof: the frame thread
 /// cannot mint one). The only route state it writes is the remux's `replace_active_encoder_for`
-/// commit, which is gated on `plan.expected`.
+/// commit, which is gated on `plan.expected`. The selection PUTs it sends are recorded in `puts`, so
+/// the claim's landing can undo them when the recovery is refused.
 pub(super) fn run_original_recovery(
     off: &plx_base::task::OffFrame,
     plan: &OriginalRecoveryPlan,
+    puts: &mut PutTrail,
 ) -> Option<OriginalRecoveryNet> {
     // A direct trial is only worth starting on a Part the server will actually serve this
     // identity. One the server refuses is reached as its codec-copy remux instead — the shape the
@@ -6608,7 +6732,7 @@ pub(super) fn run_original_recovery(
     // stopping the old HLS encoder, then puts both exact identities in PendingOriginal; decoded
     // frames retire HLS, while a failed open restores its client-side route snapshot and retires
     // this unproven remux. Only the next HLS response establishes PMS-side cursor continuity.
-    match prepare_original_remux(off, plan, audio, plan.force_burn_for(audio), false)? {
+    match prepare_original_remux(off, plan, audio, plan.force_burn_for(audio), false, puts)? {
         OriginalRemux::Prepared(prepared) => Some(OriginalRecoveryNet::Remux(prepared)),
         // The server will not apply the params and the candidate direct-plays: the plain
         // Original IS that direct play, exactly as the resolve's own fallback returns to it —
@@ -6619,7 +6743,7 @@ pub(super) fn run_original_recovery(
             }
             AdmitOrPlainRemux::PlainRemux => {
                 let none = plx_plex::plex::AudioEnhancements::NONE;
-                match prepare_original_remux(off, plan, none, plan.subtitle_burn, true)? {
+                match prepare_original_remux(off, plan, none, plan.subtitle_burn, true, puts)? {
                     OriginalRemux::Prepared(prepared) => Some(OriginalRecoveryNet::Remux(prepared)),
                     OriginalRemux::RefusedToDirect => None,
                 }
@@ -6958,6 +7082,9 @@ struct PendingOriginal {
     /// proven; a terminal failure drops them rather than leaking them into a later trial.
     deferred_quality: Option<Quality>,
     deferred_audio: Option<CarriedAudio>,
+    /// The track memory the deferred pick owes ([`PickMemos`]); replayed with it, never written
+    /// while the pick is only held.
+    deferred_audio_memo: Option<plx_plex::plex::session::prefs::AudioMemo>,
     /// Issue #266: the enhancement preference changed while this trial owned the route. The
     /// reconcile it asked for runs against whichever route the trial settles on — the candidate
     /// or its rollback — never against the unproven half-state in between.
@@ -6968,6 +7095,7 @@ struct PendingOriginal {
 pub struct DeferredOriginalEffects {
     quality: Option<Quality>,
     audio: Option<CarriedAudio>,
+    audio_memo: Option<plx_plex::plex::session::prefs::AudioMemo>,
     reconcile: bool,
 }
 
@@ -6976,6 +7104,7 @@ impl DeferredOriginalEffects {
         Self {
             quality: pending.deferred_quality.take(),
             audio: pending.deferred_audio.take(),
+            audio_memo: pending.deferred_audio_memo.take(),
             reconcile: std::mem::take(&mut pending.deferred_reconcile),
         }
     }
@@ -7012,6 +7141,7 @@ fn snapshot_route(ps: &PlaybackSession, encoder: String, offset_secs: i64) -> Pe
         charge_visible_switch_on_commit: false,
         deferred_quality: None,
         deferred_audio: None,
+        deferred_audio_memo: None,
         deferred_reconcile: false,
     }
 }
@@ -10344,22 +10474,25 @@ pub(super) fn forced_server_decision(
 /// credential stamp, `(instance_gen, grant_epoch)` of `client_for(sid)` at queue time, and a queued
 /// request is dropped, not sent, if the slot's client or grant moved before the worker ran it
 /// ([`QueuedSelection`], W11).
-pub(super) fn put_selection(_off: &plx_base::task::OffFrame, sid: ServerId, part: i64, aud: i64, sub: i64) {
+///
+/// Returns what the server now holds because of it ([`ServerSelection::put`]) when it answered success,
+/// `None` when nothing was sent or it did not: the report a flight's worker posts with its landing
+/// ([`FlightSelection`]) and the resolve posts on its plan.
+pub(super) fn put_selection(
+    _off: &plx_base::task::OffFrame, sid: ServerId, part: i64, aud: i64, sub: i64,
+) -> Option<ServerSelection> {
     if part <= 0 {
-        return;
+        return None;
     }
-    let c = match plx_plex::plex::client_for(sid) {
-        Some(c) => c,
-        None => return,
-    };
-    send_selection(c, part, aud, Some(sub));
+    let c = plx_plex::plex::client_for(sid)?;
+    send_selection(c, part, aud, Some(sub)).then(|| ServerSelection::put(part, aud, Some(sub)))
 }
 
 /// The PUT itself, on a client the CALLER chose: [`put_selection`] resolves it per call, the queue
 /// worker checks the credential it was queued under first and sends on that same `&Client`.
 /// `sub == None` omits `subtitleStreamID` (an audio-only write-back with no subtitle to keep), and
 /// the log line says `-` for it.
-fn send_selection(c: &plx_plex::plex::Client, part: i64, aud: i64, sub: Option<i64>) {
+fn send_selection(c: &plx_plex::plex::Client, part: i64, aud: i64, sub: Option<i64>) -> bool {
     let st = c.select_streams(&plx_plex::plex::StreamSelection {
         part_id: part,
         audio_stream_id: aud,
@@ -10369,6 +10502,7 @@ fn send_selection(c: &plx_plex::plex::Client, part: i64, aud: i64, sub: Option<i
     crate::player::log(&format!(
         "select streams: part={part} audio={aud} sub={sub} -> HTTP {st}"
     ));
+    (200..300).contains(&st)
 }
 
 /// One queued selection PUT and WHO it was queued for. `(instance_gen, grant_epoch)` is the
@@ -10444,19 +10578,36 @@ fn selection_queue_idle() -> bool {
 /// dropped, not sent, if either moved before the worker runs it (W11; it logs `select streams:
 /// dropped (credential changed since queued)`), so a request queued behind a slow server never goes
 /// out under the next profile's token.
-pub(super) fn queue_put_selection(sid: ServerId, part: i64, aud: i64, sub: i64) {
-    queue_selection(sid, part, aud, Some(sub), false);
+pub(super) fn queue_put_selection(sid: ServerId, part: i64, aud: i64, sub: i64) -> bool {
+    queue_selection(sid, part, aud, Some(sub), false)
+}
+
+/// [`queue_put_selection`] of the session's own pair, recorded as the server's selection
+/// ([`PlaybackSession::server_selection`]). The serial worker has no result path back to the
+/// session, so a queued PUT counts as sent: the owner writes the value where it queues, in the order
+/// the FIFO will send.
+pub(super) fn queue_session_selection(ps: &mut PlaybackSession) {
+    let (part, aud, sub) = (cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+    if queue_put_selection(cur_sid(ps), part, aud, sub) {
+        note_queued_selection(ps, ServerSelection::put(part, aud, Some(sub)));
+    }
+}
+
+/// Record a selection PUT the serial worker was handed ([`queue_session_selection`] and the
+/// write-back).
+pub(super) fn note_queued_selection(ps: &mut PlaybackSession, put: ServerSelection) {
+    ps.server_selection = Some(ServerSelection::after(ps.server_selection, put));
 }
 
 /// [`queue_put_selection`] with the subtitle optional and the request's provenance. The credential
 /// identity is captured HERE, on the thread that knows who is asking, and checked again when the
 /// worker runs the request (W11).
-fn queue_selection(sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool) {
+pub(super) fn queue_selection(sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_back: bool) -> bool {
     if part <= 0 {
-        return;
+        return false;
     }
     let Some(c) = plx_plex::plex::client_for(sid) else {
-        return;
+        return false;
     };
     let request = QueuedSelection {
         sid,
@@ -10475,6 +10626,7 @@ fn queue_selection(sid: ServerId, part: i64, aud: i64, sub: Option<i64>, write_b
     if spawn {
         spawn_selection_worker();
     }
+    true
 }
 
 fn spawn_selection_worker() {
@@ -12327,6 +12479,14 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
     // The remembered choice this landing applied and the server may not have (W6). Computed here
     // because the playing item moves into the store just below, and only for a playable landing.
     let write_back = parked_write_back(&plan);
+    // What the server holds of this Part: the fetched item's selected streams, then the PUTs the plan
+    // sent (its resolve worker returned them on the plan, the only way back to this owner).
+    let server_selection = plan
+        .playing
+        .as_ref()
+        .and_then(|item| ServerSelection::fetched(plan.part_id, item))
+        .map(|fetched| plan.selection_sent.map_or(fetched, |put| ServerSelection::after(Some(fetched), put)))
+        .or(plan.selection_sent);
     // **The start of a playback is what spends the viewer's pick, and only a playable plan of the viewer's
     // own starts one**: a REFUSED plan installs its item too (its verdict feeds the read-out) but nothing
     // played, so BACK and Play must still find the pick; a hero preview is not the viewer's playback. A
@@ -12488,6 +12648,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             // The pre-plan source intent is retained across physical route reconstruction.
             // A resolved Plan with its own source selection installs that exact value here.
             source_selection: plan.source_selection.or(s.source_selection),
+            server_selection,
             // the part/show-selected subtitle (0 = none), so the menu checkmark, the timeline report
             // and any later transcode of this item all agree with what the renderer is told below
             cur_sub_sid: plan.sub_sid,
@@ -12629,6 +12790,7 @@ fn prepare_original_remux(
     audio: plx_plex::plex::AudioEnhancements,
     force_burn: bool,
     known_refused: bool,
+    puts: &mut PutTrail,
 ) -> Option<OriginalRemux> {
     let c = plan.client?;
     let rk = plan.rk.as_str();
@@ -12640,7 +12802,7 @@ fn prepare_original_remux(
     let replacement = next_encoder_session(&plan.namespace);
     let subtitle = plan.subtitle_sid;
     let candidate_audio_sid = candidate.audio.as_ref().map_or(0, |a| a.sid);
-    put_selection(off, plan.sid, plan.part_id, candidate_audio_sid, subtitle);
+    puts.note(put_selection(off, plan.sid, plan.part_id, candidate_audio_sid, subtitle));
     let spec_for = |audio, force_burn| {
         transcode_spec(
             &plan.caps,
@@ -12765,7 +12927,7 @@ fn retranscode_for(ps: &mut PlaybackSession, expected: &WorkerTicket, offset_sec
     let contract = plain_rebuild_precheck(ps, expected)?;
     let inputs = prepare_retranscode_inputs(ps, expected, offset_secs)?;
     let off = plx_base::task::OffFrame::for_test();
-    select_streams_for_encode(&off, &inputs);
+    let _ = select_streams_for_encode(&off, &inputs);
     match try_retranscode(&off, &inputs, contract) {
         RetranscodeWorkerOutcome::Applied(applied) => {
             install_retranscode_outcome(ps, &applied);
@@ -12986,12 +13148,16 @@ pub(super) struct RetranscodeClaimInputs {
     /// claim builds: the profile PMS reads is derived from it, so a recovery flight that began a new
     /// attempt (`dispatch_refusal_conversion`) asks for exactly the conversion it narrowed to.
     caps: std::sync::Arc<plx_os::devcaps::Caps>,
-    sid: ServerId,
+    pub(super) sid: ServerId,
     rk: String,
     media_index: usize,
     part_id: i64,
     audio_sid: i64,
     subtitle_sid: i64,
+    /// What the server held of this Part when the claim was made ([`PlaybackSession::server_selection`],
+    /// read on the main thread beside the other inputs): the value a refusal of this claim writes
+    /// back over the claim's own selection PUT. Settled at the landing ([`FlightSelection::settle`]).
+    pub(super) server_before: Option<ServerSelection>,
     namespace: String,
     offset_secs: i64,
     expected: WorkerTicket,
@@ -13090,12 +13256,18 @@ fn retranscode_fallback_codecs(
 /// [`try_retranscode`] attempt: every attempt of a claim shares `inputs`, so a fallback attempt
 /// would send the identical PUT again. Skipped for a stale ticket, exactly as the attempt's own
 /// gate refuses to start.
-pub(super) fn select_streams_for_encode(off: &plx_base::task::OffFrame, inputs: &RetranscodeClaimInputs) {
+///
+/// Returns what the server now holds because of it (see [`put_selection`]); the flight records it in
+/// its [`PutTrail`], so a refusal of the claim can write the earlier selection back.
+pub(super) fn select_streams_for_encode(
+    off: &plx_base::task::OffFrame, inputs: &RetranscodeClaimInputs,
+) -> Option<ServerSelection> {
     // A channel has no Part to select streams on: the tune's session is the whole source, and the
     // server is already recording it.
     if inputs.live.is_none() && is_worker_ticket_current(&inputs.expected) {
-        put_selection(off, inputs.sid, inputs.part_id, inputs.audio_sid, inputs.subtitle_sid);
+        return put_selection(off, inputs.sid, inputs.part_id, inputs.audio_sid, inputs.subtitle_sid);
     }
+    None
 }
 
 /// What one accepted `/decision` answered, before the route has named it: the encoder session the
@@ -13317,6 +13489,7 @@ fn prepare_retranscode_inputs(
         part_id: cur_part_id(ps),
         audio_sid: cur_audio_sid(ps),
         subtitle_sid: cur_sub_sid(ps),
+        server_before: ps.server_selection,
         namespace,
         offset_secs,
         expected: expected.clone(),
@@ -14616,9 +14789,31 @@ pub fn enhancement_test_session(route: EnhTestFixture) -> (PlaybackSession, Serv
 /// ([`follow_audio_with_forced_only`]), which PUTs like any in-playback subtitle change and writes
 /// NO memory: the memo stays Forced only.
 pub fn commit_audio_selection(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
-    if !ps.backends.feed { return false; }
+    commit_audio_selection_routed(ps, audio) != PickRoute::Refused
+}
+
+/// How an accepted track pick reaches the server, which decides when its track memory is written
+/// ([`PickMemos`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickRoute {
+    /// The route will not play the pick (the Forced refusal): nothing is committed.
+    Refused,
+    /// Committed without asking the server for a conversion (a native stream switch, an in-place
+    /// subtitle): nothing can refuse it, so its memory is written at once.
+    Applied,
+    /// Committed as a server rebuild still to be claimed: the memory waits for the claim's acceptance.
+    Rebuild,
+    /// Held behind a pending Original handoff ([`PendingOriginal::deferred_audio`]): the memory waits
+    /// with it and is written when the replay's own route settles.
+    Deferred,
+}
+
+/// [`commit_audio_selection`], saying which way the accepted pick goes.
+pub(super) fn commit_audio_selection_routed(ps: &mut PlaybackSession, audio: CarriedAudio) -> PickRoute {
+    if !ps.backends.feed { return PickRoute::Refused; }
     let sid = audio.sid;
-    let accepted = commit_audio_route(ps, audio);
+    let route = commit_audio_route(ps, audio);
+    let accepted = route != PickRoute::Refused;
     if accepted {
         follow_audio_with_forced_only(ps, sid);
         if let Some(source) = ps.source_selection.as_mut() {
@@ -14627,11 +14822,11 @@ pub fn commit_audio_selection(ps: &mut PlaybackSession, audio: CarriedAudio) -> 
             source.audio_contract = ps.cur_contract.audio;
         }
     }
-    accepted
+    route
 }
 
 /// The route half of [`commit_audio_selection`]: which way the pick reloads, and what it displaces.
-fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
+fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> PickRoute {
     if forced_direct_play(ps) && !audio_track_direct_plays(ps, &audio.codec, audio.channels, audio.sample_rate) {
         let friendly = plx_data::metadata::friendly_codec(&audio.codec);
         crate::player::log(&format!(
@@ -14640,7 +14835,7 @@ fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
         ps.play_verdict = Some(PlayVerdict::Forced(ForcedFailure::AudioNeedsConversion {
             codec: friendly,
         }));
-        return false;
+        return PickRoute::Refused;
     }
     if original_recovery_pending() {
         if let Some(pending) = PLAYER_CONTROL
@@ -14650,9 +14845,11 @@ fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
             .as_mut()
         {
             pending.deferred_audio = Some(audio);
+            // The memo of the pick now held is set by the caller that has one ([`hold_deferred_audio_memo`]).
+            pending.deferred_audio_memo = None;
         }
         crate::player::log("audio: deferred until pending Original handoff commits or rolls back");
-        return true;
+        return PickRoute::Deferred;
     }
     // Audio always changes the decoder/server route contract, even when the eventual route stays
     // direct. Fence the old worker before publishing the selected stream or invalidating its
@@ -14699,7 +14896,7 @@ fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
         // (`send_parked_write_back`); a fall-through auto-pick still only reports. Reached
         // from `app/playback.rs::commit_track` inside the run-loop's `FrameScope`, so this PUT runs
         // on the serial selection worker instead of blocking the frame thread.
-        queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+        queue_session_selection(ps);
     }
     // The new track may change what the enhancement offer says (capability, candidate). If the
     // route must change for that, the reconcile's Retranscode REPLACES this pick's own reload and
@@ -14707,17 +14904,27 @@ fn commit_audio_route(ps: &mut PlaybackSession, audio: CarriedAudio) -> bool {
     if reconcile_enhancement(ps, true) {
         // the reconcile's Retranscode owes this pick its reload
         crate::player::note_audio_pick();
-        return true;
+        return PickRoute::Rebuild;
     }
-    if native {
-        if !ps.backends.feed { return false; }
+    let route = if native {
+        if !ps.backends.feed { return PickRoute::Refused; }
         crate::player::route_fx::request_audio_track(ps, ordinal, &codec);
+        PickRoute::Applied
     } else {
         crate::player::request_audio_switch(ps, stream_id);
-    }
+        PickRoute::Rebuild
+    };
     // the rebuild now loading is this pick's: the read-out says "Switching audio…"
     crate::player::note_audio_pick();
-    true
+    route
+}
+
+/// Attach the track memory of the audio pick just deferred ([`PickRoute::Deferred`]) to the pending
+/// Original handoff that holds it.
+pub(super) fn hold_deferred_audio_memo(memo: Option<plx_plex::plex::session::prefs::AudioMemo>) {
+    if let Some(pending) = PLAYER_CONTROL.lock().unwrap_or_else(|e| e.into_inner()).pending_original.as_mut() {
+        pending.deferred_audio_memo = memo;
+    }
 }
 
 /// Apply commands which were attached to one exact Original trial, after either the candidate or
@@ -14728,7 +14935,7 @@ pub fn apply_deferred_original_effects(ps: &mut PlaybackSession, mut effects: De
         apply_quality_choice(ps, q);
     }
     if let Some(audio) = effects.audio.take() {
-        commit_audio_selection(ps, audio);
+        memory::commit_audio_pick(ps, audio, effects.audio_memo.take());
     }
     if effects.reconcile {
         reconcile_enhancement(ps, false);
@@ -14748,7 +14955,20 @@ pub fn commit_subtitle_selection(
     stream_id: i64,
     client_renderable: bool,
 ) {
-    commit_subtitle_selection_inner(ps, sub_idx, stream_id, client_renderable, true);
+    commit_subtitle_selection_routed(ps, sub_idx, stream_id, client_renderable);
+}
+
+/// [`commit_subtitle_selection`], saying whether the pick rides a server rebuild still to be claimed
+/// (a burn: `transcoding && !in_place`) rather than applying at once. A subtitle commit that applies
+/// in place PUTs its selection on the serial queue and asks the server for no conversion, so nothing
+/// can refuse it and its track memory is written at commit ([`PickMemos`]).
+pub(super) fn commit_subtitle_selection_routed(
+    ps: &mut PlaybackSession,
+    sub_idx: i32,
+    stream_id: i64,
+    client_renderable: bool,
+) -> bool {
+    commit_subtitle_selection_inner(ps, sub_idx, stream_id, client_renderable, true)
 }
 
 /// [`commit_subtitle_selection`] with the direct-play selection PUT optional. `put == false` is for
@@ -14763,7 +14983,7 @@ fn commit_subtitle_selection_inner(
     stream_id: i64,
     client_renderable: bool,
     put: bool,
-) {
+) -> bool {
     // An ORDINARY commit settles the mode from the stream it picks (Forced only is put back by the
     // commits derived from it), and a viewer's pick ends any owed container-name re-match: the
     // viewer has decided what is on screen.
@@ -14853,7 +15073,7 @@ fn commit_subtitle_selection_inner(
         // from `app/playback.rs::commit_track` inside the run-loop's `FrameScope`, so this PUT runs
         // on the serial selection worker instead of blocking the frame thread.
         if put {
-            queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+            queue_session_selection(ps);
         }
     }
     if in_place {
@@ -14863,12 +15083,14 @@ fn commit_subtitle_selection_inner(
     }
     // A subtitle turns the enhancement's offer off (I6) and Off may turn it back on. On direct
     // play a subtitle never reloads, so there is no pick of its own to displace.
-    if reconcile_enhancement(ps, transcoding && !in_place) {
-        return;
+    let rebuilds = transcoding && !in_place;
+    if reconcile_enhancement(ps, rebuilds) {
+        return rebuilds;
     }
-    if transcoding && !in_place {
+    if rebuilds {
         crate::player::request_transcode_refresh(ps); // retranscode PUTs the selection itself
     }
+    rebuilds
 }
 
 /// Which of the three subtitle states the playback is in ([`SubMode`]).
@@ -15231,6 +15453,10 @@ mod track_memory_tests;
 #[cfg(test)]
 #[path = "decision_version_choice_tests.rs"]
 mod version_choice_tests;
+
+#[cfg(test)]
+#[path = "decision_refused_pick_tests.rs"]
+mod refused_pick_tests;
 
 #[cfg(test)]
 #[path = "decision_write_back_tests.rs"]

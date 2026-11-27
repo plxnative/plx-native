@@ -1648,6 +1648,10 @@ pub struct Plan {
     pub url: String,
     /// Source intent is shared by URI and Feed; effective Feed streams may differ.
     pub source_selection: Option<SourceSelection>,
+    /// The selection PUTs the resolve worker sent and the server answered, merged: what the landing
+    /// adds to the fetched item's own selection to know what PMS holds
+    /// ([`PlaybackSession::server_selection`](super::PlaybackSession)).
+    pub(super) selection_sent: Option<super::server_selection::ServerSelection>,
     /// Owned URI authorization. The URL remains in IO escrow and never becomes `url`.
     pub uri_original: Option<super::uri_preflight::KnownSource>,
     /// A separately certified URI locator for the actual accepted PMS output. Its resource
@@ -2774,6 +2778,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // on this playback identity, and a later HLS `/decision` must physical-stop that encoder
             // first. A successful remux Original leaves the session for the play-path decision.
             let mut remux_probed = false;
+            // The selection PUTs this resolve sends, as the landing's record of what the server holds.
+            let mut sent = super::server_selection::PutTrail::default();
             // Issue #266: the remote remux probe asked the enhancement first and the server said no.
             let mut probe_refused_enhancement = false;
             // A preview that is already not direct-playable (MDE denied Original, or the extra carries
@@ -2814,7 +2820,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                                 // when it moves) and is told apart from a burn by the wire's `subtitles=none`.
                                 let drawn = env.sub_sid == 0 && probe_drawn_sub_sid != 0;
                                 let probe_sub = if drawn { probe_drawn_sub_sid } else { env.sub_sid };
-                                put_selection(off, env.sid, plan.part_id, probe_audio, probe_sub);
+                                sent.note(put_selection(off, env.sid, plan.part_id, probe_audio, probe_sub));
                                 let probe = measure_remote_remux(
                                     off,
                                     client,
@@ -2844,6 +2850,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 }
                 _ => None,
             };
+            // The remux probe's PUT stands whichever way the plan goes on from here.
+            plan.selection_sent = sent.sent();
             if let Some(decision) = decision.as_ref() {
                 plan.auto_prior_kbps = decision.prior.map(|prior| prior.slow_kbps).unwrap_or(0);
                 plan.auto_bootstrap_rung = Some(decision.rung);
@@ -3153,7 +3161,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // `env.sub_sid` (an already-active burn) unless THIS route is the one that just started one
             // (M7's Burn, forced by an embedded subtitle plus the audio enhancement; rule 3's commentary
             // stand-in; a remembered pick on a route that already re-encodes, Q-TOP (b)).
-            put_selection(off, env.sid, plan.part_id, encode_audio, burn_sub_sid);
+            sent.note(put_selection(off, env.sid, plan.part_id, encode_audio, burn_sub_sid));
+            plan.selection_sent = sent.sent();
             if remux_probed && adaptive {
                 // Probe registered start.mkv on this playback identity. HLS `/decision` reuses it;
                 // closeResourceSession=1 would 503 the next start. A failed sample already stopped
