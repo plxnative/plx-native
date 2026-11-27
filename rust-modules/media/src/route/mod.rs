@@ -20,6 +20,7 @@ mod flight;
 mod plan;
 mod prefs;
 mod server_selection;
+pub use server_selection::settle_start_selection;
 mod track_memory;
 
 pub use decision::*;

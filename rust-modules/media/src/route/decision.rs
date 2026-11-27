@@ -24,7 +24,7 @@ use std::sync::Mutex;
 use super::flight::*;
 use super::plan::*;
 use super::prefs::*;
-use super::server_selection::{PutTrail, ServerSelection};
+use super::server_selection::{FlightSelection, PutTrail, ServerSelection};
 use super::track_memory::{SubMode, TrackContext};
 
 // The track memory's effects: the recall at a resolve, the parked write-back and the track menu's
@@ -435,6 +435,12 @@ pub struct PlaybackSession {
     /// server answered. What a refused rebuild's restore writes back. Unlike
     /// [`Self::source_selection`] a pick's commit never writes it: only a PUT does.
     pub(super) server_selection: Option<ServerSelection>,
+    /// **The start's own selection PUT, until the attempt it belongs to has shown a picture**: what the
+    /// landing's plan wrote to the Part before its own `/decision`, and what the server held before it
+    /// ([`FlightSelection`], from `Plan::selection_sent` / `Plan::selection_fetched`). An attempt that
+    /// fails first writes the earlier selection back ([`super::settle_start_selection`]); the first
+    /// picture drops it. `None` for a plan that wrote nothing, and for a playback that is over.
+    pub(super) provisional_selection: Option<FlightSelection>,
     /// The playback backends composed for this session: `BackendSet::FEED` until the composition installs
     /// the set its drivers form (`install_backends`). Policy asks it which physical backend can be offered,
     /// never which drivers were compiled in.
@@ -2008,6 +2014,7 @@ impl PlaybackSession {
         cur_audio: None,
         source_selection: None,
         server_selection: None,
+        provisional_selection: None,
         cur_sub_sid: 0,
         selection_known: false,
         carried_selection: None,
@@ -2126,6 +2133,7 @@ impl PlaybackSession {
             cur_audio,
             source_selection,
             server_selection,
+            provisional_selection,
             cur_sub_sid,
             selection_known,
             carried_selection,
@@ -2224,6 +2232,7 @@ impl PlaybackSession {
             cur_audio: cur_audio.clone(),
             source_selection: *source_selection,
             server_selection: *server_selection,
+            provisional_selection: *provisional_selection,
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,
@@ -2423,6 +2432,8 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession, kind: StopKind) 
     ps.sess.clear();
     // an abandoned playback never spends: nothing will start under the plan that held the pick
     ps.pick_spend_on_start = None;
+    // …and nothing is left to prove or undo its start's selection PUT: the playback is over, the pick stands
+    ps.provisional_selection = None;
     if kind == StopKind::Visit {
         ps.request = None;
         ps.held_pick = None;
@@ -12621,6 +12632,13 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
         .selection_fetched
         .map(|fetched| plan.selection_sent.map_or(fetched, |put| ServerSelection::after(Some(fetched), put)))
         .or(plan.selection_sent);
+    // …and the plan's own PUT is provisional until the attempt shows a picture: an attempt that fails first
+    // writes what the server held back ([`settle_start_selection`]).
+    let provisional_selection = plan.selection_sent.map(|sent| FlightSelection {
+        sid: plan.sid,
+        before: plan.selection_fetched,
+        sent: Some(sent),
+    });
     // **The start of a playback is what spends the viewer's pick, and only a playable plan of the viewer's
     // own starts one**: a REFUSED plan installs its item too (its verdict feeds the read-out) but nothing
     // played, so BACK and Play must still find the pick; a hero preview is not the viewer's playback. A
@@ -12785,6 +12803,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             // A resolved Plan with its own source selection installs that exact value here.
             source_selection: plan.source_selection.or(s.source_selection),
             server_selection,
+            provisional_selection,
             // the part/show-selected subtitle (0 = none), so the menu checkmark, the timeline report
             // and any later transcode of this item all agree with what the renderer is told below
             cur_sub_sid: plan.sub_sid,
@@ -15594,6 +15613,10 @@ mod version_choice_tests;
 #[cfg(test)]
 #[path = "decision_refused_pick_tests.rs"]
 mod refused_pick_tests;
+
+#[cfg(test)]
+#[path = "decision_refused_start_tests.rs"]
+mod refused_start_tests;
 
 #[cfg(test)]
 #[path = "decision_write_back_tests.rs"]

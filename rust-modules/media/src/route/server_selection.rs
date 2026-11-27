@@ -16,6 +16,8 @@
 //!     an item taken from the detail page's cache carries the flags of the fetch that produced it)
 //!     then the plan's PUTs ([`ServerSelection::after`]);
 //!   * a claim flight's landing ([`FlightSelection::settle`]), for the PUTs its worker sent;
+//!   * a start's own PUT, settled by [`settle_start_selection`] if the attempt fails before a picture
+//!     (`PlaybackSession::provisional_selection`, written by the landing and taken by that door);
 //!   * a queued selection ([`ServerSelection::after`] at the queue site; the serial worker has no way
 //!     back to its owner, so a PUT it fails stays recorded: the value then claims a pair the server
 //!     does not hold, and a restore to it is one more write of the pair on screen).
@@ -83,8 +85,8 @@ impl ServerSelection {
     }
 }
 
-/// The PUTs one claim flight's worker sent, merged, and what the server held before them: the
-/// worker's whole report about the selection, posted with its landing.
+/// The PUTs one claim flight's worker (or a start's resolve, [`settle_start_selection`]) sent, merged, and
+/// what the server held before them: the worker's whole report about the selection, posted with its landing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FlightSelection {
     pub(super) sid: ServerId,
@@ -134,11 +136,46 @@ impl FlightSelection {
             subtitle: sent.subtitle.filter(|_| !sub_newer),
         };
         if let Some((audio, subtitle)) = self.before.and_then(|before| before.restore_of(&owed)) {
-            crate::player::log("select streams: restoring the selection a refused rebuild had written");
+            crate::player::log("select streams: restoring the selection a refused or failed pick had written");
             if queue_selection(self.sid, sent.part_id, audio, subtitle, false) {
                 ps.server_selection = Some(ServerSelection::after(current, ServerSelection::put(sent.part_id, audio, subtitle)));
             }
         }
+    }
+}
+
+/// **A start's own selection PUT is undone when its attempt fails before showing a picture.** The resolve
+/// that starts a playback PUTs the Part's selection before its own `/decision` (the transcoder encodes what
+/// is SELECTED), so a refused plan, or a pipeline that never opens, would leave the viewer's pick (a
+/// failure-screen pick the retry carries, a remembered choice) as the Part's selection for the next start of
+/// the title to plan from. The landing hands the PUT over as [`PlaybackSession::provisional_selection`]; this
+/// is its settlement, asked once a frame by the app after the failure is captured
+/// (`app::player_presentation::capture_failure`):
+///   * a picture is playing (`player::state` is Playing, the state both backends derive, the one
+///     `remember_version_that_played` reads): the pick is proven and the value is dropped, so a failure
+///     minutes later undoes nothing;
+///   * the attempt is in Error: the value is taken and settled as a REFUSED claim is
+///     ([`FlightSelection::settle`]), through the serial queue, field by field, never guessing a field the
+///     server's earlier selection did not name. Every failure before the first picture reverts, a transient
+///     one included: the retry still carries the viewer's pick and PUTs it again before its own `/decision`,
+///     so a revert costs one write, and a missed one leaves the cold-start dead end;
+///   * anything else (resolving, connecting, buffering): the attempt is still in flight.
+///
+/// Only the server's selection moves back. The show's track memory is not touched here: it is written at the
+/// pick's commit or acceptance, and a pick the server accepted stays remembered.
+pub fn settle_start_selection(ps: &mut PlaybackSession) {
+    use crate::player::PlaybackState;
+    if ps.provisional_selection.is_none() {
+        return;
+    }
+    match crate::player::state(ps) {
+        PlaybackState::Playing => ps.provisional_selection = None,
+        PlaybackState::Error => {
+            if let Some(start) = ps.provisional_selection.take() {
+                start.settle(ps, false);
+            }
+        }
+        _ => {}
     }
 }
 

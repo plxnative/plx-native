@@ -7,7 +7,9 @@ use plx_media::{player, route};
 /// which records it when the attempt enters Error, keeps it while it stands and clears it when the state leaves Error.
 /// Idempotent, so it is called ahead of every reader of the value, each frame: at the publication
 /// (`publish_product_frame`, ahead of [`capture`]) and before each of the frame's two report observations (a refused
-/// plan can land between them). A controlled host (replay, a tape) has no dev trigger and samples none.
+/// plan can land between them). A controlled host (replay, a tape) has no dev trigger and samples none. The same
+/// boundary settles the attempt's provisional selection PUT ([`route::settle_start_selection`]): a failure that
+/// stands before the first picture writes the server's earlier selection back, as a queued effect.
 pub(super) fn capture_failure(app: &mut super::App) {
     let sampled = app.runtime.bridge(&mut app.bridge).samples_dev_triggers();
     capture_failure_of(&mut app.player.session, sampled);
@@ -18,6 +20,9 @@ fn capture_failure_of(ps: &mut route::PlaybackSession, sample_trigger: bool) {
     // Preserve the old exists semantics for an unreadable trigger as well as an empty file.
     let armed = sample_trigger && (arm.is_some() || plx_base::devtrig::flag("failtest"));
     player::observe_failure(ps, player::FailureTrigger { arm: arm.as_deref(), armed }, player::report::attempt_id());
+    // The attempt's own selection PUT is proven by its first picture or undone by its failure: asked at the same
+    // three points, so a refused plan that lands between the report's two observations is settled on its frame.
+    route::settle_start_selection(ps);
 }
 
 /// The player's presentation for this frame. A failure is READ from the session (captured ahead of this by
