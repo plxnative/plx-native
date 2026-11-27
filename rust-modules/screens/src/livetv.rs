@@ -380,8 +380,15 @@ impl Board {
         let (mut rows, mut cells) = (Vec::with_capacity(channels.len()), Vec::with_capacity(channels.len()));
         for channel in channels {
             let (mut spans, mut airings) = (Vec::new(), Vec::new());
-            for (i, airing) in channel.airings.all().iter().enumerate() {
-                let span = Span::new(airing.begins_at, airing.ends_at);
+            let held = channel.airings.all();
+            for (i, airing) in held.iter().enumerate() {
+                // a programme the guide gives no end runs to the next one's start, else to the window's end: it is a cell
+                // (the airing on now is one, the guide knows no more of it than that it has begun)
+                let ends = match airing.ends_at {
+                    0 => held.get(i + 1).map_or(axis.end(), |next| next.begins_at),
+                    ends => ends,
+                };
+                let span = Span::new(airing.begins_at, ends);
                 if axis.cell(span).is_some() {
                     spans.push(span);
                     airings.push(i);
@@ -411,14 +418,21 @@ impl Board {
         }
     }
 
-    /// Does pressing the cell tune the channel? What is airing does, and so does the unscheduled cell; a programme
-    /// that has not begun does not, and neither does one that has aired (the press is spent: there is nothing of it to
-    /// tune). "Airing" is the wall time's, not the read's: a programme that has begun since the read is on, and one that
-    /// has ended since is over, whichever of the guide row it stands in.
+    /// **Does pressing the cell tune the channel?** One rule, at the wall time (the read's answer is stale from the end of
+    /// the airing it was made on until the next read lands): a cell tunes when its programme is on air; and when NOTHING
+    /// in the row is on air and nothing is ahead (the row is the unscheduled cell, or every cell has aired: the guide of
+    /// current airings only between an airing's end and the re-read, or a read that failed), any of its cells tunes, as
+    /// the unscheduled cell does. A programme that has not begun does not tune, nor does one that has aired while another is
+    /// on (the press is spent); a gap in the guide with a programme ahead of it tunes nothing, as it never did.
     fn tunes(&self, at: Cell, now: i64) -> bool {
-        match self.cells.get(at.row).and_then(|row| row.get(at.index)) {
-            None => self.grid.is_unscheduled(at.row),
-            Some(_) => self.grid.span(at).is_some_and(|span| span.contains(now)),
+        let Some(cells) = self.cells.get(at.row) else { return false };
+        if cells.is_empty() {
+            return self.grid.is_unscheduled(at.row);
+        }
+        let spans: Vec<Span> = (0..cells.len()).filter_map(|index| self.grid.span(Cell { row: at.row, index })).collect();
+        match spans.iter().any(|span| span.contains(now)) {
+            true => self.grid.span(at).is_some_and(|span| span.contains(now)),
+            false => spans.iter().all(|span| span.begins <= now),
         }
     }
 }

@@ -1218,6 +1218,62 @@ fn ok_on_a_programme_that_has_aired_is_spent_and_what_is_airing_still_tunes() {
     assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 2)), [tune]);
 }
 
+/// **A row nothing is on air in still tunes, as it did before aired programmes were cells.** One rule: a cell tunes
+/// when it is on air at the wall time, and when the row has nothing on air and nothing ahead (every cell has aired, or
+/// the guide's one airing has ended since the read) any of its cells tunes, as the unscheduled cell does.
+fn tune_of(channel: &str) -> PlayIntent {
+    PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into(), title: format!("Station {}", &channel[1..]) }
+}
+
+/// **A row of aired programmes alone (the guide has nothing after them in the window) tunes from any cell, and focus
+/// lands on a cell that tunes.**
+#[test]
+fn a_row_with_only_aired_programmes_tunes_from_its_cells_and_focus_lands_on_one() {
+    let lineup = vec![Channel { airings: Airings::of(vec![later("Earlier", -50, 5)], GUIDE_NOW), ..channel("101", "Station 101") },
+        Channel { airings: Airings::default(), ..channel("103", "Station 103") }];
+    let (store, mut screen) = guide_over(lineup);
+    let view = store.view();
+    assert_eq!(board(&screen).grid.cells(0), 1, "the aired cell is the row");
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 0)), [tune_of("C101")], "OK on it tunes the channel");
+    let grid = &board(&screen).grid;
+    assert_eq!(grid.entry(GUIDE_NOW), Some(Cell { row: 0, index: 0 }));
+    step(&mut screen, view, None, &left("C101"));
+    let out = step_at(&mut screen, view, 1, 0, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)]);
+}
+
+/// **An airing on now with no known end is a cell** (it runs to the next programme, else the window's end), beside the
+/// aired one, and it tunes.
+#[test]
+fn an_open_ended_airing_on_now_is_a_cell_beside_the_one_that_aired() {
+    let open = Airings::of(vec![later("Earlier", -50, 5), LiveAiring::new("Open", NOW + 5 * MIN, 0)], GUIDE_NOW);
+    assert_eq!(open.on_air_at(), Some(1));
+    let lineup = vec![Channel { airings: open, ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    let view = store.view();
+    let px = 1_392.0 / 90.0;
+    assert_eq!(board(&screen).grid.cells(0), 2);
+    let on = rect_of(&screen, view, 0, 1);
+    assert!(near(on.x, 432.0 + 5.0 * px) && near(on.x + on.w + 8.0, 1_824.0), "to the window's end: {on:?}");
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 0)).is_empty(), "the aired one is spent while one is on");
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 1)), [tune_of("C101")]);
+    assert_eq!(board(&screen).grid.entry(GUIDE_NOW), Some(Cell { row: 0, index: 1 }));
+}
+
+/// **A guide of current airings only, between the airing's end and the re-read landing, still tunes its channel**: the
+/// one cell has ended by the wall time and nothing is ahead.
+#[test]
+fn a_row_whose_only_airing_has_ended_since_the_read_still_tunes() {
+    let lineup = vec![Channel { airings: Airings::on_then(later("Over", -30, 5), Vec::new()), ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    assert_eq!(asked_plays(&press_cell(&mut screen, store.view(), 0, 0)), [tune_of("C101")]);
+    // with a programme ahead the ended cell is spent again, as a gap in the guide always was
+    let lineup = vec![Channel { airings: Airings::on_then(later("Over", -30, 5), vec![later("Later", 20, 60)]), ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    assert!(asked_plays(&press_cell(&mut screen, store.view(), 0, 0)).is_empty());
+    assert!(asked_plays(&press_cell(&mut screen, store.view(), 0, 1)).is_empty());
+}
+
 /// **A refresh that drops the programme that aired (the half hour rolled) keeps the focus on the programme it was on.** The
 /// cells are numbered by their place in the row, so the one on now moves from the second place to the first.
 #[test]

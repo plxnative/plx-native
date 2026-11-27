@@ -407,9 +407,10 @@ frame with the instant and no zone offset still lays the board out (`H::instant`
 (those that ended after the window's earliest start, which is the half hour at or before now, the one on now, and those to come), with the one on
 now a position in that list, readable only through `on_air()` / `now_title()` / `begins_at()` / `ends_at()`; there is no second copy of it
 to disagree with the list. The board turns each programme in the window into a cell (`Board::cells` holds its place in the row), so a programme that
-has already ended but still overlaps the window is a cell the grid shades as aired. **OK on a cell tunes the channel only while the programme is on
-by the wall clock** (`Board::tunes`: `span.contains(now)`, whichever of the row it is), so OK on an aired programme is spent, as on one not begun;
-the unscheduled cell tunes. Focus lands on what is airing: the board is entered, a move from an unscheduled row goes and the player's return seats
+has already ended but still overlaps the window is a cell the grid shades as aired. **OK on a cell tunes the channel when its programme is on
+by the wall clock** (`Board::tunes`, whichever of the row it is), so OK on an aired programme is spent while another is on, as on one not begun; the
+unscheduled cell tunes, and so does any cell of a row with nothing on air and nothing ahead (every cell aired: the stale-read and the
+aired-only rows), so no row is left that cannot be tuned. A programme the guide gives no end is a cell to the next one's start, else the window's end. Focus lands on what is airing: the board is entered, a move from an unscheduled row goes and the player's return seats
 (`left_elem`) the cell on now (`TimeGrid::entry` / `land`), never merely the row's first cell, which may have aired.
 
 ## Number entry (Live TV PR5)

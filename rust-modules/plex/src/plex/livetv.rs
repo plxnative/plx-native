@@ -78,16 +78,19 @@ impl Airings {
     ///
     /// **What is kept** is what the Guide can draw: the one on, the ones that have not begun and the ones that have
     /// aired and ended after the earliest window start ([`window_start`] of `now`), so the row stays bounded however
-    /// long the guide is. A programme that has begun, is not over and is not the one on (the guide overlapped two) is
-    /// not kept: the row is one time-ordered line of programmes.
+    /// long the guide is. The row is one time-ordered line of programmes, so a programme that has begun and lies over
+    /// the one on (the guide overlapped two) is not kept, whether it is still running or has ended since: one that
+    /// ended after the one on began would lie over it.
     pub fn of(mut list: Vec<LiveAiring>, now: i64) -> Self {
         list.sort_by_key(|a| a.begins_at);
         let live = |a: &LiveAiring| a.begins_at <= now && (a.ends_at == 0 || a.ends_at > now);
         let on_at = list.iter().rposition(|a| live(a) && !a.title.is_empty());
         let floor = window_start(now);
+        let on_begins = on_at.map(|i| list[i].begins_at);
         let (mut kept, mut on) = (Vec::with_capacity(list.len()), None);
         for (i, airing) in list.into_iter().enumerate() {
-            let keep = if live(&airing) { Some(i) == on_at } else { airing.begins_at > now || airing.ends_at > floor };
+            let aired_clear = airing.ends_at > floor && on_begins.is_none_or(|begins| airing.ends_at <= begins);
+            let keep = if live(&airing) { Some(i) == on_at } else { airing.begins_at > now || aired_clear };
             if keep {
                 if Some(i) == on_at { on = Some(kept.len()); }
                 kept.push(airing);
@@ -537,8 +540,9 @@ impl Client {
         }
     }
 
-    /// `GET /{epg}/grid` bounded to the airings from `now` (Unix seconds) to `until` ([`guide_path`]): per
-    /// channel the one on now and the ones that follow up to `until`.
+    /// `GET /{epg}/grid` bounded to the airings that have not ended before the Guide's earliest window start
+    /// ([`window_start`] of `now`, Unix seconds) and that begin by `until` ([`guide_path`]): per channel the ones that
+    /// have aired inside the window, the one on now and the ones that follow up to `until`.
     pub fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
         if !is_provider_id(epg) {
             return None;
@@ -1106,5 +1110,21 @@ mod tests {
         assert_eq!(row.on_air_at(), Some(1));
         row.extend_later([LiveAiring::new("Far", now + 7_200, now + 9_000)]);
         assert_eq!((row.on_air_at(), row.now_title(), row.all().len()), (Some(1), "On", 3));
+    }
+
+    /// A programme the guide overlaps with the one on is not kept whether it is still running or has aired since: the
+    /// row is one time-ordered line, so one that ended after the one on began would lie over it.
+    #[test]
+    fn an_aired_airing_that_lies_over_the_one_on_is_not_kept() {
+        let start = window_start(1_792_523_200);
+        let dvr = page(DVRS).dvr.remove(0);
+        let channels = page(CHANNELS).channel;
+        for now in [start + 420, start + 720] {
+            let guide = [airing("101", "A", start - 600, start + 600), airing("101", "B", start + 300, start + 3_600)];
+            let rows = lineup(&dvr, &channels, &guide, now);
+            let family = rows.iter().find(|r| r.vcn == "101").unwrap();
+            assert_eq!(family.airings.all().iter().map(|x| x.title.as_str()).collect::<Vec<_>>(), ["B"], "at {now}");
+            assert_eq!(family.airings.now_title(), "B");
+        }
     }
 }

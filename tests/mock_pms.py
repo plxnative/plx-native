@@ -3134,7 +3134,7 @@ class LiveTvFixture:
 
     def grid(self, now, until=None):
         """The `Metadata` rows of `GET /{epgIdentifier}/grid?beginsAt<=until&endsAt>=now`: every programme of every
-        channel with guide data that has not ended by `now` and begins by `until` (and before the guide's end,
+        channel with guide data that has not ended before `now` and begins by `until` (and before the guide's end,
         `horizon`), one row each, earliest first per channel. `until` defaults to `now`, the instant read: the
         programme on now alone (none on a channel whose schedule has a gap there). The Guide reads from the half hour
         its window starts at, up to thirty minutes before the real now: `now` here is that bound, so a row's `onAir`
