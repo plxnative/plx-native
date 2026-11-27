@@ -885,21 +885,25 @@ impl PageSource<'_> {
     /// menu's one rule. `None` off a hero menu, and for a language the item no longer offers.
     fn pick_page(&self, page: PickPage) -> Option<Page<ItemRow, Action, MenuPage>> {
         let built = self.hero?.tracks.page(page)?;
-        let form = built.form.map(|b| {
-            let id = ItemRow::Pick(b.id);
-            Some(plx_ui::form::Binding {
-                key: id.key(),
-                id,
-                kind: match b.kind {
-                    RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
-                    RowKind::Toggle => RowKind::Toggle,
-                    RowKind::Choice => RowKind::Choice,
-                    RowKind::Button => RowKind::Button,
-                },
-                action: Action::Pick(b.id),
-                disabled: b.disabled,
-            })
-        });
+        // the aliases (a language that shrank to one track: the pop lands on its direct row) survive the re-typing
+        let form = built.form.map_aliased(
+            |b| {
+                let id = ItemRow::Pick(b.id);
+                Some(plx_ui::form::Binding {
+                    key: id.key(),
+                    id,
+                    kind: match b.kind {
+                        RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
+                        RowKind::Toggle => RowKind::Toggle,
+                        RowKind::Choice => RowKind::Choice,
+                        RowKind::Button => RowKind::Button,
+                    },
+                    action: Action::Pick(b.id),
+                    disabled: b.disabled,
+                })
+            },
+            |id| Some(ItemRow::Pick(*id)),
+        );
         Some(Page::new(form, built.title).initial(built.initial.map(ItemRow::Pick)))
     }
 
@@ -3183,6 +3187,48 @@ pub(crate) mod tests {
         // the page content arrived after the mount built the rows: build them again, as the mount would have
         step!(menu, Event::Refresh { keep: None });
         menu
+    }
+
+    /// **Other languages is a drill-in in this menu too**, and its pages keep the aliases the shared builder
+    /// declares: a language that shrinks to one track under the viewer (the chosen track is a sidecar the app
+    /// cannot draw, so it is listed while chosen) is now a direct row, and the pop out of its page lands on it.
+    #[test]
+    fn other_languages_drill_in_and_a_shrunk_language_keeps_its_pop_alias() {
+        let mut menu = hero_menu_with_pages();
+        let stream = |id: i64, lang: &str, code: &str| plx_data::metadata::Stream {
+            id,
+            lang: lang.into(),
+            lang_code: code.into(),
+            ..plx_data::metadata::Stream::default()
+        };
+        let mut pgs = stream(303, "French", "fra");
+        pgs.external = true;
+        pgs.codec = "pgs".into();
+        menu.hero.as_mut().expect("a hero menu").tracks = PickerCore::new(plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(1),
+            rk: "42".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/file.mkv".into(),
+            audio: vec![stream(101, "English", "eng")],
+            subs: vec![stream(201, "English", "eng"), stream(302, "French", "fra"), pgs],
+            pick: None,
+        });
+        let other = |menu: &ItemMenuScreen| source!(menu).pick_page(PickPage::OtherLanguages).expect("the page").form;
+        fn hero(menu: &mut ItemMenuScreen) -> &mut PickerCore {
+            &mut menu.hero.as_mut().expect("a hero menu").tracks
+        }
+        hero(&mut menu).select(Pick::Subtitle(Some(2))).expect("the sidecar is chosen");
+        let open = other(&menu)
+            .slots()
+            .iter()
+            .flatten()
+            .map(|b| b.id)
+            .find(|id| matches!(id, ItemRow::Pick(PickRow::OpenLang(_))))
+            .expect("French holds two tracks while the sidecar is chosen: a drill-in");
+        assert_eq!(source!(menu).pick_page(PickPage::Subtitles).expect("the page").form.slots().iter().flatten().count(), 3, "Off, English, Other languages");
+        hero(&mut menu).select(Pick::Subtitle(Some(1))).expect("the embedded track picks");
+        assert_eq!(other(&menu).stands_for(&open), ItemRow::Pick(PickRow::Sub(1)), "the pop lands on the language's direct row");
     }
 
     /// Run `f` against a fresh effect sink and answer what it emitted.

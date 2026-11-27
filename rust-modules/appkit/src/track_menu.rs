@@ -15,8 +15,9 @@
 //! A-Z; a multi-track language there drills in again to [`TrackPage::Language`], its tracks
 //! ranked); and a headerless section holds Timing and Style. That
 //! grouping is a pure DATA model, `metadata::sub_layout` (host-tested without a
-//! `PlaybackSession`/`MetadataView` fixture); this module only turns it into `TableView` sections
-//! ([`table_form`]) and answers focus/OK by the focused row's [`TrackRow`] identity. "Yours" is
+//! `PlaybackSession`/`MetadataView` fixture); `appkit::track_rows` turns it into the
+//! page's rows (the same builders Detail's Audio & Subtitles pages use), this module builds the facts of the playback
+//! they read and answers focus/OK by the focused row's [`TrackRow`] identity. "Yours" is
 //! the pref language (if the play resolved under one), the playing audio's language, and the
 //! current subtitle's own language, in that order (`route::cur_sub_pref_lang`, carried in by
 //! `screens::player::overlay`).

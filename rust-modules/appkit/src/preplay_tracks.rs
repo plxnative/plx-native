@@ -2,7 +2,7 @@
 //! commit of the *Audio & Subtitles* panel, with no session and no screen.
 //!
 //! The Detail hero's disc, the `…` menu's row and the playback failure screen's entry all open the
-//! same two-level panel, so the rows live here once and each host owns only its surface. A host
+//! same page-stacked panel, so the rows live here once and each host owns only its surface. A host
 //! holds a [`PickerState`], whose `ui::menu::Menu` owns the form, the stack and the slide (one stack,
 //! one slide, one header with the back mark); the host feeds it the screen's events through
 //! [`PickerState::on_screen`], and when the menu answers `Out::Picked` resolves the row to a [`Pick`]
