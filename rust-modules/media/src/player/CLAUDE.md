@@ -1097,8 +1097,10 @@ something.
   back only the fields its PUT changed and the value knows (an unknown audio is never guessed, the
   wire drops `audioStreamID` for 0), through `queue_selection` on the main thread at the landing, field by field: a field the main thread
   wrote since the claim captured the selection, to a value that is neither the captured one nor the
-  claim's own, is the newer word and is left (an in-place pick's PUT repeats the pending audio, so under
-  an in-place subtitle pick a refused audio rebuild is still undone). The memo half rides the claim: `PlayerControl::pending_memos` (beside
+  claim's own, is the newer word and is left (an in-place subtitle pick's PUT names the subtitle only, so under
+  one a refused audio rebuild is still undone). Every selection PUT goes out on the ONE serial queue: a
+  claim or resolve worker's `put_selection` is queued behind what the serial worker holds and waits for
+  its answer, so a restore queued before it is always sent first and the server ends on the newest PUT. The memo half rides the claim: `PlayerControl::pending_memos` (beside
   `pending_user`, latest wins, merged on coalesce, taken into `claimed_user`, handed back on teardown)
   is written by `finish_route_action(Prepared)`, or at `install_claim_landing`'s `OriginalRecovery`
   arm (a displaced pick under an Original lands through `original_tail`, which never settles

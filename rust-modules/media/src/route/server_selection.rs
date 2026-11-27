@@ -95,8 +95,8 @@ pub(super) struct FlightSelection {
 }
 
 /// Whether a field was written by someone else since the claim captured it: the value is known, differs
-/// from what the claim captured (`before`), and is not the claim's own (`sent`). An in-place pick
-/// queued while the claim flew repeats the claim's pending audio, which is NOT a newer word.
+/// from what the claim captured (`before`), and is not the claim's own (`sent`): a value equal to the
+/// claim's own is not a newer word, it is the same pick.
 fn written_since(before: Option<i64>, sent: Option<i64>, current: Option<i64>) -> bool {
     current.is_some() && current != before && current != sent
 }
@@ -109,7 +109,7 @@ impl FlightSelection {
     /// A field the main thread has written since the claim captured the selection (an in-place pick
     /// queued its own PUT while the flight flew) is the newer word and is left as it is: the claim's
     /// value for it is neither restored nor recorded. The other field is settled as usual, so a refused
-    /// audio rebuild is still undone under an in-place subtitle pick, whose PUT carries the pending audio.
+    /// audio rebuild is still undone under an in-place subtitle pick, whose PUT names the subtitle only.
     pub(super) fn settle(&self, ps: &mut PlaybackSession, accepted: bool) {
         let Some(sent) = self.sent else { return };
         if ps.server_selection.is_some_and(|c| c.part_id != sent.part_id) {
