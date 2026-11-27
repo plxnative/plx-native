@@ -675,7 +675,7 @@ survives `RELEASE=1` (it is not a dev trigger). It plays only the clips this pac
 `tools/make-esprobe-clips.py` from FFmpeg's test sources, and a PCM tone it makes), never the viewer's media; it asks no server and writes
 nothing but its log lines. One run at a time, refused while the host's player is open (`Busy`; only at the start: a title opened during a run contends with
 the probe for the decoder, so the tester must not play anything until the row shows the tally); the row then reads `Running` and, at the
-end, the tally (`57 passed, 6 failed`), so a run whose log was lost still says how it went.
+end, the tally (`57 passed, 5 failed` on the emulator), so a run whose log was lost still says how it went.
 
 The code is `rust-modules/platform-tizen/src/esprobe/`: `clip.rs` (the clip format), `api.rs` (the library's functions, structs and
 constants, each from the binding), `machine.rs` (the Sans-IO logic: which call next and what an answer means, tested over a simulated
@@ -692,9 +692,10 @@ player in `tests.rs`) and `run.rs` (the worker that makes the calls). Every line
 
 ### On the emulator
 
-The row was pressed on a debug build signed in to the mock (`TIZEN_MOCK_HOST`), which logged `done pass=57 fail=6` and showed
-`57 passed, 6 failed` on the row. That build counted every failure line, so `av1` counted twice (below); this tree counts a scenario's
-first failure only and logs what follows it as a note, so the same run now reads `57 passed, 5 failed`. A `RELEASE=1` build of the same tree (features `tizen,uri`, no dev triggers: 22,596,196 bytes, the
+The row was pressed on a debug build at `5c3a00875` signed in to the mock (`TIZEN_MOCK_HOST`): the row dimmed and read `Running`, and
+the log ended `done pass=57 fail=5`, which the row then showed as `57 passed, 5 failed`; `av1`'s `prepare_async_done(false)` after its
+error callback is the note `av1 after the failure: ...`, not a second FAIL. The timings below are from the previous press (`done pass=57
+fail=6`, the same steps, from a build that still counted every failure line). A `RELEASE=1` build of the same tree (features `tizen,uri`, no dev triggers: 22,596,196 bytes, the
 eight clips staged under `res/esprobe/`) linked and verified, but a release build has no dev boot and opens on the plex.tv sign-in, so
 its row was not pressed; the row, its effect and the hook have no feature gate. Earlier runs from a scratch trigger and with the
 first-frame callback counted gave the same steps.
