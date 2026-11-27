@@ -20,8 +20,9 @@
 //!   preview, so the value does too.
 //!
 //! **One field, one writer** (`docs/sans-io-guide.md`, checklist item 9): the value lives in
-//! [`crate::route::PlaybackSession`], and [`observe_failure`] is the only function that records, refines or
-//! clears it (through the route's three doors). It runs at the app's IO boundary, three times a frame at most
+//! [`crate::route::PlaybackSession`], and [`observe_failure`] is the only writer that records or refines it
+//! (through the route's doors), and it clears it on leaving Error; the three route resets (`clear_play_verdict`,
+//! `request_play_with_queue`, `apply_plan`) clear it with the verdict they reset. It runs at the app's IO boundary, three times a frame at most
 //! (`app::player_presentation::capture_failure`), because the derivation reads what no machine may read: the
 //! server-stop note, the server's subscription, and the dev trigger the app samples and passes in. A reader
 //! finds the value or finds none; there is no fallback derivation behind it.
@@ -186,8 +187,8 @@ impl FailureTrigger<'_> {
     }
 }
 
-/// **Capture, keep, refine or clear the session's failure for this frame.** The one writer of
-/// [`crate::route::failure`], called ahead of every reader of it (`app::player_presentation::capture_failure`
+/// **Capture, keep, refine or clear the session's failure for this frame.** The one writer that records or
+/// refines [`crate::route::failure`] (the route's resets clear it with the verdict they reset), called ahead of every reader of it (`app::player_presentation::capture_failure`
 /// at the frame's publication and before each of its two report observations), so a reader finds the value of
 /// THIS frame. Idempotent: a frame that changes nothing writes nothing.
 ///
