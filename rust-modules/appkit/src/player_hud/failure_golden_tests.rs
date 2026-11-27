@@ -38,9 +38,11 @@ struct Produced {
 /// code that builds the read-out, with `tracks` and `repair` as the live inputs they are.
 fn produce(ps: &rt::PlaybackSession, arm: Option<&str>, tracks: bool) -> Produced {
     let repair = ps.repair_status;
-    let error = pl::error_captured(ps, arm);
-    let cx = pl::failure_context_captured(ps, arm, tracks);
-    let row = pl::failure_actions(error.kind, cx);
+    // the derivation `observe_failure` records (the capture's gating on the state is graded in `plx_media`)
+    let failure = pl::failure_under_for_test(ps, arm);
+    let error = failure.shape().clone();
+    let live = pl::LiveOffers { repair_idle: repair == Repair::Idle, tracks_available: tracks };
+    let row = pl::failure_actions(&failure, live);
     let handled = pl::backend::handled_failure(error.kind);
     let head = format!(
         "{} | {:?} | {:?} | {:?} | {:?} | {:?} | pass={} | {:?}",
@@ -49,7 +51,7 @@ fn produce(ps: &rt::PlaybackSession, arm: Option<&str>, tracks: bool) -> Produce
     let code = error.kind.code();
     let support = pl::support_line(error.kind);
     assert!(support.contains(code), "the footer names the stable code: {support}");
-    let readout = FailureReadout::captured(error, row.clone(), support, repair);
+    let readout = FailureReadout::captured(failure.attempt(), error, row.clone(), support, repair);
     let view = format!("{:?} | {:?} | {:?} | footer carries the code={}",
         readout.glyph, readout.reason, readout.note, readout.footer.to_str().unwrap_or("").contains(code));
     Produced { head, by_repair: vec![(repair, view)], row }
@@ -155,10 +157,10 @@ fn snapshot() -> String {
     // ---- 1. the table: every kind x setting x offer, without a session ----------------------------
     writeln!(out, "# the action table (kind, setting): rows by offers [r=can retry, q=quality carriable, t=tracks, i=repair idle]").unwrap();
     let mut table: Vec<((String, &str), Vec<(String, Vec<String>)>)> = Vec::new();
-    for (kind, cx, row) in pl::every_failure_row() {
-        let setting = if cx.forced { "forced" } else if cx.direct_play_disabled { "disabled" } else { "auto" };
-        let mask = format!("r{}q{}t{}i{}", cx.can_retry as u8, cx.quality_carriable as u8, cx.tracks_available as u8, cx.repair_idle as u8);
-        let key = (format!("{kind:?}"), setting);
+    for (failure, live, row) in pl::every_failure_row() {
+        let setting = if failure.forced() { "forced" } else if failure.direct_play_disabled() { "disabled" } else { "auto" };
+        let mask = format!("r{}q{}t{}i{}", failure.can_retry() as u8, failure.quality_carriable() as u8, live.tracks_available as u8, live.repair_idle as u8);
+        let key = (format!("{:?}", failure.kind()), setting);
         let entry = match table.iter_mut().find(|(k, _)| *k == key) {
             Some((_, rows)) => rows,
             None => {
