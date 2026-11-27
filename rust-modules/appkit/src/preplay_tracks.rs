@@ -4,8 +4,9 @@
 //! The Detail hero's disc, the `…` menu's row and the playback failure screen's entry all open the
 //! same two-level panel, so the rows live here once and each host owns only its surface. A host
 //! holds a [`PickerState`], whose `ui::menu::Menu` owns the form, the stack and the slide (one stack,
-//! one slide, one header with the back mark); the host feeds it `Event`s, resolves a focused row to a
-//! [`Pick`] ([`pick_of`]) and commits with [`commit`]. BACK pops a page before it dismisses.
+//! one slide, one header with the back mark); the host feeds it the screen's events through
+//! [`PickerState::on_screen`], and when the menu answers `Out::Picked` resolves the row to a [`Pick`]
+//! ([`PickerState::pick`], [`pick_of`]) and commits with [`commit`]. BACK pops a page before it dismisses.
 //!
 //! **Not a second track list.** Audio rows are [`crate::track_menu::audio_track_row`], the
 //! in-player Audio tab's own row; the Subtitles page is `metadata::sub_layout::sub_sections`
@@ -313,28 +314,6 @@ pub fn commit(item: &plx_media::route::PreplayItem<'_>, sel: &Selection) -> bool
 
 // ---- the panel's state: pages, slide, carried choice -------------------------------------------
 
-/// What BACK did.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Back {
-    /// A page was popped; the panel stays.
-    Popped,
-    /// At the root: the host dismisses.
-    Dismiss,
-}
-
-/// What OK on a row did.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Outcome {
-    /// A drill-in: the page was pushed and the two pages slide.
-    Pushed,
-    /// A track was picked. The host commits it ([`commit`]) and stores the pick for the page's next
-    /// start ([`patch_command`]); the panel has already carried [`Selection::chosen`] forward as its own
-    /// `now` and rebuilt the page.
-    Picked(Selection),
-    /// A row with nothing to do (an index off the list).
-    Nothing,
-}
-
 /// **What an Audio & Subtitles picker knows, with no table, no stack and no screen**: the item's tracks
 /// and the choice made so far, and the page forms they build. The standalone panel ([`PickerState`])
 /// and the hero's `…` menu (`screens::item_menu`, whose page stack it stands on) each host one, so the
@@ -419,8 +398,6 @@ impl PickerCore {
 pub struct PickerState {
     core: PickerCore,
     menu: Menu<PickPage, PickRow, ()>,
-    /// The drawn rect of what opened the panel: `[x, y, w, h]` as bits, like every panel argument.
-    anchor: [u32; 4],
 }
 
 /// `page` (`None` asks for the root), built from the core: its rows, its header and the row focus opens on.
@@ -430,26 +407,13 @@ fn page_of(core: &PickerCore, page: Option<PickPage>) -> Option<Page<PickRow, ()
 }
 
 impl PickerState {
-    /// A panel that hangs under or above its opener, never over it (the failure screen's): a sheet.
-    pub fn new(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> Self {
-        Self::on(tracks, anchor, Host::Sheet { anchor })
-    }
-
-    fn on(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4], host: Host) -> Self {
-        let mut s = Self {
-            core: PickerCore::new(tracks),
-            menu: Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE),
-            anchor,
-        };
+    /// A panel that stands at `host`: the host says where it hangs, how it enters and what it stands on (a glass
+    /// that grows out of a hero control, a sheet under or above its opener, a card over the video plane), and is
+    /// chosen by the screen from where the tracks come from, not here.
+    pub fn new(tracks: plx_data::metadata::PreplayTracks, host: Host) -> Self {
+        let mut s = Self { core: PickerCore::new(tracks), menu: Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE) };
         s.step(Event::ReplaceRoot { slide: None });
         s
-    }
-
-    /// **The panel grows out of its opener** (a hero control: the menu's `Host::Grows`) and so covers it by the
-    /// shared rule, the opener being consumed by the morph.
-    pub fn over_opener(self) -> Self {
-        let anchor = self.anchor;
-        Self::on(self.core.tracks, anchor, plx_ui::detail_layout::hero_host(anchor))
     }
 
     /// The menu: what the host draws, registers stops on and answers focus questions with.
@@ -461,6 +425,21 @@ impl PickerState {
     pub fn step(&mut self, ev: Event<'_, PickRow>) -> Out<()> {
         let core = &self.core;
         self.menu.step(ev, &mut |page| page_of(core, page))
+    }
+
+    /// One screen event of the menu (`Menu::on_screen`), its pages built from the core.
+    pub fn on_screen<H: plx_machine::machine::Host>(
+        &mut self,
+        ev: &plx_machine::machine::ScreenEvent<H>,
+        cx: &plx_machine::machine::Cx<'_, H>,
+        entry: plx_machine::machine::EntryId,
+        fx: &mut plx_machine::machine::Effects<'_, H>,
+    ) -> Option<plx_ui::menu::Glued<()>>
+    where
+        H::Elem: plx_ui::geom::IndexElem,
+    {
+        let core = &self.core;
+        self.menu.on_screen(ev, cx, entry, fx, &mut |page| page_of(core, page))
     }
 
     pub fn tracks(&self) -> &plx_data::metadata::PreplayTracks {
@@ -480,41 +459,19 @@ impl PickerState {
         self.menu.depth()
     }
 
-    /// OK on the row `id`: a drill-in pushes its page; a pick is carried forward and the page rebuilt with the check
-    /// moved. A row that is no pick (an index off the list) does nothing.
-    pub fn ok(&mut self, id: PickRow) -> Outcome {
-        match pick_of(id) {
-            Pick::Open(_) => match self.step(Event::Ok(id.key().0)) {
-                Out::Moved => Outcome::Pushed,
-                _ => Outcome::Nothing,
-            },
-            pick => match self.core.select(pick) {
-                Some(sel) => {
-                    self.step(Event::Refresh { keep: Some(id) });
-                    Outcome::Picked(sel)
-                }
-                None => Outcome::Nothing,
-            },
-        }
-    }
-
-    /// BACK: pop a page when there is one, else the host dismisses.
-    pub fn back(&mut self) -> Back {
-        match self.step(Event::Back) {
-            Out::Dismiss => Back::Dismiss,
-            _ => Back::Popped,
-        }
+    /// **What the row `key` picked**, after the menu answered its OK with [`Out::Picked`] (a drill-in is a page the
+    /// menu pushed and never gets here): carry the choice forward as the standing pick, rebuild the page with the
+    /// check moved, and answer what the pick writes. `None` for a row that is no pick.
+    pub fn pick(&mut self, key: u32) -> Option<Selection> {
+        let id = *self.menu.id_of(key)?;
+        let sel = self.core.select(pick_of(id))?;
+        self.step(Event::Refresh { keep: Some(id) });
+        Some(sel)
     }
 
     /// The panel's natural rect: the menu's one placement rule for its host.
     pub fn panel_rect(&self, measure: &dyn Measure) -> Rect {
         self.menu.panel_rect(measure)
-    }
-
-    /// The row identity under a focus key.
-    pub fn row_at(&self, key: RowKey) -> Option<PickRow> {
-        let form = self.menu.form();
-        form.index_of_key(key).and_then(|i| form.binding_at(i)).map(|b| b.id)
     }
 }
 
@@ -605,6 +562,21 @@ mod tests {
         assert!(select(set, None, Pick::Audio(9)).is_none());
     }
 
+    /// OK on the row `id`, as a host answers it: the menu steps (a drill-in pushes), and a row it picked is then carried
+    /// forward and answers what it writes.
+    fn ok(p: &mut PickerState, id: PickRow) -> Option<Selection> {
+        let key = id.key().0;
+        match p.step(Event::Ok(key)) {
+            Out::Picked(()) => p.pick(key),
+            _ => None,
+        }
+    }
+
+    /// A picker hung under or above its opener (a Detail page's, with no control to grow from).
+    fn sheet(tracks: plx_data::metadata::PreplayTracks, anchor: [u32; 4]) -> PickerState {
+        PickerState::new(tracks, Host::Sheet { anchor })
+    }
+
     fn picker() -> PickerState {
         let (audio, subs) = item();
         let tracks = plx_data::metadata::PreplayTracks {
@@ -617,7 +589,7 @@ mod tests {
             subs,
             pick: None,
         };
-        PickerState::new(tracks, [0, 0, 0, 0])
+        sheet(tracks, [0; 4])
     }
 
     /// OK on a drill-in pushes (the stack is the page), BACK pops to the root and only then dismisses.
@@ -625,12 +597,12 @@ mod tests {
     fn back_pops_a_page_before_it_dismisses() {
         let mut p = picker();
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
-        assert_eq!(p.ok(PickRow::OpenSubtitles), Outcome::Pushed);
+        assert_eq!(p.step(Event::Ok(PickRow::OpenSubtitles.key().0)), Out::Moved, "a drill-in pushes");
         assert_eq!((p.page(), p.depth()), (PickPage::Subtitles, 1));
         assert_eq!(p.menu().form().focusable_len(), 3, "Off and the two tracks");
-        assert_eq!(p.back(), Back::Popped);
+        assert_eq!(p.step(Event::Back), Out::Moved, "BACK pops");
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
-        assert_eq!(p.back(), Back::Dismiss, "at the root BACK leaves the panel");
+        assert_eq!(p.step(Event::Back), Out::Dismiss, "at the root BACK leaves the panel");
     }
 
     /// A pick carries its choice forward: the page is rebuilt checking it, the next pick is diffed
@@ -640,16 +612,16 @@ mod tests {
     fn a_pick_is_carried_forward_and_the_root_reads_it_after_the_pop() {
         let mut p = picker();
         assert_eq!(p.now(), Chosen { audio: 1, sub: None });
-        p.ok(PickRow::OpenSubtitles);
-        let Outcome::Picked(on) = p.ok(PickRow::Sub(1)) else { panic!("a track row picks") };
+        ok(&mut p, PickRow::OpenSubtitles);
+        let Some(on) = ok(&mut p, PickRow::Sub(1)) else { panic!("a track row picks") };
         assert_eq!((on.audio_sid, on.subtitle_sid), (102, 202));
         assert_eq!(p.now(), Chosen { audio: 1, sub: Some(1) });
-        let Outcome::Picked(off) = p.ok(PickRow::SubOff) else { panic!("Off picks") };
+        let Some(off) = ok(&mut p, PickRow::SubOff) else { panic!("Off picks") };
         assert_eq!(off.subtitle_sid, 0);
         assert_eq!(off.subtitle_memo, Some(SubtitleMemo::Off), "diffed against the carried pick, not the server's");
-        assert_eq!(p.back(), Back::Popped);
+        assert_eq!(p.step(Event::Back), Out::Moved, "BACK pops");
         assert_eq!(subtitle_label(p.core.set(), p.now().sub), plx_os::i18n::msg::widgets_tracks_off());
-        assert_eq!(p.ok(PickRow::Audio(9)), Outcome::Nothing, "an index off the list picks nothing");
+        assert_eq!(ok(&mut p, PickRow::Audio(9)), None, "an index off the list picks nothing");
     }
 
     /// Off, close, reopen, audio pick: the pick is the store's one value, so the reopened panel
@@ -657,13 +629,14 @@ mod tests {
     #[test]
     fn a_reopened_panel_seeds_from_the_pick_and_an_audio_pick_keeps_off() {
         let mut p = picker();
-        p.ok(PickRow::OpenSubtitles);
-        let Outcome::Picked(off) = p.ok(PickRow::SubOff) else { panic!("Off picks") };
+        ok(&mut p, PickRow::OpenSubtitles);
+        let Some(off) = ok(&mut p, PickRow::SubOff) else { panic!("Off picks") };
         let mut tracks = p.tracks().clone();
         tracks.pick = Some(off.pick);
-        let mut again = PickerState::new(tracks, [0, 0, 0, 0]);
+        let mut again = sheet(tracks, [0; 4]);
         assert_eq!(again.now().sub, None);
-        let Outcome::Picked(audio) = again.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
+        ok(&mut again, PickRow::OpenAudio);
+        let Some(audio) = ok(&mut again, PickRow::Audio(0)) else { panic!("an audio row picks") };
         assert_eq!((audio.pick.sub, audio.subtitle_sid), (SubPick::Off, 0), "Off survives the audio pick");
     }
 
@@ -714,8 +687,9 @@ mod tests {
         let tracks = store.view().preplay_tracks(sid, "m1", Some(MediaId(2))).expect("the chosen version's tracks");
         assert_eq!(plx_media::route::PreplayItem::of(&tracks).part_id, 9002, "the PUT addresses version 2's part");
         assert_eq!(tracks.audio.iter().map(|s| s.id).collect::<Vec<_>>(), [31, 32]);
-        let mut p = PickerState::new(tracks, [0, 0, 0, 0]);
-        let Outcome::Picked(sel) = p.ok(PickRow::Audio(1)) else { panic!("an audio row picks") };
+        let mut p = sheet(tracks, [0; 4]);
+        ok(&mut p, PickRow::OpenAudio);
+        let Some(sel) = ok(&mut p, PickRow::Audio(1)) else { panic!("an audio row picks") };
         assert_eq!((sel.audio_sid, sel.pick.part_id), (32, 9002));
         assert!(store.run(patch_command(p.tracks(), &sel)));
         let picks = store.view().picks_of(sid, "m1");
@@ -743,9 +717,10 @@ mod tests {
             a.selected = a.id == 101;
         }
         tracks.pick = Some(PreplayPick { part_id: 9001, audio_sid: 102, sub: SubPick::Server });
-        p = PickerState::new(tracks, [0, 0, 0, 0]);
+        p = sheet(tracks, [0; 4]);
         assert_eq!(p.now().audio, 1, "French, over the flags' English");
-        let Outcome::Picked(sel) = p.ok(PickRow::Audio(0)) else { panic!("an audio row picks") };
+        ok(&mut p, PickRow::OpenAudio);
+        let Some(sel) = ok(&mut p, PickRow::Audio(0)) else { panic!("an audio row picks") };
         assert!(sel.audio_memo.is_some(), "English differs from the held French");
         assert_eq!(sel.pick.audio_sid, 101);
     }
@@ -767,11 +742,11 @@ mod tests {
             pick: None,
         };
         let headline_bold = (plx_ui::theme::size::HEADLINE, true);
-        let mut p = PickerState::new(tracks, [0u32; 4]);
+        let mut p = sheet(tracks, [0; 4]);
         assert_eq!(p.menu().form().table.label_style(), headline_bold, "the root");
-        p.ok(PickRow::OpenSubtitles);
+        ok(&mut p, PickRow::OpenSubtitles);
         assert_eq!(p.menu().form().table.label_style(), headline_bold, "a pushed page");
-        assert_eq!(p.back(), Back::Popped);
+        assert_eq!(p.step(Event::Back), Out::Moved, "BACK pops");
         assert_eq!(p.menu().form().table.label_style(), headline_bold, "back on the root");
     }
 
@@ -796,9 +771,9 @@ mod tests {
             subs,
             pick: None,
         };
-        let mut p = PickerState::new(tracks, anchor);
+        let mut p = sheet(tracks, anchor);
         let root = p.panel_rect(&measure);
-        p.ok(PickRow::OpenSubtitles);
+        ok(&mut p, PickRow::OpenSubtitles);
         let pushed = p.panel_rect(&measure);
         let clear_of = |r: plx_ui::Rect| r.y + r.h <= opener.y || r.y >= opener.y + opener.h;
         assert!(clear_of(root) && clear_of(pushed), "never over the opener: {root:?} {pushed:?}");

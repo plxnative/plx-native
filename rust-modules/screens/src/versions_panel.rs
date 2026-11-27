@@ -27,15 +27,14 @@ use plx_data::pms::MediaVersion;
 use plx_plex::plex::{MediaId, ServerId};
 use crate::registry::{AppLike, AppMsg, MetadataLike, PageMemory};
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::frame::Budget;
 use plx_machine::machine::{
     Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine,
     MachineId, NavOp,
 };
-use plx_ui::menu::{Class, Event, Host, Keyed, Menu, Out, Page};
+use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Out, Page};
 use plx_ui::screen::{
-    At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen, ScreenEvent,
-    Scrim, Step,
+    At, Dir, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen, ScreenEvent,
+    Step,
 };
 use plx_ui::form::{Form, FormId, RowKey};
 use plx_ui::Rect;
@@ -84,11 +83,6 @@ impl FormId for VersionRow {
 
 /// A page-less menu: the version list is its only page.
 type VersionsMenu = Menu<Infallible, VersionRow, MediaId>;
-
-/// This panel has no pages: a step that wants one (none can: no row is a Nav row) gets none.
-fn no_pages(_: Option<Infallible>) -> Option<Page<VersionRow, MediaId, Infallible>> {
-    None
-}
 
 pub struct VersionsPanelScreen {
     entry: EntryId,
@@ -141,12 +135,11 @@ impl VersionsPanelScreen {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
 
-    /// Close, and report row `elem`'s version to the page, which selects it. Takes the elem, not the cursor: a click
-    /// names the stop it hit (`AltSourcesScreen::commit`). OK on a DISABLED row (no playback driver
-    /// composed) does nothing and the panel stays up, as on every disabled row (`ui/CLAUDE.md`: "OK
-    /// does nothing"); BACK still closes it.
-    fn commit<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let media = match self.menu.step(Event::Ok(elem), &mut no_pages) {
+    /// What the menu answered: a dismissal closes the panel, and a pick closes it and reports the row's version to
+    /// the page, which selects it. OK on a DISABLED row (no playback driver composed) does nothing and the panel
+    /// stays up, as on every disabled row (`ui/CLAUDE.md`: "OK does nothing"); BACK still closes it.
+    fn run<H: AppLike>(&mut self, out: Out<MediaId>, fx: &mut Effects<'_, H>) {
+        let media = match out {
             Out::Stay | Out::Moved => return,
             Out::Picked(media) => Some(media),
             Out::Dismiss => None,
@@ -159,60 +152,31 @@ impl VersionsPanelScreen {
             ));
         }
     }
-
-    /// The row the focus engine holds on this panel, if any.
-    fn focused<H: AppLike<Memory = PageMemory>>(&self, cx: &Cx<'_, H>) -> Option<u32> {
-        cx.focus.current.filter(|key| key.entry == self.entry).map(|key| key.elem)
-    }
 }
 
 impl<H: AppLike<Memory = PageMemory>> Machine<H> for VersionsPanelScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        match ev {
-            ScreenEvent::Mount => {
-                self.menu.step(Event::Opening, &mut no_pages);
-                Handled::No
+        // all of it the menu's (`Menu::on_screen`): BACK at its one page closes it, LEFT is inert here, never a close
+        match self.menu.on_screen(ev, cx, self.entry, fx, &mut no_pages) {
+            Some(glued) => {
+                self.run(glued.out, fx);
+                glued.handled
             }
-            // However the surface was dismissed (BACK, a pick, the host's own press), the glass
-            // runs the morph back into the control.
-            ScreenEvent::Closing => {
-                self.menu.step(Event::Closing, &mut no_pages);
-                Handled::No
-            }
-            ScreenEvent::Tick(tick) => {
-                let focus = self.focused(cx);
-                self.menu.step(Event::Tick { dt: tick.dt(), measure: cx.measure, focus }, &mut no_pages);
-                Handled::Yes
-            }
-            ScreenEvent::FocusMoved { to, .. } => {
-                self.menu.step(Event::Focused(to.elem), &mut no_pages);
-                fx.invalidate(plx_machine::present::Provenance::Input);
-                Handled::Yes
-            }
-            ScreenEvent::Activate(elem) => {
-                self.commit(*elem, fx);
-                Handled::Yes
-            }
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.commit(key.elem, fx);
-                }
-                Handled::Yes
-            }
-            // BACK is the menu's (at its one page it closes); LEFT is inert here, never a close.
-            ScreenEvent::Input(input) => match plx_ui::menu::keyed(&input.kind, self.focused(cx)) {
-                Keyed::Event(ev) => {
-                    if self.menu.step(ev, &mut no_pages) == Out::Dismiss {
-                        self.dismiss(fx);
-                    }
-                    Handled::Yes
-                }
-                Keyed::Swallow => Handled::Yes,
-                Keyed::Pass => Handled::No,
-            },
-            _ => Handled::No,
+            None => Handled::No,
         }
+    }
+}
+
+impl plx_ui::menu::HasMenu for VersionsPanelScreen {
+    type Page = Infallible;
+    type Row = VersionRow;
+    type Act = MediaId;
+    fn menu(&self) -> &VersionsMenu {
+        &self.menu
+    }
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
@@ -298,33 +262,15 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem })))
     }
-    /// The opener is CONSUMED by the morph: gone while the panel stands, back as the droplet drains
-    /// into it. Whole for a panel with no morph.
-    fn opener_alpha(&self) -> f32 {
-        self.menu.opener_alpha()
-    }
-    /// The droplet has drained into the control: the surface and the lift end on this frame.
-    fn handed_back(&self) -> bool {
-        self.menu.handed_back()
-    }
+    // The menu's own (`plx_ui::menu_screen_methods!`): the opener is CONSUMED by the morph (gone while the panel
+    // stands, back as the droplet drains into it; whole for a panel with no morph), the hand-back, the panel's own
+    // dim weight (a morphing panel's FOLLOWS the morph), the prewarm, the pointer hold and the draw.
+    plx_ui::menu_screen_methods!(H, "dt.versions");
     fn state(&self) -> &dyn LogicalState {
         self
     }
     fn crumb(&self, _cx: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
-    }
-    fn prepare(&mut self, _b: &mut Budget, cx: &Cx<'_, H>) {
-        self.menu.prepare(cx.measure);
-    }
-    /// The panel's own weight; a morphing panel's dim FOLLOWS the morph (`Popover::dim`).
-    fn scrim(&self) -> Scrim {
-        self.menu.scrim()
-    }
-    fn pointer_held(&self) -> bool {
-        self.menu.pointer_held()
-    }
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        plx_ui::profile::phase("dt.versions", || self.menu.draw(f, self.entry));
     }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
@@ -345,6 +291,7 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use plx_ui::screen::DrawFrame;
     use super::*;
     use plx_machine::machine::{Edge, Host, InputKind, Key};
     use plx_ui::screen::ScreenArg;
@@ -517,7 +464,7 @@ pub(crate) mod tests {
         let mut present = plx_machine::present::Present::new();
         let mut fx: Effects<'_, HostFixture> =
             Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
-        p.commit(1, &mut fx);
+        <VersionsPanelScreen as Machine<HostFixture>>::step(&mut p, &ScreenEvent::Activate(1), &cx(), &mut fx);
         let fx: Vec<_> = out.into_iter().map(|e| e.fx).collect();
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the panel closes");
         let played = fx.iter().find_map(|f| match f {

@@ -78,16 +78,15 @@ use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
 use crate::registry::{commit_pick, hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
-use plx_ui::frame::Budget;
 use plx_ui::icons::Icon;
 use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
     LogicalState, Machine, NavOp, MachineId, Delivery,
 };
 use plx_ui::a11y::{A11y, A11yPath, Role};
-use plx_ui::menu::{Class, Event, Host, Keyed, Menu, Out, Page};
+use plx_ui::menu::{Class, Event, Host, Menu, Out, Page};
 use plx_ui::screen::{
-    At, Dir, DrawFrame, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Step,
+    At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step,
 };
 use plx_appkit::preplay_tracks::{self as tracks, Pick, PickPage, PickRow, PickerCore};
 use plx_ui::table::Row;
@@ -808,6 +807,14 @@ macro_rules! step {
     }};
 }
 
+/// One screen event of the menu (`Menu::on_screen`), its pages built from the menu's own fields.
+macro_rules! glue {
+    ($menu:expr, $ev:expr, $cx:expr, $fx:expr) => {{
+        let src = source!($menu);
+        $menu.menu.on_screen($ev, $cx, $menu.entry, $fx, &mut |page| src.page(page))
+    }};
+}
+
 impl PageSource<'_> {
     /// The menu's own rows, by what it is about.
     fn root_form(&self) -> ItemForm {
@@ -1031,11 +1038,6 @@ impl ItemMenuScreen {
         self.menu.panel_rect(measure)
     }
 
-    /// The row the focus engine holds on this panel, if any.
-    fn focused<H: AppLike>(&self, cx: &Cx<'_, H>) -> Option<u32> {
-        cx.focus.current.filter(|key| key.entry == self.entry).map(|key| key.elem)
-    }
-
     fn dismiss<H: AppLike>(&self, fx: &mut Effects<'_, H>) {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
@@ -1123,13 +1125,6 @@ impl ItemMenuScreen {
         }
     }
 
-    /// OK on row `elem`, or a click on it: a Nav row pushes its page, the header's back mark pops one, a pick
-    /// or a command acts, a disabled row does nothing.
-    fn activate<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let out = step!(self, Event::Ok(elem));
-        self.run(out, Some(elem), fx);
-    }
-
     /// The highlighted row, for the focus probe — a READ of the cursor the engine moves.
     pub fn sel(&self) -> i32 {
         self.menu.form().table.sel
@@ -1154,70 +1149,49 @@ impl ItemMenuScreen {
 impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsLike> Machine<H> for ItemMenuScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        match ev {
-            ScreenEvent::Mount => {
-                step!(self, Event::Opening);
-                if let Some(hero) = &mut self.hero {
-                    hero.can_play = H::screen_inputs(cx).can_play();
-                }
-                self.build_rows(H::metadata(cx), H::screen_inputs(cx).preference::<plx_plex::plex::session::DeckPressPref>());
-                // The menu is the thing the Home hold hint teaches; once ANY card screen has
-                // opened one the lesson retires for this input owner, through its typed effect.
-                fx.push(Fx::HoldHint(plx_machine::machine::HoldHintEvent::Learned));
+        if let ScreenEvent::Mount = ev {
+            if let Some(hero) = &mut self.hero {
+                hero.can_play = H::screen_inputs(cx).can_play();
             }
-            // However the surface was dismissed (BACK, a pick, the host's own press), the glass
-            // runs the morph back into its control.
-            ScreenEvent::Closing => {
-                step!(self, Event::Closing);
-            }
-            ScreenEvent::Tick(tick) => {
-                let focus = self.focused(cx);
-                step!(self, Event::Tick { dt: tick.dt(), measure: cx.measure, focus });
-            }
-            ScreenEvent::FocusMoved { to, .. } => {
-                step!(self, Event::Focused(to.elem));
-            }
-            ScreenEvent::Activate(elem) => self.activate(*elem, fx),
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.activate(key.elem, fx);
-                }
-            }
-            ScreenEvent::Input(input) => {
-                // BACK and LEFT pop a page, RIGHT enters a Nav row: the menu's, by `ui::menu::keyed`. At the
-                // rows BACK closes (a hero menu's glass drains into its button) and LEFT is inert.
-                match plx_ui::menu::keyed(&input.kind, self.focused(cx)) {
-                    Keyed::Event(ev) => {
-                        let out = step!(self, ev);
-                        self.run(out, None, fx);
-                        return Handled::Yes;
-                    }
-                    Keyed::Swallow => return Handled::Yes,
-                    Keyed::Pass => {}
-                }
-                let InputKind::Key { key, edge, .. } = input.kind else {
-                    return Handled::No;
-                };
-                // **The hold-to-move cadence, applied HERE and nowhere else.** It was
-                // `app/run.rs`'s per-frame `App::held_key` timer, whose LAST consumer this menu
-                // was; the dispatcher hands the surface the hardware's own `Edge::Repeat` at
-                // ~50 ms, which walks a five-row list faster than anybody can read it. A FRESH
-                // press is never swallowed by the cadence of the press before it — it is acted on
-                // unconditionally by falling through to `Handled::No`, and `rearm` records it as
-                // the step it is.
-                if matches!(key, Key::Up | Key::Down) {
-                    match edge {
-                        Edge::Down => self.repeat.rearm(input.at.ms),
-                        Edge::Repeat if !self.repeat.ready_every(input.at.ms, PANEL_REPEAT_MS) => {
-                            return Handled::Yes
-                        }
-                        _ => {}
-                    }
+            self.build_rows(H::metadata(cx), H::screen_inputs(cx).preference::<plx_plex::plex::session::DeckPressPref>());
+            // The menu is the thing the Home hold hint teaches; once ANY card screen has
+            // opened one the lesson retires for this input owner, through its typed effect.
+            fx.push(Fx::HoldHint(plx_machine::machine::HoldHintEvent::Learned));
+        }
+        // Everything else the menu's own (`Menu::on_screen`): the open and the close (a hero menu's glass runs
+        // the morph back into its control however the surface was dismissed), the tick, the focus, OK and a
+        // click, BACK and LEFT (pop a page) and RIGHT (enter a Nav row). At the rows BACK closes and LEFT is inert.
+        if let Some(glued) = glue!(self, ev, cx, fx) {
+            self.run(glued.out, glued.elem, fx);
+            return glued.handled;
+        }
+        // **The hold-to-move cadence, applied HERE and nowhere else.** It was `app/run.rs`'s per-frame
+        // `App::held_key` timer, whose LAST consumer this menu was; the dispatcher hands the surface the
+        // hardware's own `Edge::Repeat` at ~50 ms, which walks a five-row list faster than anybody can read
+        // it. A FRESH press is never swallowed by the cadence of the press before it: it is acted on
+        // unconditionally by falling through to `Handled::No`, and `rearm` records it as the step it is.
+        if let ScreenEvent::Input(input) = ev {
+            if let InputKind::Key { key: Key::Up | Key::Down, edge, .. } = input.kind {
+                match edge {
+                    Edge::Down => self.repeat.rearm(input.at.ms),
+                    Edge::Repeat if !self.repeat.ready_every(input.at.ms, PANEL_REPEAT_MS) => return Handled::Yes,
+                    _ => {}
                 }
             }
-            _ => {}
         }
         Handled::No
+    }
+}
+
+impl plx_ui::menu::HasMenu for ItemMenuScreen {
+    type Page = MenuPage;
+    type Row = ItemRow;
+    type Act = Action;
+    fn menu(&self) -> &Menu<MenuPage, ItemRow, Action> {
+        &self.menu
+    }
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
@@ -1281,17 +1255,13 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         Some(ItemMenuScreen::opener(self))
     }
-    /// A hero control's menu CONSUMES its opener (`popover_morph`): gone while the glass stands,
-    /// back as it drains. A tile's card stays whole above the dim.
-    fn opener_alpha(&self) -> f32 {
-        self.menu.opener_alpha()
-    }
-    /// The droplet has drained into the control: the surface and the lift end on this frame (a hero
-    /// menu closes by BACK or a pick, never by handing off to a panel: Select Version and Audio &
-    /// Subtitles are its own pages). `false` for a tile's menu, whose close is the container's.
-    fn handed_back(&self) -> bool {
-        self.menu.handed_back()
-    }
+    // The menu's own (`plx_ui::menu_screen_methods!`): a hero control's menu CONSUMES its opener (gone while the
+    // glass stands, back as it drains), the droplet's hand-back (never for a tile's menu, whose close is the
+    // container's), the modal dim at the class's weight (the TILE is lifted back out of it, and the lift is the
+    // HOST PAGE's to draw: the dispatcher's lift pass repaints the focused element above the dim and the panel,
+    // reading this surface's own `opener`), the prewarm, the pointer hold while the card or the pages move, and
+    // the draw with its focus stops.
+    plx_ui::menu_screen_methods!(H, "dt.item_menu");
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -1303,34 +1273,6 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
     }
     fn crumb(&self, _: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
-    }
-    /// The modal dim. **The TILE is lifted back out of it, and the lift is the HOST PAGE's to
-    /// draw** — only the screen that drew an element knows where it landed, and the dispatcher's lift pass is
-    /// a bare `fn()` with nothing to borrow a page through. So this asks for the dim alone, and
-    /// the dispatcher's lift pass (`Dispatcher::draw_with`, after the last surface) — the ONE
-    /// owner, reading this surface's own [`ItemMenuScreen::opener`] rather than a copy kept on the
-    /// side — repaints the focused element above the dim and the panel.
-    ///
-    /// That tile is the panel's whole subject: the design's stated point is that "the card and the
-    /// rest of the shelf stay where they are, visible behind it", which a scrim over the card
-    /// itself quietly contradicts. The un-dimmed copy is also what the host snapshot holds. The weight is the
-    /// COMPACT role (the menu's `Class::Action`) — the lightest dim in `theme::underlay`: the card and the
-    /// shelf stay legible behind the popover, so this recesses them rather than blanking them.
-    fn scrim(&self) -> Scrim {
-        self.menu.scrim()
-    }
-    fn prepare(&mut self, _: &mut Budget, cx: &Cx<'_, H>) {
-        self.menu.prepare(cx.measure);
-    }
-    /// The card is moving to a page's rect or the pages are sliding: a pointer that is held down
-    /// waits (`Screen::pointer_held`), as the standalone panel's does.
-    fn pointer_held(&self) -> bool {
-        self.menu.pointer_held()
-    }
-    /// The card is the page's SHOWN rect (it resizes from page to page) and the pages slide in it; a hero
-    /// menu's glass and rows ride the MORPH, a tile's the container's appear. The focus stops are the menu's.
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        self.menu.draw(f, self.entry);
     }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
@@ -1347,7 +1289,7 @@ impl LogicalState for ItemMenuScreen {
             c.option(form.binding_at(i).map(|b| &b.action), |c, a| a.write(c));
         }
         c.u32(form.table.sel as u32);
-        self.menu.stack_canon(c);
+        self.menu.depth_canon(c);
         form.table.write_motion(c);
     }
     fn probe(&self, out: &mut String) {
@@ -1371,6 +1313,7 @@ impl LogicalState for ItemMenuScreen {
 pub(crate) mod tests {
     use super::*;
     use plx_ui::consts::MARGIN_X;
+    use plx_ui::screen::DrawFrame;
     use plx_ui::theme;
     use plx_ui::menu::beside as panel_at;
     use plx_ui::table::{MENU_MAX_W, MENU_MIN_W};
@@ -2365,6 +2308,13 @@ pub(crate) mod tests {
         fn screen_inputs<'a>(cx: &Cx<'a, Self>) -> &'a crate::registry::ScreenInputs { cx.views }
     }
 
+    /// One Activate (a click or OK on the row with this key) as the dispatcher delivers it.
+    fn activate(s: &mut ItemMenuScreen, elem: u32, fx: &mut Effects<'_, HostFixture>) {
+        with_cx(|cx| {
+            Machine::<HostFixture>::step(s, &ScreenEvent::Activate(elem), cx, fx);
+        });
+    }
+
     fn with_cx<R>(test: impl FnOnce(&Cx<'_, HostFixture>) -> R) -> R {
         let measure = FixtureMeasure;
         let inputs = crate::registry::ScreenInputs::default();
@@ -2447,7 +2397,7 @@ pub(crate) mod tests {
             plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)),
             &mut present,
         );
-        s.activate::<HostFixture>(elem, &mut fx);
+        activate(s, elem, &mut fx);
         let mut req = None;
         let mut dismissed = false;
         for e in out {
@@ -2682,7 +2632,7 @@ pub(crate) mod tests {
     }
 
     /// **Every action row of every item menu fits its panel, in every shipped language.** The
-    /// panel grows to its content ([`panel_at`] clamps `measured_width` between [`MENU_MIN_W`] and
+    /// panel grows to its content (the menu's `menu_panel_width` clamps `measured_width` between [`MENU_MIN_W`] and
     /// [`MENU_MAX_W`]), so what this guards is the CEILING: no verb may be longer than the widest
     /// panel the screen will ever draw. Built through the real [`build_with`], [`build_episode`]
     /// and [`build_season`] over every item kind, watch state, Continue Watching and trailer
@@ -2777,7 +2727,7 @@ pub(crate) mod tests {
             plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)),
             &mut present,
         );
-        s.activate::<HostFixture>(choose, &mut fx);
+        activate(&mut s, choose, &mut fx);
         assert!(out.is_empty(), "the menu turns itself into the list: no request, no dismiss");
         let rows: Vec<Action> =
             (0..s.form().table.n_rows() as usize).filter_map(|i| s.form().binding_at(i).map(|b| b.action.clone())).collect();
@@ -2898,7 +2848,7 @@ pub(crate) mod tests {
             plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)),
             &mut present,
         );
-        s.activate::<HostFixture>(choose, &mut fx);
+        activate(s, choose, &mut fx);
     }
 
     /// The item menu on a leaf with versions, both pages (the rows, then Play Version's), run
@@ -3230,7 +3180,7 @@ pub(crate) mod tests {
     fn press_row(menu: &mut ItemMenuScreen, row: ItemRow) -> Vec<plx_machine::machine::Stamped<HostFixture>> {
         let elem = row.key().0;
         assert!(menu.form().index_of_key(RowKey(elem)).is_some(), "{row:?} is on the page showing");
-        emitted(|fx| menu.activate::<HostFixture>(elem, fx))
+        emitted(|fx| activate(menu, elem, fx))
     }
 
     fn press_back(menu: &mut ItemMenuScreen) -> Vec<plx_machine::machine::Stamped<HostFixture>> {

@@ -87,17 +87,16 @@ use plx_data::metadata::AltCopy;
 use plx_plex::plex::ServerId;
 use crate::registry::{AppLike, AppMsg, ContentArg, PageMemory};
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::frame::Budget;
 use plx_machine::machine::{
     Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine,
     MachineId, NavOp,
 };
 use plx_ui::screen::{
-    At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen,
-    ScreenEvent, Scrim, Step,
+    At, Dir, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen,
+    ScreenEvent, Step,
 };
 use plx_ui::form::{Form, FormSection, RowKey, RowKind};
-use plx_ui::menu::{Class, Event, Host, Keyed, Menu, Out, Page};
+use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Out, Page};
 use plx_ui::table::{Badge, Row, TableView};
 use plx_ui::Rect;
 
@@ -330,11 +329,6 @@ enum Sel {
 /// A page-less menu: its root is the only page there is, so no push or pop ever asks for another.
 type AltMenu = Menu<Infallible, AltId, Action>;
 
-/// This panel has no pages: a step that wants one (none can: no row is a Nav row) gets none.
-fn no_pages(_: Option<Infallible>) -> Option<Page<AltId, Action, Infallible>> {
-    None
-}
-
 pub struct AltSourcesScreen {
     entry: EntryId,
     arg: AltSourcesArg,
@@ -415,17 +409,18 @@ impl AltSourcesScreen {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
 
-    /// Commit row `elem` and close. The row you are ALREADY on reports nothing — there is nowhere
-    /// to navigate to, and the tick has already answered the question the press was asking.
+    /// What the menu answered: a dismissal closes the panel, and a pick closes it and names the copy to open. The
+    /// row you are ALREADY on reports nothing: there is nowhere to navigate to, and the tick has already answered
+    /// the question the press was asking.
     ///
-    /// Takes the elem directly rather than reading the table's cursor: the engine's OK arm reads it
-    /// off the current focus key and a pointer click's `Activate` names the STOP that was clicked,
-    /// which need not be the row the cursor was already resting on — the same distinction
-    /// `AccountMenuScreen::activate` draws.
-    fn commit<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let action = match self.menu.step(Event::Ok(elem), &mut no_pages) {
+    /// The row comes from the event's own element (`Menu::on_screen`), not the table's cursor: the engine's OK arm
+    /// reads it off the current focus key and a pointer click's `Activate` names the STOP that was clicked, which
+    /// need not be the row the cursor was already resting on.
+    fn run<H: AppLike>(&mut self, out: Out<Action>, fx: &mut Effects<'_, H>) {
+        let action = match out {
+            Out::Stay | Out::Moved => return,
             Out::Picked(action) => action,
-            _ => Action::None,
+            Out::Dismiss => Action::None,
         };
         self.dismiss(fx);
         if let Action::Open { sid, rk } = action {
@@ -439,11 +434,6 @@ impl AltSourcesScreen {
                 ))),
             ));
         }
-    }
-
-    /// The row the focus engine holds on this panel, if any.
-    fn focused<H: AppLike<Memory = PageMemory>>(&self, cx: &Cx<'_, H>) -> Option<u32> {
-        cx.focus.current.filter(|key| key.entry == self.entry).map(|key| key.elem)
     }
 }
 
@@ -461,53 +451,35 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Machine<H>
                 }
                 Handled::Yes
             }
-            ScreenEvent::Tick(tick) => {
-                // Re-derive the drawn selection from the engine's own tracked focus every tick,
-                // exactly as `AccountMenuScreen::step` does — `FocusMoved` already keeps the two
-                // in step, this is the belt to its suspenders for a focus change this screen was
-                // not told about directly (a remembered-cursor seat on `Enter`, say).
-                let focus = self.focused(cx);
-                self.menu.step(Event::Tick { dt: tick.dt(), measure: cx.measure, focus }, &mut no_pages);
-                Handled::Yes
-            }
-            ScreenEvent::FocusMoved { to, .. } => {
-                self.menu.step(Event::Focused(to.elem), &mut no_pages);
-                fx.invalidate(plx_machine::present::Provenance::Input);
-                Handled::Yes
-            }
-            // The engine's OK arm, for a `Bare` element, delivers `Activate` directly rather than
-            // arming a hold — see `Focusable::groups` below. A pointer click on a registered row
-            // stop reaches the same arm through the hit map's own `Activate::Immediate` policy.
-            ScreenEvent::Activate(elem) => {
-                self.commit(*elem, fx);
-                Handled::Yes
-            }
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.commit(key.elem, fx);
-                }
-                Handled::Yes
-            }
-            // UP/DOWN, OK and the pointer are no longer read here at all — the engine's own
-            // direction/OK/hit-map machinery drives them through `Focusable` and the arms above,
-            // exactly as it does for every other Engine screen (`AccountMenuScreen` is the
-            // worked example this module follows). A click BESIDE every registered row stop is a
-            // HIT-MAP MISS, and `Style::Compact`'s `on_miss` (`OnMiss::Dismiss`) is what closes
-            // the panel — the same "click outside a popover dismisses it" rule this arm used to
-            // implement by hand against raw pointer coordinates. BACK is the menu's: at its one
-            // page it closes; LEFT is inert here (there is no page to pop) and never closes it.
-            ScreenEvent::Input(input) => match plx_ui::menu::keyed(&input.kind, self.focused(cx)) {
-                Keyed::Event(ev) => {
-                    if self.menu.step(ev, &mut no_pages) == Out::Dismiss {
-                        self.dismiss(fx);
+            _ => {
+                // The rest is the menu's (`Menu::on_screen`): the tick re-derives the drawn selection from the
+                // engine's own tracked focus (the belt to `FocusMoved`'s suspenders, for a focus change this screen
+                // was not told about directly: a remembered-cursor seat on `Enter`), OK and a click (the engine's OK
+                // arm delivers `Activate` for a `Bare` element, a pointer click on a registered row stop reaches the
+                // same arm), BACK (at its one page it closes) and LEFT (inert here, never a close). A click BESIDE
+                // every registered row stop is a HIT-MAP MISS, and `Style::Compact`'s `on_miss`
+                // (`OnMiss::Dismiss`) closes the panel.
+                match self.menu.on_screen(ev, cx, self.entry, fx, &mut no_pages) {
+                    Some(glued) => {
+                        self.run(glued.out, fx);
+                        glued.handled
                     }
-                    Handled::Yes
+                    None => Handled::No,
                 }
-                Keyed::Swallow => Handled::Yes,
-                Keyed::Pass => Handled::No,
-            },
-            _ => Handled::No,
+            }
         }
+    }
+}
+
+impl plx_ui::menu::HasMenu for AltSourcesScreen {
+    type Page = Infallible;
+    type Row = AltId;
+    type Act = Action;
+    fn menu(&self) -> &Menu<Infallible, AltId, Action> {
+        &self.menu
+    }
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
@@ -598,33 +570,12 @@ impl<H: AppLike<Memory = PageMemory> + crate::registry::MetadataLike> Screen<H> 
     fn crumb(&self, _cx: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
     }
-    fn prepare(&mut self, _b: &mut Budget, cx: &Cx<'_, H>) {
-        self.menu.prepare(cx.measure);
-    }
-    /// The modal dim, asked for rather than drawn. Nothing is lifted back out of it: this picker
-    /// hangs under the detail page's Source chip, and the chip is a control that says which copy
-    /// is playing rather than the subject of the panel — unlike the card menu's tile or the
-    /// profile menu's chip, there is nothing here whose dimming contradicts what the panel is
-    /// about.
-    ///
-    /// **The ordering this replaces was load-bearing and is now the container's** (§16.3): the
-    /// panel's ground once sampled the framebuffer (`Glass::CACHED`), so the dim had to be down
-    /// before the backdrop was taken; the ground is the latched underlay field (a sheet is never glass; DS6 glass is for menus), latched at the
-    /// head of the dims from the undimmed page. `ModalStack::draw_scrims` draws it at the end of the PAGE pass,
-    /// which is strictly earlier than the surface pass this `draw` runs in, and multiplies by the
-    /// appear spring and by `nav::page_alpha` — the second of which the in-`draw` version could
-    /// not reach, `DrawFrame::page_alpha` being the surface's own spring alone. The weight is the
-    /// menu's: the PANEL role (a picker in the middle of the frame; the page recedes, it is not
-    /// blanked, and the hero behind stays readable).
-    fn scrim(&self) -> Scrim {
-        self.menu.scrim()
-    }
-    /// The card, its rows and the hit map's stops, all the menu's. Named for `/tmp/plxnative-cpuprof`
-    /// beside the page's own phases, so a slow frame while this panel is up can be read as the PANEL
-    /// or as the host under it.
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        plx_ui::profile::phase("dt.alt", || self.menu.draw(f, self.entry));
-    }
+    // The menu's own (`plx_ui::menu_screen_methods!`). The modal dim is asked for rather than drawn, at the menu's
+    // weight: the PANEL role (a picker in the middle of the frame; the page recedes, it is not blanked, and the
+    // hero behind stays readable). Nothing is lifted back out of it: this picker hangs under the detail page's
+    // Source chip, a control that says which copy is playing rather than the subject of the panel. The draw is
+    // named for `/tmp/plxnative-cpuprof` beside the page's own phases.
+    plx_ui::menu_screen_methods!(H, "dt.alt");
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
     }
