@@ -13,11 +13,12 @@
 //! row under the cursor. It opens on the row that wears the check mark, the version Play takes now
 //! (the viewer's choice, else what plays unasked).
 //!
-//! **It grows out of the hero control that opened it** (`Popover::morphing` + `open_from`, the path
-//! every header menu takes) when the argument names that control ([`VersionsArg::opener`]): the
-//! page leaves the control out of its own pass and the opener lift draws it at the morph's
-//! `opener_alpha`, so the panel covers it ([`plx_ui::popover::cover_opener`]) and BACK or a pick
-//! drains the glass back into it. A panel with no opener keeps the fade.
+//! **It grows out of the hero control that opened it** (`menu::Host::Grows`, built by
+//! `detail_layout::hero_host`, the path every header menu takes) when the argument names that control
+//! ([`VersionsArg::opener`]): the page leaves the control out of its own pass and the opener lift draws it at
+//! the morph's `opener_alpha`, so the panel covers it and BACK or a pick drains the glass back into it. A
+//! panel with no opener is a `Host::Sheet` that keeps the fade. The panel is a one-page `ui::menu::Menu`: the
+//! placement, the ground, the radius, the stops and the dim are the menu's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;

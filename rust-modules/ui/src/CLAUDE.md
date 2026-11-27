@@ -472,6 +472,17 @@ presentation in a design pass.
    `Row::destructive(true)` and open the table with `TableView::open_sections`, whose
    `opening_row` is also the focus fallback when a focused row disappears.
 
+   **A menu with pages is `menu.rs`'s `Menu`, and a host only supplies rows.** The Detail hosts (the hero
+   and tile `…` menus, Select Version, Audio & Subtitles, Also available) build a `Menu<P, Id, A>` from a
+   `Host` (grows out of its control / glass beside a card / a sheet under its opener / a card over the
+   video plane: the legal combinations are the enum, so a morph with no opener or glass over the video is
+   not a value) and a `Class` (Action: BODY rows, the lightest dim; Picker: HEADLINE rows, the panel dim).
+   The stack, the card's resize and the page slide, the placement, the width rule, the 20 px radius, the
+   ground, the stop registration, the pointer hold and the dim are the menu's, never a host's. A row that
+   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root is
+   inert), and every pushed page wears the header with the back mark (there is no way to have none). The
+   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers.
+
    **Popover open styles.** Two exist. `Appear` (default) is the shared `K_APPEAR` fade+slide.
    `Morph` (`Popover::morphing()` is the one selector; open with `open_from(opener.rect)`) is the glass opener's pill-to-panel
    morph in `popover_morph.rs`, fitted to a frame-by-frame measurement of iOS 26's glass menu (the
@@ -682,10 +693,11 @@ tried first. None of it is reconstructable from the code without repeating the m
   MENUS ONLY (owner decision, wave 2 review): Sort & Filter, the account menu, the item hold menu,
   the Library menu (the player's "…" menu stands over the video plane and keeps its own ground).
   Every other `panel_ground` user — the alerts, About, Track information, the person bio, the
-  Also-available sheet, the decision alert — keeps the pre-DS6 ground, the latched underlay field
-  under the frost. The choice is explicit at each call, `widgets::Ground::Menu` or
-  `Ground::Sheet` (`panel_ground`'s last argument, `Popover::panel`'s too); there is no global
-  switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
+  decision alert — keeps the pre-DS6 ground, the latched underlay field under the frost (the
+  Also-available sheet and the failure screen's pickers are `menu::Host::Sheet`s, which stand on it).
+  The choice is explicit at each call, `widgets::Ground::Menu` or `Ground::Sheet` (`panel_ground`'s
+  last argument, `Popover::panel`'s too), and for a Detail host it is `ui::menu`'s, derived from the
+  host (`Host::surface`); there is no global switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
   `gfx::draw_glass_frozen`, wearing a gradient face (`FROST_FACE`, `theme::MENU_GLASS_TOP/BOT`,
   .36/.44), the 1 px `theme::GLASS_RIM`, the lit top edge `GLASS_RIM_LIGHT` and `GlassRim::Menu`,
   then a soft shadow cut out around the panel's rounded shape. **It reads no framebuffer** (owner

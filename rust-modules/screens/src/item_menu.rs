@@ -40,22 +40,25 @@
 //! (`loaded_episode`, `from_home`), which is all it was still deciding once the route it named
 //! stopped existing.
 //!
+//! **The panel is `plx_ui::menu::Menu`'s; this module supplies rows.** The stack, the card's resize and the
+//! page slide, the placement, the glass, the stops, the pointer hold and the dim are the menu's, chosen by its
+//! [`plx_ui::menu::Host`]: a menu opened from a HERO control grows out of it, one opened from a tile stands
+//! beside its card.
+//!
 //! **A menu opened from a HERO control grows out of it.** The Detail hero's `…` ([`ItemMenuKind::HeroOverflow`])
-//! is a control, not a card: the panel is the control's own glass (`Popover::morphing` + `open_from`, the
-//! path every header menu takes), laid over it (`plx_ui::detail_layout::hero_panel_over`, clear of the
-//! synopsis whenever the page fits), the page leaves the control out of its pass and the opener lift
-//! draws it at the morph's `opener_alpha`, and BACK at its rows or a pick drains the glass back into
-//! it. **Select Version and Audio & Subtitles are PAGES of that glass**: OK on the row pushes the page
-//! onto the menu's one page stack ([`ItemMenuScreen::pages`], `plx_ui::page_stack::push_page`, the idiom
-//! the standalone Audio & Subtitles panel stands on), the card springs to the page's rect and the pages
-//! slide in it (`PanelMotion`), BACK pops to the rows with the ring on the row that opened the page,
-//! and Audio & Subtitles pushes Audio or Subtitles further in the same glass. The page content is the
-//! code the standalone panels use (`plx_appkit::version_list`, `plx_appkit::preplay_tracks`), which
-//! stay the round fourth-slot button's panel and the failure screen's. A pick in Select Version
-//! closes the whole menu (the page selects it); a track pick keeps the menu up with the check moved.
-//! A menu opened from a TILE (every other kind) has no popover: the panel stands beside the card, the
-//! lift is whole, and its Select Version row pushes the same page onto the same stack (the card
-//! resizes and the pages slide as a hero menu's do; BACK returns to the rows). The branch is the
+//! is a control, not a card: the panel is the control's own glass (`Host::Grows`, built by
+//! `plx_ui::detail_layout::hero_host`), laid over it clear of the synopsis whenever the page fits, the page
+//! leaves the control out of its pass and the opener lift draws it at the morph's `opener_alpha`, and BACK at
+//! its rows or a pick drains the glass back into it. **Select Version and Audio & Subtitles are PAGES of that
+//! glass**: their rows are `Nav` rows, so OK and RIGHT push the page onto the menu's one page stack, the card
+//! springs to the page's rect and the pages slide in it, and BACK and LEFT pop to the rows with the ring on
+//! the row that opened the page (LEFT at the rows is inert); every pushed page wears the header with the back
+//! mark. Audio & Subtitles pushes Audio or Subtitles further in the same glass. The page content is the code
+//! the standalone panels use (`plx_appkit::version_list`, `plx_appkit::preplay_tracks`), which stay the round
+//! fourth-slot button's panel and the failure screen's. A pick in Select Version closes the whole menu (the
+//! page selects it); a track pick keeps the menu up with the check moved. A menu opened from a TILE (every
+//! other kind) has no glass of its own to grow: the panel stands beside the card (`Host::BesideGlass`), the
+//! lift is whole, and its Select Version row pushes the same page onto the same stack. The branch is the
 //! opener, which is `HeroOverflow`'s identity, held as the presence of its [`Hero`] state.
 //!
 //! It still only **reports** the chosen [`Action`]: `AppFx::ItemMenu` carries it to

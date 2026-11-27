@@ -2,8 +2,8 @@
 //!
 //! Deliverable E of the Shared Sources design (`docs/shared-servers.md` §6): when a second pinned
 //! source also holds the item on screen, the detail page's actions row grows an *Also available*
-//! pill with a trailing chevron, and it opens this panel — a `TableView` on the panel ground
-//! (`widgets::panel_ground`), the same object the Library's Sort and Filter chips open one page over.
+//! pill with a trailing chevron, and it opens this panel — a one-page `ui::menu::Menu` hung under or above that
+//! pill (`Host::Sheet`: the latched field, never glass), whose rows this module declares.
 //!
 //! **A `Style::Compact` surface on the container tree** since restructure phase 10 (§6.2): the
 //! anchored menu the Library's chips already are. The container owns its PHASE and its appear
