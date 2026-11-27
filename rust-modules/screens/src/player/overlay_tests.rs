@@ -1540,8 +1540,8 @@ const MENUS: [(OverlayKind, &str); 4] = [
 
 fn menu_anchor_of(page: &PlayerOverlayScreen, name: &str) -> plx_ui::Rect {
     match page.panel() {
-        Panel::Tracks(p) => p.anchor(),
-        Panel::More(p) => p.anchor(),
+        Panel::Tracks(p) => p.menu().anchor().expect("a video card hangs from an anchor"),
+        Panel::More(p) => p.menu().anchor().expect("a video card hangs from an anchor"),
         _ => panic!("{name}: a menu"),
     }
 }

@@ -5,9 +5,9 @@
 //!
 //! It owns no UI and no table: the popover keeps its own [`FormTable`] and calls
 //! [`PageStack::push`] / [`PageStack::pop`] around the form operations (`FormTable::open` on a push,
-//! `FormTable::restore` on a pop). `plx_appkit::track_menu::TrackMenuState` (Subtitles' Style and
-//! language pages) and `plx_appkit::more_menu::MoreMenuState` (Quality) both stand on it, so the
-//! two cannot drift on what a push saves or what the replay canon says about it.
+//! `FormTable::restore` on a pop). [`crate::menu::Menu`] is the one popover that stands on it, for every host
+//! (the Tracks and More menus of the player among them), so no two menus can drift on what a push saves or what the
+//! replay canon says about it.
 //!
 //! The root is the EMPTY stack, not a value of `P`.
 use crate::a11y::{A11y, A11yPath, Role};
@@ -103,6 +103,14 @@ impl<P: Copy, R> PageStack<P, R> {
         self.saved.iter()
     }
 
+    /// Rename every saved opener: the rows of the pages beneath changed shape under a viewer, and a pop must land on
+    /// the row that stands for the opener NOW.
+    pub fn map_openers(&mut self, f: impl Fn(&R) -> R) {
+        for s in &mut self.saved {
+            s.return_id = f(&s.return_id);
+        }
+    }
+
     /// The stack's part of a popover's replay canon: the depth, then each page's stable `code` and
     /// its opener's key.
     pub fn canon(&self, c: &mut Canon, code: impl Fn(P) -> u32, key: impl Fn(&R) -> u32) {
@@ -128,10 +136,8 @@ where
 
 /// **What a popover must expose for its focus stops to be shared**: the form it shows, its
 /// [`PanelMotion`], and the two rects the card is laid out and drawn at. The
-/// `Focusable`/`Part` impls of `plx_appkit::track_menu::TrackMenuPart` and
-/// `plx_appkit::more_menu::MoreMenuPart` differ only in `reconcile`; everything else is the
-/// `popover_*` functions below, so the two cannot drift on where a stop is, what it clips to, or
-/// which way a key steps.
+/// `Focusable` answers of [`crate::menu::Menu`] are the `popover_*` functions below, so no two menus can
+/// drift on where a stop is, what it clips to, or which way a key steps.
 pub trait PopoverPanel {
     type Id: PartialEq + Clone;
     type Act: Clone;
@@ -177,8 +183,8 @@ pub fn popover_group_of<S: PopoverPanel, E: IndexElem>(
 /// **The accessibility projection of one popover row** (`a11y`): the id `name` gives the row's
 /// identity, and the role its [`RowKind`] says (a drill-in or a choice is a `Row`, a switch a
 /// `Toggle`, a command a `Button`). The title band's pointer-only key is not a row and projects
-/// nothing. The one implementation every popover shares (`plx_appkit::more_menu::MoreMenuPart`,
-/// `plx_appkit::track_menu::TrackMenuPart`, the Library's sort and view menu); each names its own
+/// nothing. The one implementation every popover shares (the player's `more_menu` and `track_menu`,
+/// the Library's sort and view menu); each names its own
 /// rows. It takes the popover's FORM, not a [`PopoverPanel`], because a menu that is itself a screen
 /// (the Library's) has the form and no panel.
 pub fn popover_a11y<Id: PartialEq + Clone, A: Clone, D: Clone, E: IndexElem>(

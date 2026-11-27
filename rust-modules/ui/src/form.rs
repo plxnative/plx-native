@@ -395,6 +395,19 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         }
     }
 
+    /// **An empty form dressed like this one** ([`TableView::blank_like`]): the same key band and table class, no rows.
+    /// A page that is built to be measured or warmed without being shown ([`crate::menu::Menu::prewarm_aside`]) lives in it.
+    pub fn blank_like(&self) -> Self {
+        Self {
+            table: self.table.blank_like(),
+            bindings: Vec::new(),
+            names: Vec::new(),
+            key_ceiling: self.key_ceiling,
+            engine_key: None,
+            reseat: None,
+        }
+    }
+
     /// [`Self::new`] over a route page's table ([`TableView::page`]): how every page drawn in a
     /// `RouteLayout` builds its form, so the page look is the design system's, never the screen's.
     pub const fn page(key_ceiling: u32) -> Self {

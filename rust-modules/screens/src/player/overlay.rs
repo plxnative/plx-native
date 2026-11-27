@@ -27,9 +27,11 @@
 //! (`ui::page_stack`): BACK, LEFT at the edge and a title click pop it, RIGHT and OK push it, and
 //! only BACK at the root dismisses; its replay canon carries the page path like Tracks'.
 //!
-//! **The `Focusable` half is real now (restructure phase 12, D2).** Each panel's own
-//! `*Part` wrapper (`appkit::track_menu::TrackMenuPart`, `appkit::more_menu::MoreMenuPart`) answers the Engine's query
-//! protocol (§7.1) over that panel's real row geometry, and [`PlayerOverlayScreen::step`] no
+//! **The `Focusable` half is real now (restructure phase 12, D2).** Each panel is the one menu component
+//! ([`plx_ui::menu::Menu`], `Host::Video`: a flat card over the picture, no glass and no morph), which answers the
+//! Engine's query protocol (§7.1) over its real row geometry, and the card, its stack of pages, its sizing and its
+//! radius are the component's, never this screen's; what stays here is the HUD's timing, the key ladder and the
+//! transport keys. And [`PlayerOverlayScreen::step`] no
 //! longer moves focus BY HAND: a direction falls through (`Handled::No`) to the engine's own
 //! `neighbour`/`EdgeRule` unless this panel's own cadence gate is still waiting
 //! ([`PANEL_REPEAT_MS`]) or the engine has just reached this panel's group EDGE and re-delivered
@@ -49,13 +51,13 @@ use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, LogicalState,
     Machine, NavOp,
 };
-use plx_appkit::more_menu::{MoreMenuPart, MoreOk};
+use plx_appkit::more_menu::MoreOk;
 use plx_ui::screen::{
-    At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Part, Placed, RenderStrategy,
+    At, Dir, DrawFrame, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy,
     Screen, ScreenEvent, Step,
 };
 use plx_appkit::timing_capsule::{CapsuleOut, TimingCapsule};
-use plx_appkit::track_menu::{TrackMenuPart, TrackOk};
+use plx_appkit::track_menu::TrackOk;
 
 use super::HudPolicy;
 use plx_ui::Rect;
@@ -277,7 +279,7 @@ fn menu_anchor() -> Rect {
 }
 
 impl PlayerOverlayScreen {
-    /// Every panel here answers on exactly one focus group — see each `*Part`'s own `groups()`
+    /// Every panel here answers on exactly one focus group — see each menu's own `groups()`
     /// (restructure phase 12); this screen never holds more than one panel at a time, so there is
     /// no second id to reserve.
     const GROUP: GroupId = GroupId(0);
@@ -813,7 +815,7 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
                 self.moved(fx);
                 Handled::No
             }
-            // A pointer click on ANY row (`Activate::Immediate`/`Direct`, every `*Part::draw`
+            // A pointer click on ANY row (`Activate::Immediate`/`Direct`, every `Menu::stops` registration
             // above) always applies at once.
             ScreenEvent::Activate(elem) => {
                 // the event names the row that was hit (its key for Tracks): seat the panel on
@@ -907,16 +909,16 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Machine<H> 
 impl PlayerOverlayScreen {
     /// Every visible row registers its own stop (§7.6) — the same per-row geometry
     /// `Focusable::place` answers for focus movement, so the hit map and the focus engine agree on
-    /// every rect. Each panel's own `*Part::draw` does the registration (it needs the
-    /// module-private row geometry this screen cannot reach directly); the paint happens first, on
-    /// the owned, mutable `Panel`. Paint-free, so issue #162's pointer census runs it on the host.
+    /// every rect. The menu component does the registration ([`plx_ui::menu::Menu::stops`], the one registration every
+    /// popover shares); the paint happens first ([`plx_ui::menu::Menu::paint`]). Paint-free, so issue #162's pointer
+    /// census runs it on the host.
     pub fn record_stops<H>(&self, f: &mut DrawFrame<'_, '_, H>)
     where
         H: crate::registry::PlayerLike + crate::registry::MetadataLike,
     {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.draw(f, Rect::FULL),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.draw(f, Rect::FULL),
+            Panel::Tracks(p) => p.menu().stops(f, self.entry),
+            Panel::More(p) => p.menu().stops(f, self.entry),
             // Timing owns its own key ladder and never asks the engine for focus, so it has no
             // per-row geometry to register — `draw`, below, paints the capsule itself.
             Panel::Timing(_) => {}
@@ -925,89 +927,83 @@ impl PlayerOverlayScreen {
 }
 
 /// **Real per-row groups, delegated to whichever panel is ACTIVE** (restructure phase 12, D2 —
-/// see `screens/player/mod.rs`'s own `Focusable` impl for the sibling case). Each panel exposes
-/// its own row geometry through a `*Part` wrapper (`appkit::track_menu::TrackMenuPart`,
-/// `appkit::more_menu::MoreMenuPart`), built fresh per query over a SHARED reference to the panel's
-/// own state — every method here is `&self`, and so is every method on this screen's own
-/// `Focusable` impl (§7.1: "the engine never mutates a screen"), which is why each wrapper's
-/// `state` field is `&'a StateType` rather than `&'a mut` (see each wrapper's own doc). This
+/// see `screens/player/mod.rs`'s own `Focusable` impl for the sibling case). Each panel's menu
+/// ([`plx_ui::menu::Menu`]) answers over a SHARED reference — every method here is `&self`, and so is every method
+/// on this screen's own `Focusable` impl (§7.1: "the engine never mutates a screen"). This
 /// screen holds exactly one panel at a time, so there is no `Composed`/`layout()` here — that
 /// trait concatenates SEVERAL simultaneous parts, and one instance's panels never coexist.
 impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerOverlayScreen {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.groups(cx, out),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.groups(cx, out),
+            Panel::Tracks(p) => p.menu().groups(Self::GROUP, cx.measure, out),
+            Panel::More(p) => p.menu().groups(Self::GROUP, cx.measure, out),
             // Timing declares no group at all — the capsule's own `key()` swallows every press
             // (`Handled::Yes`) before the engine's focus machinery ever sees one.
             Panel::Timing(_) => {}
         }
     }
-    fn group_of(&self, key: &u32, cx: &Cx<'_, H>) -> Option<GroupId> {
+    fn group_of(&self, key: &u32, _cx: &Cx<'_, H>) -> Option<GroupId> {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.group_of(key, cx),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.group_of(key, cx),
+            Panel::Tracks(p) => p.menu().group_of(key, Self::GROUP),
+            Panel::More(p) => p.menu().group_of(key, Self::GROUP),
             Panel::Timing(_) => None,
         }
     }
-    fn neighbour(&self, key: FocusKey<u32>, dir: Dir, cx: &Cx<'_, H>) -> Step<u32> {
+    fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, H>) -> Step<u32> {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.neighbour(key, dir, cx),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.neighbour(key, dir, cx),
+            Panel::Tracks(p) => p.menu().neighbour(self.entry, key, dir),
+            Panel::More(p) => p.menu().neighbour(self.entry, key, dir),
             Panel::Timing(_) => Step::Edge,
         }
     }
-    fn place(&self, key: &u32, cx: &Cx<'_, H>, at: At) -> Option<Placed> {
+    fn place(&self, key: &u32, cx: &Cx<'_, H>, _at: At) -> Option<Placed> {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.place(key, cx, at),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.place(key, cx, at),
+            Panel::Tracks(p) => p.menu().place(key, cx.measure),
+            Panel::More(p) => p.menu().place(key, cx.measure),
             Panel::Timing(_) => None,
         }
     }
-    fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
+    fn reconcile(&self, want: FocusKey<u32>, _cx: &Cx<'_, H>) -> FocusKey<u32> {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.reconcile(want, cx),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.reconcile(want, cx),
+            Panel::Tracks(p) => p.menu().reconcile(self.entry, want, Self::GROUP),
+            Panel::More(p) => p.menu().reconcile(self.entry, want, Self::GROUP),
             Panel::Timing(_) => want,
         }
     }
-    fn seat(&self, g: GroupId, from: Placed, cx: &Cx<'_, H>) -> FocusKey<u32> {
+    fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, H>) -> FocusKey<u32> {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.seat(g, from, cx),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.seat(g, from, cx),
+            Panel::Tracks(p) => p.menu().seat(self.entry),
+            Panel::More(p) => p.menu().seat(self.entry),
             Panel::Timing(_) => FocusKey { entry: self.entry, elem: 0 },
         }
     }
-    /// **The ids are the active panel's own** (`TrackMenuPart`, `MoreMenuPart`), which answer for
+    /// **The ids are the active panel's own** (`TrackMenuState::a11y`, `MoreMenuState::a11y`), which answer for
     /// their rows; the host qualifies them with this screen's namespace, which is the default
     /// `Screen::a11y_ns` (there is no override): `name()`, the active panel's `OverlayKind::word()`
     /// — `menu` for the track menu, `more` for the More panel, `timing` for Timing. A `tracks.…`
     /// selector therefore finds nothing here; `tracks` is the standalone tracks panel's namespace
-    /// (`tracks_panel.rs`). The part is built fresh for the query, so the projection is
-    /// handed back owning its text. Timing declares no group and so names nothing; `a11y_find`
+    /// (`tracks_panel.rs`). The projection is handed back owning its text. Timing declares no group and so names nothing; `a11y_find`
     /// stays the default walk over these two, which cannot disagree with them.
     fn a11y(&self, key: &u32, cx: &Cx<'_, H>) -> Option<plx_ui::a11y::A11y<'_>> {
         match &self.panel {
             Panel::Tracks(p) => {
-                let part = TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP };
-                let row = part.a11y(key, cx)?.into_owned();
+                let row = p.a11y(key)?;
                 // A track pick selects the part's streams on the PMS and a search result installs its subtitle on the
                 // item (`TrackRow::writes_title`): those rows name the title playing. The rest of the menu names none.
-                Some(match part.writes_title_at(key).then(|| super::playing_rk(H::session(cx))).flatten() {
+                Some(match p.writes_title_at(key).then(|| super::playing_rk(H::session(cx))).flatten() {
                     Some(rk) => row.with_subject(rk),
                     None => row,
                 })
             }
             Panel::More(p) => {
-                let part = MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP };
-                let row = part.a11y(key, cx)?.into_owned();
+                let row = p.a11y(key)?;
                 // A folded Previous, Next or From beginning plays a title: the row names the key its command plays,
                 // read the way the performer reads it (`HudCommand::plays_rk`). A quality rung re-resolves the title
                 // (`super::quality_pick_subject`), a retry of the failed request when the play failed. Every other row
                 // (Stats, a speed) names none.
                 let ps = H::session(cx);
                 use plx_appkit::more_menu::Action;
-                let subject = match part.action_at(key) {
+                let subject = match p.action_at(key) {
                     Some(Action::Hud(command)) => command.plays_rk(ps),
                     Some(Action::SetQuality(_)) => super::quality_pick_subject(ps),
                     // exhaustive, so a new action cannot reach here without deciding whether it acts on a title
@@ -1021,10 +1017,10 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Focusable<H
             Panel::Timing(_) => None,
         }
     }
-    fn a11y_elems(&self, g: GroupId, cx: &Cx<'_, H>, out: &mut Vec<u32>) {
+    fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<u32>) {
         match &self.panel {
-            Panel::Tracks(p) => TrackMenuPart { state: p, entry: self.entry, group: Self::GROUP }.a11y_elems(g, cx, out),
-            Panel::More(p) => MoreMenuPart { state: p, entry: self.entry, group: Self::GROUP }.a11y_elems(g, cx, out),
+            Panel::Tracks(p) => p.a11y_elems(g, Self::GROUP, out),
+            Panel::More(p) => p.a11y_elems(g, Self::GROUP, out),
             Panel::Timing(_) => {}
         }
     }
@@ -1062,29 +1058,27 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Screen<H> f
         self.suppressed = plx_appkit::player_hud::transport_hidden(&H::screen_inputs(cx).player_presentation)
             && !self.kind.survives_failure();
         // The first `update` is a frame behind the mount, so the root page's strings are queued
-        // here for the open frame's drain instead (`TrackMenuState::warm_open`).
+        // here for the open frame's drain instead (`plx_ui::menu::Menu::prepare`).
         if !self.suppressed {
             match &self.panel {
-                Panel::Tracks(p) => p.warm_open(cx.measure),
-                Panel::More(p) => p.warm_open(cx.measure),
+                Panel::Tracks(p) => p.menu().prepare(cx.measure),
+                Panel::More(p) => p.menu().prepare(cx.measure),
                 Panel::Timing(_) => {}
             }
         }
     }
-    /// **The panel's dim, through the container like every other surface's.** It used to be
-    /// hand-drawn at the top of each panel's `draw`; the container paints it now, at the end of the
-    /// player's page pass — the same z-order (over the transport and subtitles, under the panel) —
-    /// through the stack's one field, which has no page to read over the video plane and so stays the
-    /// flat neutral ink (`Scrim::over_video`) — the artwork's colour never casts on the player.
-    /// The Timing capsule asks for none: it sits in the transport's own band and dims nothing.
+    /// **The panel's dim, through the container like every other surface's.** The menu component names its own weight
+    /// (`Host::Video`'s [`plx_ui::menu::Shade`]) and the container paints it at the end of the player's page pass — over
+    /// the transport and subtitles, under the panel — through the stack's one field, which has no page to read over the
+    /// video plane and so stays the flat neutral ink (`Scrim::over_video`): the artwork's colour never casts on the
+    /// player. The Timing capsule asks for none: it sits in the transport's own band and dims nothing.
     fn scrim(&self) -> plx_ui::screen::Scrim {
-        use plx_ui::theme::underlay::{DIM_PLAYER, DIM_SHEET};
         if self.suppressed {
             return plx_ui::screen::Scrim::NONE;
         }
-        match self.panel {
-            Panel::Tracks(_) => plx_ui::screen::Scrim::over_video(DIM_PLAYER),
-            Panel::More(_) => plx_ui::screen::Scrim::over_video(DIM_SHEET),
+        match &self.panel {
+            Panel::Tracks(p) => p.menu().scrim(),
+            Panel::More(p) => p.menu().scrim(),
             // The capsule sits over the video in the transport's own band — no dim.
             Panel::Timing(_) => plx_ui::screen::Scrim::NONE,
         }
@@ -1099,13 +1093,11 @@ impl<H: crate::registry::PlayerLike + crate::registry::MetadataLike> Screen<H> f
         }
         // The container owns the appear spring; `DrawFrame::page_alpha` IS `Surface::motion.appear`
         // for a surface, which is what the panels' own `Popover` used to hold.
-        let appear = f.page_alpha;
-        let measure = f.measure;
         match &mut self.panel {
-            Panel::Tracks(p) => p.draw(appear, measure),
-            Panel::More(p) => p.draw(appear, measure),
+            Panel::Tracks(p) => p.menu().paint(f),
+            Panel::More(p) => p.menu().paint(f),
             // Fixed y, never the live caption's own baseline — see `player_hud::CAPSULE_BOTTOM_Y`.
-            Panel::Timing(p) => p.draw(plx_appkit::player_hud::CAPSULE_BOTTOM_Y, appear),
+            Panel::Timing(p) => p.draw(plx_appkit::player_hud::CAPSULE_BOTTOM_Y, f.page_alpha),
         }
         self.record_stops(f);
     }
