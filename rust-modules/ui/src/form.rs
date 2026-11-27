@@ -356,6 +356,20 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
                 .collect(),
         }
     }
+    /// [`Self::map`] that keeps the form's aliases ([`Self::alias`]): `id` re-types a row identity, and an alias
+    /// naming a row `id` refuses is dropped (that row is demoted by `f` or is not of the new alphabet). A shared
+    /// page builder whose pages can change shape under a viewer (`appkit::track_rows`) is adapted with this, so a
+    /// pop still lands on the row that stands for the one the page was opened from.
+    pub fn map_aliased<Id2, A2, Dest2>(
+        mut self,
+        f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>,
+        mut id: impl FnMut(&Id) -> Option<Id2>,
+    ) -> Form<Id2, A2, Dest2> {
+        let aliases = std::mem::take(&mut self.aliases);
+        let mut form = self.map(f);
+        form.aliases = aliases.into_iter().filter_map(|(was, is)| Some((id(&was)?, id(&is)?))).collect();
+        form
+    }
     /// Exactly the `Vec<Section>` a hand builder would make, and the bindings and accessibility
     /// names indexed by GLOBAL row index (`None` at inert slots).
     fn build(self) -> Built<Id, A, Dest> {

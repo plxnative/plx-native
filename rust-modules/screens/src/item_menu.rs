@@ -741,12 +741,13 @@ pub enum MenuPage {
 
 impl MenuPage {
     /// The page's header (drawn after the back mark, which every pushed page has): Select Version's, and the
-    /// Audio & Subtitles pages' (its root named as the row that opened it is).
-    fn title(self) -> String {
+    /// Audio & Subtitles root's (named as the row that opened it is). The pages under that root name themselves
+    /// (`PickerCore::page`'s title, the shared builders').
+    fn title(self) -> Option<String> {
         match self {
-            MenuPage::Versions => plx_appkit::version_list::title().to_string(),
-            MenuPage::Tracks(PickPage::Root) => tracks::title().to_string(),
-            MenuPage::Tracks(page) => PickerCore::title_of(page).unwrap_or_default(),
+            MenuPage::Versions => Some(plx_appkit::version_list::title().to_string()),
+            MenuPage::Tracks(PickPage::Root) => Some(tracks::title().to_string()),
+            MenuPage::Tracks(_) => None,
         }
     }
 }
@@ -875,25 +876,31 @@ impl PageSource<'_> {
                 let (versions, taken, can_play) = self.versions();
                 build_versions(&self.arg.rk, versions, taken, can_play)
             }
-            Some(MenuPage::Tracks(page)) => self.hero.map_or_else(Form::new, |hero| {
-                hero.tracks.page_form(page).map(|b| {
-                    let id = ItemRow::Pick(b.id);
-                    Some(plx_ui::form::Binding {
-                        key: id.key(),
-                        id,
-                        // a drill-in pushes the page it names, by the menu's one rule
-                        kind: match b.kind {
-                            RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
-                            RowKind::Toggle => RowKind::Toggle,
-                            RowKind::Choice => RowKind::Choice,
-                            RowKind::Button => RowKind::Button,
-                        },
-                        action: Action::Pick(b.id),
-                        disabled: b.disabled,
-                    })
-                })
-            }),
+            Some(MenuPage::Tracks(page)) => self.pick_page(page).map_or_else(Form::new, |p| p.form),
         }
+    }
+
+    /// An Audio & Subtitles page of the picker's core ([`PickerCore::page`]) as this menu's: its rows
+    /// re-identified as [`ItemRow::Pick`] and committing [`Action::Pick`], a drill-in pushing the page it names by the
+    /// menu's one rule. `None` off a hero menu, and for a language the item no longer offers.
+    fn pick_page(&self, page: PickPage) -> Option<Page<ItemRow, Action, MenuPage>> {
+        let built = self.hero?.tracks.page(page)?;
+        let form = built.form.map(|b| {
+            let id = ItemRow::Pick(b.id);
+            Some(plx_ui::form::Binding {
+                key: id.key(),
+                id,
+                kind: match b.kind {
+                    RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
+                    RowKind::Toggle => RowKind::Toggle,
+                    RowKind::Choice => RowKind::Choice,
+                    RowKind::Button => RowKind::Button,
+                },
+                action: Action::Pick(b.id),
+                disabled: b.disabled,
+            })
+        });
+        Some(Page::new(form, built.title).initial(built.initial.map(ItemRow::Pick)))
     }
 
     /// Where focus opens on `page`: the check mark's row, so the viewer sees what is chosen.
@@ -904,7 +911,7 @@ impl PageSource<'_> {
                 let n = taken.and_then(|id| versions.iter().position(|v| v.id == id))?;
                 Some(ItemRow::Version(n as u16))
             }
-            MenuPage::Tracks(page) => self.hero?.tracks.page_initial(page).map(ItemRow::Pick),
+            MenuPage::Tracks(page) => self.pick_page(page)?.initial,
         }
     }
 
@@ -913,7 +920,8 @@ impl PageSource<'_> {
     fn page(&self, page: Option<MenuPage>) -> Option<Page<ItemRow, Action, MenuPage>> {
         Some(match page {
             None => Page::root(self.root_form()),
-            Some(page) => Page::new(self.form(Some(page)), page.title()).initial(self.initial(page)),
+            Some(MenuPage::Tracks(page)) if page != PickPage::Root => self.pick_page(page)?,
+            Some(page) => Page::new(self.form(Some(page)), page.title().unwrap_or_default()).initial(self.initial(page)),
         })
     }
 }
@@ -1232,6 +1240,8 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
                 PickRow::OpenAudio => A11yPath::new().name("tracks").name("audio"),
                 PickRow::OpenSubtitles => A11yPath::new().name("tracks").name("subtitles"),
                 PickRow::SubOff => A11yPath::new().name("tracks").name("subtitle").name("off"),
+                PickRow::OpenOther => A11yPath::new().name("tracks").name("subtitle").name("other"),
+                PickRow::OpenLang(lang) => A11yPath::new().name("tracks").name("subtitle").name("lang").index(lang.slot),
                 PickRow::Audio(i) => A11yPath::new().name("tracks").name("audio").index(i),
                 PickRow::Sub(i) => A11yPath::new().name("tracks").name("subtitle").index(i),
             },
@@ -3269,7 +3279,7 @@ pub(crate) mod tests {
         assert!(menu.form().index_of_key(RowKey(ItemRow::Pick(PickRow::OpenSubtitles).key().0)).is_some(), "the root lists Audio and Subtitles");
         press_row(&mut menu, ItemRow::Pick(PickRow::OpenSubtitles));
         assert_eq!(depth(&menu), 2, "Subtitles pushes further in the same glass");
-        assert_eq!(menu.form().table.title(), PickerCore::title_of(PickPage::Subtitles).as_deref());
+        assert_eq!(menu.form().table.title(), Some(plx_os::i18n::msg::widgets_tracks_subtitles()));
         press_back(&mut menu);
         assert_eq!((depth(&menu), selected(&menu)), (1, Some(ItemRow::Pick(PickRow::OpenSubtitles).key().0)), "back to the A&S root on Subtitles");
         press_back(&mut menu);
