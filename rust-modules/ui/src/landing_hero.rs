@@ -128,14 +128,13 @@ pub fn shelf_fade(tiles_top: f32, hero_a: f32) -> WashRamp {
 /// layers when the hero slides. The field stays put while title and controls move across it.
 pub fn home_shade(shelf: WashRamp, hero_a: f32) -> crate::widgets::WashScrim {
     let k = hero_a.clamp(0.0, 1.0);
-    // Discussion #1574 experiment: one curved field from the bottom-left corner, no shelf ramp.
-    let side = SideShade::ellipse([0.0, SCR_H], theme::shade::HOME_CURVE_REACH, theme::shade::HOME_CURVE_FEATHER);
-    let shelf = WashRamp { stops: shelf.stops.map(|(y, _)| (y, 0.0)), ..shelf };
-    edge_wash(shelf, side, None, theme::shade::HOME_CURVE_A * k, k)
+    let side = SideShade::Box { horizontal: theme::shade::HOME_SIDE_X, vertical: theme::shade::HOME_SIDE_Y };
+    edge_wash(shelf, side, None, theme::shade::HOME_SIDE_A * k, k, None)
 }
 
-/// Detail's continuous edge shade. During the logo's move the left fade gives way to a shallow
-/// full-width top fade, and the bottom ramp moves down to the remaining copy.
+/// Detail's continuous edge shade: a U (`theme::shade::DETAIL_SIDE_CENTRE`) that eases off below
+/// the copy rows. At rest there is no full-width bottom ramp; during the logo's move the U gives way
+/// to a shallow full-width top fade, and a bottom ramp rises behind the remaining copy.
 pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_progress: f32) -> crate::widgets::WashScrim {
     let base = (visible * preview_base).clamp(0.0, 1.0);
     let field = (visible * preview_field).clamp(0.0, PREVIEW_FIELD);
@@ -144,25 +143,23 @@ pub fn detail_shade(visible: f32, preview_field: f32, preview_base: f32, logo_pr
     let lerp = |from, to| from + (to - from) * t;
     let [preview_top, preview_knee] = theme::shade::DETAIL_PREVIEW_FOOT_Y;
     let (top, knee) = (lerp(top, preview_top), lerp(knee, preview_knee));
-    // Discussion #1574 experiment: no full-width bottom ramp at rest; the curve alone carries the copy.
     let ramp = WashRamp { ink: theme::scrim(1.0), stops: [(top, 0.0), (knee, mid * t), (SCR_H, foot * t)] };
     let top_peak = theme::shade::DETAIL_PREVIEW_TOP_A * field * t;
     let top_fade = (top_peak > 0.0).then_some((theme::shade::DETAIL_PREVIEW_TOP_Y, top_peak));
-    // Discussion #1574 experiment: the shade lies OUTSIDE an off-screen ellipse whose lower-left arc
-    // is the owner's drawn edge (high on the left, sagging to y ~ 877 at the right edge).
-    let side = SideShade::Sag { centre: theme::shade::DETAIL_SAG_CENTRE, reach: theme::shade::DETAIL_SAG_REACH,
-        feather: theme::shade::DETAIL_SAG_FEATHER };
-    edge_wash(ramp, side, top_fade,
-        theme::shade::DETAIL_SAG_A * field * (1.0 - t), base.max(field.min(1.0)))
+    let side = SideShade::Sag { centre: theme::shade::DETAIL_SIDE_CENTRE, reach: theme::shade::DETAIL_SIDE_REACH,
+        feather: theme::shade::DETAIL_SIDE_FEATHER };
+    edge_wash(ramp, side, top_fade, theme::shade::DETAIL_SIDE_A * field * (1.0 - t), base.max(field.min(1.0)),
+        Some((theme::shade::DETAIL_RELIEF_Y, theme::shade::DETAIL_RELIEF_DEPTH)))
 }
 
 /// Both heroes' field: the `side` shade at `peak` joined with `ramp` (`gfx::scrim::EdgeShade`).
+/// `relief` eases the side down below a line (`EdgeShade::with_relief`).
 fn edge_wash(ramp: WashRamp, side: SideShade, top: Option<([f32; 2], f32)>,
-    peak: f32, strength: f32) -> crate::widgets::WashScrim {
+    peak: f32, strength: f32, relief: Option<([f32; 2], f32)>) -> crate::widgets::WashScrim {
     use plx_gfx::gfx::scrim::{EdgeShade, GroundShade};
     let field = if strength > 0.0 {
-        GroundShade::from_edge(EdgeShade::new(side, top, ramp.stops,
-            peak, theme::shade::EDGE_JOIN * strength))
+        let edge = EdgeShade::new(side, top, ramp.stops, peak, theme::shade::EDGE_JOIN * strength);
+        GroundShade::from_edge(match relief { Some((band, depth)) => edge.with_relief(band, depth), None => edge })
     } else {
         GroundShade::NONE
     };

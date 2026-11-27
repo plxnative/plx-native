@@ -80,6 +80,8 @@ float edge_alpha(vec2 px) {
   } else {
     upper = ink.z * (1.0 - smoothstep(edge.x, edge.y, px.x)) * smoothstep(edge.z, edge.w, px.y);
   }
+  // The relief (u_sc[5] = start, full, depth): the side eases to 1 - depth of itself below the copy.
+  upper *= 1.0 - u_sc[5].z * smoothstep(u_sc[5].x, u_sc[5].y, px.y);
   vec3 top = u_sc[3].xyz;
   if (top.z > 0.0) upper += top.z * (1.0 - smoothstep(top.x, top.y, px.y));
   float foot = px.y < shelf.y

@@ -271,6 +271,11 @@ pub struct EdgeShade {
     shelf: [(f32, f32); 3],
     peak: f32,
     join: f32,
+    /// `(start, full, depth)`: the side shade eases down to `1 - depth` of itself from y = `start`
+    /// to y = `full` (a smoothstep), so the field relaxes below the copy rows instead of holding its
+    /// peak over the empty foot of the screen (discussion #1574). `depth` 0 is no relief, exactly:
+    /// the factor is `1 - 0 * t`, and `start < full` always, so the shader's smoothstep is defined.
+    relief: [f32; 3],
 }
 
 impl EdgeShade {
@@ -278,13 +283,20 @@ impl EdgeShade {
     /// peak alpha, and the shelf ramp. The top fade's alpha and the side alpha can crossfade before
     /// the lower ramp joins them.
     pub fn new(side: SideShade, top: Option<([f32; 2], f32)>, shelf: [(f32, f32); 3], peak: f32, join: f32) -> Self {
-        Self { side, top, shelf, peak, join }
+        Self { side, top, shelf, peak, join, relief: [0.0, 1.0, 0.0] }
+    }
+
+    /// The side shade eased to `1 - depth` of itself from y = `start` to y = `full` (see `relief`).
+    pub fn with_relief(self, [start, full]: [f32; 2], depth: f32) -> Self {
+        debug_assert!(start < full && (0.0..=1.0).contains(&depth), "a relief eases down over a band, by 0..1");
+        Self { relief: [start, full, depth], ..self }
     }
 
     fn at(self, x: f32, y: f32) -> f32 {
         let progress = |v: f32, lo: f32, hi: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
         let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-        let side = self.peak * self.side.at(x, y);
+        let [start, full, depth] = self.relief;
+        let side = self.peak * self.side.at(x, y) * (1.0 - depth * smooth(progress(y, start, full)));
         let upper = side + self.top.map_or(0.0, |([start, end], peak)| {
             peak * (1.0 - smooth(progress(y, start, end)))
         });
@@ -313,6 +325,7 @@ impl EdgeShade {
             side: self.side.placed(ox, oy, s),
             top: self.top.map(|(bounds, peak)| (bounds.map(|y| y * s + oy), peak)),
             shelf: self.shelf.map(|(y, a)| (y * s + oy, a)),
+            relief: [self.relief[0] * s + oy, self.relief[1] * s + oy, self.relief[2]],
             ..self
         }
     }
@@ -444,6 +457,7 @@ impl GroundShade {
                 u[3] = [start, end, peak, 0.0];
             }
             u[4] = corner;
+            u[5] = [edge.relief[0], edge.relief[1], edge.relief[2], 0.0];
             return u;
         }
         for (i, b) in self.blocks.iter().enumerate() {

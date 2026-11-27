@@ -281,25 +281,35 @@ pub mod hero {
 /// Shared ink and geometry for the continuous Home and Detail edge fields and Catalog's
 /// feathered content blocks. Both field types use `gfx::scrim::GroundShade`.
 pub mod shade {
-    /// **Detail's side shade is an ellipse about the screen's bottom-left corner** (`gfx::scrim::SideShade`):
-    /// nothing on and outside these semi-axes (x along the bottom, y up the left edge), so on the
-    /// left edge it starts at y = 120, where the box it replaced started, and never sooner; wide,
-    /// so its iso-lines run in one long arc over the title's right end down toward the bottom-right.
-    pub const DETAIL_SIDE_REACH: [f32; 2] = [2200.0, 960.0];
-    /// **How far inside that ellipse the shade rises to full strength**, in px along its shorter
-    /// axis (wider along the longer one): a smoothstep, so the shade never changes faster than
-    /// `1.5 * DETAIL_SIDE_A / DETAIL_SIDE_FEATHER` per px in any direction. Wide on purpose: a
-    /// narrower band reads as an edge, which a tester took for a backlight fault (discussion #1460).
-    pub const DETAIL_SIDE_FEATHER: f32 = 380.0;
-    /// Grow the side shade's reach upward as the preview logo travels into the corner.
-    pub const DETAIL_PREVIEW_RISE: f32 = 260.0;
+    /// **Detail's side shade is the OUTSIDE of an ellipse whose centre stands off the screen's top**
+    /// (`gfx::scrim::SideShade::Sag`, discussion #1574): exactly 0 on and inside it, rising outward
+    /// over [`DETAIL_SIDE_FEATHER`]. Its lower-left arc is a U: high on the left edge, round under
+    /// the middle of the picture, back up toward the credits, so the copy column, the credits and the
+    /// first shelf heading stand in the shade while the middle and top right of the art stay clear.
+    /// Chosen from an offline sweep of U shapes, softness and strength over eight backdrops (white,
+    /// grey and six photographs), as the one that keeps more of the art than the corner ellipse it
+    /// replaced while every line of copy and the title logo reads at least as well on all eight.
+    pub const DETAIL_SIDE_CENTRE: [f32; 2] = [1400.0, -950.0];
+    /// The ellipse's semi-axes (x, y).
+    pub const DETAIL_SIDE_REACH: [f32; 2] = [1350.0, 1429.4];
+    /// **How far outside the ellipse the shade rises to full strength**, in px along its shorter axis:
+    /// a smoothstep, so the shade never changes faster than `1.5 * DETAIL_SIDE_A / DETAIL_SIDE_FEATHER`
+    /// per px. A wider band was tried (500 to 800): it softens the arc but needs a darker peak to hold
+    /// the copy, which darkens more of the art than it frees.
+    pub const DETAIL_SIDE_FEATHER: f32 = 350.0;
+    /// **The relief: below the copy rows the side shade eases to `1 - DETAIL_RELIEF_DEPTH` of itself**,
+    /// from y = `DETAIL_RELIEF_Y[0]` (under the action row) to `[1]` (the screen's foot). Only the
+    /// bold first shelf heading stands there, and it needs far less shade than the dim credits above
+    /// it; easing with y alone never opens a pocket between the copy and the credits.
+    pub const DETAIL_RELIEF_Y: [f32; 2] = [860.0, 1080.0];
+    pub const DETAIL_RELIEF_DEPTH: f32 = 0.45;
     /// Full-width top fade behind the compact preview title and the full-screen hint.
     pub const DETAIL_PREVIEW_TOP_Y: [f32; 2] = [20.0, 245.0];
     pub const DETAIL_PREVIEW_TOP_A: f32 = 0.45;
     /// Top and knee of the preview's bottom ramp, below the gap and behind the first lines of copy.
     pub const DETAIL_PREVIEW_FOOT_Y: [f32; 2] = [520.0, 630.0];
     /// Detail's edge shade strength before the preview boost.
-    pub const DETAIL_SIDE_A: f32 = 0.65;
+    pub const DETAIL_SIDE_A: f32 = 0.78;
     /// Inactive pagination dots still need contrast against the art.
     pub const PAGER_IDLE_A: f32 = 0.50;
 
@@ -312,20 +322,6 @@ pub mod shade {
     pub const HOME_SIDE_Y: [f32; 2] = [110.0, 405.0];
     /// Strength at the left under the logo, metadata and actions.
     pub const HOME_SIDE_A: f32 = 0.59;
-    /// Discussion #1574 experiment: Detail's edge, the owner's U (shade outside it, clear inside,
-    /// a soft fade along its inside), placed so every Detail text area (a logo up to 240 px tall over
-    /// the title foot, the facts, the synopsis, the actions, a three-line credits column, the first
-    /// shelf heading) stands on at least 90% of the peak, with as much of the picture clear as that
-    /// allows: the zero edge is the lower half of this ellipse.
-    pub const DETAIL_SAG_CENTRE: [f32; 2] = [1600.0, -600.0];
-    pub const DETAIL_SAG_REACH: [f32; 2] = [1050.0, 1100.0];
-    pub const DETAIL_SAG_FEATHER: f32 = 260.0;
-    pub const DETAIL_SAG_A: f32 = 0.80;
-    /// Discussion #1574 experiment: Home's curved field, an ellipse about the bottom-left corner
-    /// wide enough to reach the shelf captions on the right, its top on the left edge at y = 20.
-    pub const HOME_CURVE_REACH: [f32; 2] = [2600.0, 1060.0];
-    pub const HOME_CURVE_FEATHER: f32 = 420.0;
-    pub const HOME_CURVE_A: f32 = 0.75;
     /// Opacity difference over which the side and shelf shades softly join.
     pub const EDGE_JOIN: f32 = 0.10;
 
