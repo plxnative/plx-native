@@ -1,8 +1,5 @@
-{"updated":"2026-11-27T21:59:05Z",
+{"updated":"2026-11-28T03:05:05Z",
 "ci":[
-{"id":33248488089,"at":"2026-08-29T10:43:47Z","sha":"37a5160c4","title":"Merge branch 'abr-mode-flap' into main","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":111},"failed":["host checks (NOT a device gate)"]},
-{"id":33276894833,"at":"2026-08-29T21:45:48Z","sha":"87aae35ff","title":"ui: a control on video is a light film, and a capsule is not a stadium","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
-{"id":33277367034,"at":"2026-08-29T21:57:25Z","sha":"0108aed2e","title":"search: the query stops being a control and becomes the page's own title","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":109},"failed":["host checks (NOT a device gate)"]},
 {"id":33307798795,"at":"2026-08-30T10:59:48Z","sha":"c424c620a","title":"chore: share agent configuration across harnesses","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
 {"id":33331246356,"at":"2026-08-30T19:34:30Z","sha":"ddd75c6b1","title":"merge: align search and control materials","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
 {"id":33409582583,"at":"2026-08-31T15:38:13Z","sha":"69f1f4309","title":"Harden privacy-aware product telemetry","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6550,7 +6547,8 @@
 {"day":"2026-08-24","wf":"ci","event":"push","runs":4,"failed":0,"jobs":{"cross-build (armv7) + artifact assertions":106,"host checks (NOT a device gate)":108},"longest":110},
 {"day":"2026-08-26","wf":"ci","event":"push","runs":1,"failed":0,"jobs":{"cross-build (armv7) + artifact assertions":99,"host checks (NOT a device gate)":125},"longest":125},
 {"day":"2026-08-27","wf":"ci","event":"push","runs":1,"failed":0,"jobs":{"cross-build (armv7) + artifact assertions":96,"host checks (NOT a device gate)":108},"longest":108},
-{"day":"2026-08-28","wf":"ci","event":"push","runs":6,"failed":5,"jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"longest":110}
+{"day":"2026-08-28","wf":"ci","event":"push","runs":6,"failed":5,"jobs":{"cross-build (armv7) + artifact assertions":108,"host checks (NOT a device gate)":129},"longest":110},
+{"day":"2026-08-29","wf":"ci","event":"push","runs":3,"failed":3,"jobs":{"cross-build (armv7) + artifact assertions":109},"longest":109}
 ],
 "flaky":[
 {"run":40071490036,"at":"2026-10-24T06:58:17Z","sha":"f596f952d","pr":977,"job":"host unit tests (default features)","test":"plxnative_modules::app::bridge::home_retention_tests::home_worker_results_cross_the_addressed_dispatcher_ingest_once","fail":[1],"pass":[2]},
