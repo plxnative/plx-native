@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Renditja e bibliotekave",
+  "library_order.value_server": "Renditja e serverit",
+  "library_order.value_first": "{title} e para",
+  "library_order.row_detail": "Zgjidh renditjen e bibliotekave të preferuara në Kreu dhe në kokën e Bibliotekës.",
+  "library_order.reset": "Rikthe renditjen",
+  "library_order.state_idle": "Shtyp OK për ta lëvizur {title} lart ose poshtë. Kreu dhe koka e faqes {kind} i shfaqin bibliotekat e preferuara në këtë renditje.",
+  "library_order.state_reset": "I rikthen bibliotekat e preferuara në renditjen që i listojnë serverët.",
+  "library_order.state_moving": "Po lëvizet {title}. Lart dhe Poshtë e lëvizin, OK e lë këtu, dhe Mbrapa e kthen në vend.",
+  "library_order.state_unnamed": "{title} nuk mund të lëvizet ende: serveri i saj nuk ka mbaruar lidhjen.",
+  "library_order.state_dropped": "{title} tani është {home} në Kreu dhe {header} në kokën e faqes {kind}.",
+  "library_order.state_confirm": "Shtyp sërish OK për t’i rikthyer bibliotekat e preferuara në renditjen që i listojnë serverët. Çdo buton tjetër e ruan renditjen tënde.",
+  "library_order.state_reset_done": "Bibliotekat e preferuara janë rikthyer në renditjen që i listojnë serverët.",
+  "library_order.state_unsaved": "Kjo renditje nuk u ruajt dot; vlen derisa të riniset PlxNative.",
+  "library_order.preview_caption": "{kind} · Koka e bibliotekës",
+  "library_order.preview_more": "Bibliotekat që nuk nxihen shkojnë pas …."
+}

@@ -214,6 +214,7 @@ fn the_subtitle_mode_readouts_are_pinned_in_every_language() {
         ("nl", "Audio niet in ondertiteltaal"),
         ("ca", "Àudio en un altre idioma"),
         ("hr", "Kada zvuk nije na jeziku titlova"),
+        ("sq", "Audio në gjuhë tjetër"),
     ];
     for (tag, _) in WANT {
         assert!(SHIPPED.iter().any(|p| p.tag() == *tag), "{tag} is pinned but no longer shipped");

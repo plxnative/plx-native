@@ -1,0 +1,15 @@
+{
+  "sort_facts.title": "Titulli",
+  "sort_facts.date_added": "Data e shtimit",
+  "sort_facts.release_date": "Data e publikimit",
+  "sort_facts.rating": "Vlerësimi",
+  "sort_facts.audience_rating": "Vlerësimi i publikut",
+  "sort_facts.last_viewed": "Data e shikimit",
+  "sort_facts.random": "Rastësisht",
+  "sort_facts.a_to_z": "A–Z",
+  "sort_facts.z_to_a": "Z–A",
+  "sort_facts.oldest_first": "Më të vjetrat së pari",
+  "sort_facts.newest_first": "Më të rejat së pari",
+  "sort_facts.lowest_first": "Më të ulëtat së pari",
+  "sort_facts.highest_first": "Më të lartat së pari"
+}

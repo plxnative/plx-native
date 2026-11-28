@@ -1037,6 +1037,52 @@ fn dutch_system_locale_resolves_with_regional_formatting() {
 }
 
 #[test]
+fn albanian_month_day_captions_cover_every_month_at_both_widths() {
+    const MEDIUM: [&str; 12] =
+        ["jan", "shk", "mar", "pri", "maj", "qer", "korr", "gush", "sht", "tet", "nën", "dhj"];
+    const LONG: [&str; 12] = [
+        "janar", "shkurt", "mars", "prill", "maj", "qershor", "korrik", "gusht", "shtator", "tetor",
+        "nëntor", "dhjetor",
+    ];
+    let captions = month_captions(Preference::Sq);
+    for (i, (medium, long)) in captions.iter().enumerate() {
+        assert_eq!(medium, &format!("12 {}", MEDIUM[i]));
+        assert_eq!(long, &format!("12 {}", LONG[i]));
+    }
+    let cx = LocaleContext::resolve(Preference::Sq, None, None, None, None);
+    assert_eq!(cx.month_day(2, 29, MonthWidth::Long).as_deref(), Some("29 shkurt"));
+    assert!(cx.month_day(2, 30, MonthWidth::Long).is_none());
+    assert_eq!(cx.month_short(11).as_deref(), Some("nën"));
+    assert_eq!(cx.month_year(2024, 11).as_deref(), Some("nën 2024"));
+}
+
+#[test]
+fn albanian_catalog_counts_follow_albanian_plurals() {
+    let sq = LocaleContext::resolve(Preference::Sq, None, None, None, None);
+    for (count, expected, category) in [
+        (0, "0 episode", PluralCategory::Other),
+        (1, "1 episod", PluralCategory::One),
+        (2, "2 episode", PluralCategory::Other),
+        (21, "21 episode", PluralCategory::Other),
+    ] {
+        assert_eq!(sq.plural(count), category);
+        assert_eq!(msg::browse_detail_episodes_in(&sq, count), expected);
+    }
+}
+
+#[test]
+fn albanian_system_locale_resolves_with_regional_formatting() {
+    for tag in ["sq", "sq-AL", "sq_AL.UTF-8", "sq-XK"] {
+        let cx = LocaleContext::resolve(Preference::System, Some(tag), None, None, None);
+        assert_eq!(cx.language(), Language::Sq, "{tag}");
+        assert_eq!(cx.preference(), Preference::System);
+    }
+    let sq = LocaleContext::resolve(Preference::Sq, None, None, None, None);
+    assert_eq!(sq.format_locale(), "sq-AL");
+    assert_eq!(sq.decimal(45, 1), "4,5");
+}
+
+#[test]
 fn a_local_midnight_is_refused_for_a_date_that_is_not_on_the_calendar() {
     for date in [[2026, 0, 1], [2026, 13, 1], [2026, 1, 0], [2026, 1, 32], [2026, 2, 29], [2026, 4, 31], [2026, -1, 5],
         [2026, 6, -3], [i32::MIN, 1, 1]] {

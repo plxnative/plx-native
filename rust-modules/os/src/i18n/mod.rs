@@ -228,7 +228,7 @@ impl LocaleContext {
     }
     /// Day and month with no year, for release captions: "12 Mar" / "12 March" in English,
     /// "12 de marzo" in Spanish, "12 mars" / "12 janv." in French, "12 marzo" in Italian,
-    /// "12 de março" in European Portuguese, "12. März" in German, "március 12." in Hungarian, "12 mrt" / "12 maart" in Dutch, and in Polish, Belarusian and Russian the genitive
+    /// "12 de março" in European Portuguese, "12. März" in German, "március 12." in Hungarian, "12 mrt" / "12 maart" in Dutch, "12 mar" / "12 mars" in Albanian, and in Polish, Belarusian and Russian the genitive
     /// after the day ("12 marca", "12 сакавіка", "12 марта") with the abbreviated form for medium. Hand-written tables, not
     /// ICU month data, so no name data is compiled in for the shipped languages. The year is
     /// unknown, so 29 February is a valid day; a day the calendar lacks returns `None`.
@@ -264,7 +264,7 @@ fn standalone_abbreviated(language: Language) -> &'static [&'static str; 12] {
 }
 
 /// Month data shared by yearless captions and full sort dates. Keep the ICU pattern/number
-/// formatter, but do not link its all-locale Gregorian month-name database for these twelve tables.
+/// formatter, but do not link its all-locale Gregorian month-name database for these thirteen tables.
 fn month_names(language: Language, width: MonthWidth) -> (&'static [&'static str; 12], &'static str) {
     match (language, width) {
         (Language::En | Language::Pseudo, MonthWidth::Medium) => (&EN_MEDIUM, " "),
@@ -293,6 +293,8 @@ fn month_names(language: Language, width: MonthWidth) -> (&'static [&'static str
         (Language::Nl, MonthWidth::Long) => (&NL_LONG, " "),
         (Language::Hr, MonthWidth::Medium) => (&HR_MEDIUM, ". "),
         (Language::Hr, MonthWidth::Long) => (&HR_GENITIVE, ". "),
+        (Language::Sq, MonthWidth::Medium) => (&SQ_MEDIUM, " "),
+        (Language::Sq, MonthWidth::Long) => (&SQ_LONG, " "),
     }
 }
 
@@ -539,6 +541,13 @@ pub fn ordinal(place: usize) -> String {
         n => msg::ordinal_other(i64::try_from(n).unwrap_or(i64::MAX)),
     }
 }
+/// CLDR `sq` format months: lower case, abbreviated without dots ("12 mar", "12 mars").
+const SQ_MEDIUM: [&str; 12] =
+    ["jan", "shk", "mar", "pri", "maj", "qer", "korr", "gush", "sht", "tet", "nën", "dhj"];
+const SQ_LONG: [&str; 12] = [
+    "janar", "shkurt", "mars", "prill", "maj", "qershor", "korrik", "gusht", "shtator", "tetor",
+    "nëntor", "dhjetor",
+];
 /// Reject control bytes and invalid tags before they can become HTTP headers. POSIX suffixes
 /// are only used at this input boundary; callers retain canonical BCP-47 tags.
 pub fn normalize(s: &str) -> Option<String> {

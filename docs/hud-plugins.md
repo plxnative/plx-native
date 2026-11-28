@@ -171,8 +171,8 @@ Text, formatting, languages
 - F26. `ui/src/CLAUDE.md`, Localization: "App-owned text (`i18n::msg`, `plex::languages` names,
   `Quality::label`) never elides in any shipped language ... server- and user-owned text ... may", and
   "Adaptive text size or kerning is not used to make text fit"; the player HUD, `up_next` and chapters are
-  listed under "Known unchecked surfaces". `i18n::SHIPPED` is generated from `locales/languages.json`, eleven
-  tags: en es be fr it pt de hu ru pl nl (`python3 -I -c` over the file).
+  listed under "Known unchecked surfaces". `i18n::SHIPPED` is generated from `locales/languages.json`, fourteen
+  tags: en es be ca fr it pt de hu ru pl nl hr sq (`python3 -I -c` over the file).
 - F27. Formatting: `fmt::clock` prints `m:ss` (`h:mm:ss` past an hour) with no leading zero
   (`ui/src/fmt.rs:159-167`), so a chapter at 0 prints "0:00"; `fmt::duration` uses `core.duration_minutes`
   = "{minutes}m" in English (`locales/en/core.json:19-25`), so 56 minutes prints "56m"; the HUD's

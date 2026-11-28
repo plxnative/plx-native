@@ -1156,7 +1156,7 @@ mod tests {
     /// **Classic through the renderer is the frozen census of the hand-written draw**: every primitive,
     /// glyph, text run and fill the renderer hands the painter hashes to the line `census-classic.golden.tsv`
     /// froze from the hand-written `classic::draw_hud` (93fc5091d), for every slot, focus, pause and panel
-    /// state, in the eleven historical languages. Catalan has a live-render test below; the state the host cannot reach is the title text and Up Next's
+    /// state, in the eleven historical languages. Newer languages have a live-render test below; the state the host cannot reach is the title text and Up Next's
     /// card (they need a playing item): the simulator's frame dump covers them.
     #[test]
     fn classic_through_the_renderer_draws_what_the_hand_written_hud_draws() {
@@ -1178,17 +1178,22 @@ mod tests {
         assert_eq!(FROZEN_CENSUS.lines().count(), compared, "the frozen file holds one line per case");
     }
 
-    /// Catalan is newer than the frozen hand-written census. Check its live renderer output
-    /// for every reachable frame without fabricating historical hashes.
+    /// Catalan, Croatian and Albanian are newer than the frozen hand-written census. Check every such language's
+    /// live renderer output for every reachable frame without fabricating historical hashes.
     #[test]
-    fn catalan_classic_renders_every_case() {
-        let _language = language_on_this_thread_for_test(Preference::Ca);
-        let cx = plx_os::i18n::current();
-        let hud = crate::player_hud::loaded::load_classic("0.0.0-test", cx, &FM);
-        for c in cases() {
-            let (drawn_census, drew) = drawn(&hud.compiled, c);
-            assert!(drew, "{c:?}: Catalan classic has a state for every frame");
-            assert!(!drawn_census.0.is_empty(), "{c:?}: Catalan classic draws something");
+    fn languages_newer_than_the_census_render_every_case() {
+        let frozen = frozen_census_languages();
+        let newer: Vec<Preference> = SHIPPED.iter().copied().filter(|language| !frozen.contains(language)).collect();
+        assert!(newer.contains(&Preference::Ca) && newer.contains(&Preference::Hr) && newer.contains(&Preference::Sq), "{newer:?}");
+        for language in newer {
+            let _language = language_on_this_thread_for_test(language);
+            let cx = plx_os::i18n::current();
+            let hud = crate::player_hud::loaded::load_classic("0.0.0-test", cx, &FM);
+            for c in cases() {
+                let (drawn_census, drew) = drawn(&hud.compiled, c);
+                assert!(drew, "{} {c:?}: classic has a state for every frame", language.tag());
+                assert!(!drawn_census.0.is_empty(), "{} {c:?}: classic draws something", language.tag());
+            }
         }
     }
 
