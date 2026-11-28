@@ -7,7 +7,7 @@
 //! `profile_prefs`:
 //!
 //! ```json
-//! "profile_prefs": [ { "user": "<home uuid, or \"\" for the account owner>", "account": "<grant::account_key>",
+//! "profile_prefs": [ { "user": "<home uuid, or \"\" for the account owner>", "account": "<account_stamp>",
 //!                      "prefs": { "subtitle_size": "large", "playback_quality": "720p_4_mbps" } } ]
 //! ```
 //!
@@ -26,9 +26,14 @@
 //!   [`super::de_soft_opt`], which turns anything it cannot read into `None` (the per-type `de_soft_*`
 //!   functions of [`Preferences`] turn garbage into the DEFAULT, which would shadow the fallback).
 //! * **Account-bound.** A record is visible only while its `account` equals the non-empty stamp of
-//!   the signed-in account (`grant::account_key` of the account token). The owner's `""` record of
-//!   two accounts therefore never mixes, a re-login that replaced the token without a sign-out
-//!   leaves the previous records unreachable, and the next write prunes them ([`put_own`]).
+//!   the signed-in account ([`crate::plex::session::account_stamp`]: the owner's identity when the
+//!   roster names one, otherwise `grant::account_key` of the account token). The owner's `""`
+//!   record of two accounts therefore never mixes. A re-login that replaces the token without a
+//!   sign-out keeps the records when the roster names the same owner (the stamp does not move;
+//!   a record an older build stamped with the token is adopted once,
+//!   [`super::adopt_legacy_token_stamps`]). A known different owner drops the list. An unnamed
+//!   roster leaves it. The next [`put_own`] still prunes every stamp but the one it writes, and
+//!   leaves an owner-stamped record in place while the write cannot name an owner.
 //! * **Written only through [`persist_profile_pref`] and [`persist_profile_hud`]** (one read-modify-write, `persist_profile_with`), which refuse without a seat, across a
 //!   tenure or credential change, and with an empty stamp.
 //! * **No `extensions`**: a field a later build adds is not carried by this one.
@@ -106,8 +111,9 @@ impl ProfilePrefs {
 pub struct ProfilePrefsRecord {
     /// The Plex Home user's `uuid`, or empty for the account owner.
     pub user: String,
-    /// `grant::account_key` of the account the values were picked under; a record is visible only
-    /// while this equals the signed-in account's non-empty stamp.
+    /// The owner stamp ([`crate::plex::session::account_stamp`]), or the token fingerprint while
+    /// the roster names no owner. A record is visible only while this equals the signed-in
+    /// account's non-empty stamp.
     #[serde(deserialize_with = "super::de_soft_string", skip_serializing_if = "String::is_empty")]
     pub account: String,
     pub prefs: ProfilePrefs,
@@ -192,11 +198,7 @@ pub fn effective_hud(legacy: &Preferences, own: Option<&ProfilePrefs>) -> String
 
 /// [`effective_hud`] over a stored record, for the profile `seat` names ([`stored_effective`]'s rule).
 pub fn stored_effective_hud(session: &Session, seat: &Seat) -> String {
-    let own = match seat {
-        Seat::Seated { user, stamp } => own_prefs(&session.prefs.profile_prefs, user, stamp),
-        Seat::Unseated => None,
-    };
-    effective_hud(&session.prefs, own)
+    effective_hud(&session.prefs, own_for(session, seat))
 }
 
 /// [`put_own`] for [`HudSelectionPref`]: the same refusals (an empty stamp, a pick the profile already holds) and
@@ -234,11 +236,46 @@ pub fn effective<S: ProfileSetting>(legacy: &Preferences, own: Option<&ProfilePr
 /// nobody to own a value and reads the legacy one. This is the value a stored session shows (the
 /// live cells may differ from it for a moment: a pick is published before it is written).
 pub fn stored_effective<S: ProfileSetting>(session: &Session, seat: &Seat) -> S::Value {
-    let own = match seat {
-        Seat::Seated { user, stamp } => own_prefs(&session.prefs.profile_prefs, user, stamp),
-        Seat::Unseated => None,
-    };
-    effective::<S>(&session.prefs, own)
+    effective::<S>(&session.prefs, own_for(session, seat))
+}
+
+/// The profile's own values for `seat`. A seat stamped with this session's owner stamp also
+/// reads a record an older build still has under the token fingerprint, until a write adopts it.
+fn own_for<'a>(session: &'a Session, seat: &Seat) -> Option<&'a ProfilePrefs> {
+    let Seat::Seated { user, stamp } = seat else { return None };
+    let records = &session.prefs.profile_prefs;
+    if let Some(own) = own_prefs(records, user, stamp) {
+        return Some(own);
+    }
+    let current = super::super::account_stamp(session);
+    let legacy = crate::plex::grant::account_key(&session.account_token);
+    if stamp == &current && !legacy.is_empty() && legacy != current {
+        own_prefs(records, user, &legacy)
+    } else {
+        None
+    }
+}
+
+/// Copy each field `dest` has not picked from `src`. Naming every field makes a new setting a
+/// compile error here.
+pub(crate) fn fill_absent(dest: &mut ProfilePrefs, src: &ProfilePrefs) {
+    let ProfilePrefs {
+        playback_quality, direct_play_mode, subtitle_tone, subtitle_size, subtitle_position,
+        hdr_overlay_brightness, next_episode_mode, skip_interval, instant_dpad_seeking, uri_engine,
+        dolby_vision_mode, intro_skip, credits_skip, deck_press, under_posters, audio_enhancements,
+        trailer_autoplay, hud_end_time, hud_selection,
+    } = src;
+    macro_rules! keep {
+        ($($field:ident),* $(,)?) => {$(
+            if dest.$field.is_none() { dest.$field = $field.clone(); }
+        )*};
+    }
+    keep!(
+        playback_quality, direct_play_mode, subtitle_tone, subtitle_size, subtitle_position,
+        hdr_overlay_brightness, next_episode_mode, skip_interval, instant_dpad_seeking, uri_engine,
+        dolby_vision_mode, intro_skip, credits_skip, deck_press, under_posters, audio_enhancements,
+        trailer_autoplay, hud_end_time, hud_selection,
+    );
 }
 
 /// **Make the record list hold `S = v` for (`user`, `stamp`)**, and say whether it changed. An empty
@@ -294,10 +331,12 @@ impl ProfileWrite {
 
     /// Whether the record `cur` is still the one this pick was made for.
     fn admits(&self, cur: &Session) -> bool {
+        let stamp_ok = !self.stamp.is_empty()
+            && (super::super::account_stamp(cur) == self.stamp
+                || crate::plex::grant::account_key(&cur.account_token) == self.stamp);
         crate::plex::session::tenure() == self.tenure
             && (self.client_id.is_empty() || cur.client_id == self.client_id)
-            && !self.stamp.is_empty()
-            && crate::plex::grant::account_key(&cur.account_token) == self.stamp
+            && stamp_ok
     }
 }
 
@@ -314,17 +353,22 @@ impl ProfileWrite {
 /// credentials moved, and the revocation guard of
 /// [`update_guarded_with_outcome`](super::super::update_guarded_with_outcome).
 pub fn persist_profile_pref<S: ProfileSetting>(w: &ProfileWrite, v: S::Value) -> bool {
-    persist_profile_with(w, |records| put_own::<S>(records, &w.user, &w.stamp, v))
+    let user = w.user.clone();
+    persist_profile_with(w, move |records, stamp| put_own::<S>(records, &user, stamp, v))
 }
 
 /// [`persist_profile_pref`] for [`HudSelectionPref`]: the one durable write of the chosen HUD, under the same
 /// guards (seat, tenure, credentials, an empty stamp).
 pub fn persist_profile_hud(w: &ProfileWrite, id: &str) -> bool {
-    persist_profile_with(w, |records| put_own_hud(records, &w.user, &w.stamp, id))
+    let user = w.user.clone();
+    let id = id.to_string();
+    persist_profile_with(w, move |records, stamp| put_own_hud(records, &user, stamp, &id))
 }
 
 /// The read-modify-write both doors share: `put` edits the record list and says whether it changed.
-fn persist_profile_with(w: &ProfileWrite, put: impl FnOnce(&mut Vec<ProfilePrefsRecord>) -> bool) -> bool {
+/// The stamp it writes is the session's [`super::super::account_stamp`] after any older-build
+/// token stamp has been adopted, so the write does not prune the record it just adopted.
+fn persist_profile_with(w: &ProfileWrite, put: impl FnOnce(&mut Vec<ProfilePrefsRecord>, &str) -> bool) -> bool {
     let (mut read, mut unchanged) = (false, false);
     let write = crate::plex::session::update_guarded_with_outcome(
         |cur| {
@@ -333,7 +377,10 @@ fn persist_profile_with(w: &ProfileWrite, put: impl FnOnce(&mut Vec<ProfilePrefs
             }
             read = true;
             let mut next = cur.clone();
-            if put(&mut next.prefs.profile_prefs) {
+            let adopted = super::adopt_legacy_token_stamps(&mut next);
+            let stamp = super::super::account_stamp(&next);
+            let changed = put(&mut next.prefs.profile_prefs, &stamp);
+            if changed || adopted {
                 Some(next)
             } else {
                 unchanged = true;

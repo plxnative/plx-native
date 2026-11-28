@@ -20,9 +20,11 @@
 //! A grant is minted only by discovery ([`mint`]), from a FRESH verdict — plex.tv's resources and
 //! a tokenless `/identity` answer — that [`InsecureEvidence::plaintext_eligibility`] calls
 //! eligible, and only when the person's recorded consent for that (account, server) allows it.
-//! Consent is the ACCOUNT's ([`account_key`]): an answer is honoured only while the plex.tv
-//! account that gave it is the one signed in, so a different account signing in on the same
-//! television is asked again.
+//! Consent is the ACCOUNT's ([`super::session::account_stamp`]): an answer is honoured only
+//! while the plex.tv account that gave it is the one signed in, so a different account signing
+//! in on the same television is asked again. A re-sign-in by the same owner keeps the answer.
+//! While the roster names no owner the stamp is still [`account_key`], and that answer is not
+//! honoured under a new token.
 //! It names:
 //!
 //! * the server's `machineIdentifier` — a grant admits THAT server's credential ([`allowed_for`]),
@@ -155,18 +157,27 @@ pub fn revision() -> u64 {
     REVISION.load(Ordering::Acquire)
 }
 
-/// **The account half of a consent's key** — a fingerprint of the plex.tv account token: the
-/// first 64 bits of SHA-256 over a domain tag and the token, hex. One-way, so the public
-/// preferences file that stores it says nothing usable about the credential; stable for as long
-/// as that sign-in lasts, so every profile of the account shares the answer. Empty for an empty
-/// token, and an empty key matches nothing — an answer that cannot be bound to an account is not
-/// honoured. A fresh sign-in (a new token) is therefore asked again: the closed direction.
+/// **The token fingerprint** — the first 64 bits of SHA-256 over a domain tag and the plex.tv
+/// account token, hex. One-way, so a preferences file that stores it says nothing usable about
+/// the credential. Empty for an empty token, and an empty key matches nothing.
+///
+/// This is the stamp only while the roster names no owner ([`super::session::account_stamp`]).
+/// A record an older build wrote under it is adopted onto the owner stamp once, when it still
+/// equals this fingerprint of the session that holds that token. A different owner does not
+/// adopt it. An owner the roster cannot name stays on this fingerprint, so a new token is asked
+/// again for plaintext consent: that remaining case is the closed direction.
 pub fn account_key(account_token: &str) -> String {
     if account_token.is_empty() {
         return String::new();
     }
-    let mut input = b"plx-consent:".to_vec();
-    input.extend_from_slice(account_token.as_bytes());
+    stamp_fingerprint("plx-consent:", account_token)
+}
+
+/// First 64 bits of SHA-256(`domain` || `material`), hex. `domain` separates two stamps that
+/// might otherwise be fed the same bytes (the token, the owner id).
+pub(crate) fn stamp_fingerprint(domain: &str, material: &str) -> String {
+    let mut input = domain.as_bytes().to_vec();
+    input.extend_from_slice(material.as_bytes());
     plx_base::sha256::sha256(&input)[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -617,9 +628,20 @@ fn persist(answer: Answer) {
     let Answer { account, machine_id, choice } = answer.clone();
     super::session::queue_update_settled(
         move |current| {
-            (account_key(&current.account_token) == account
-                && current.plaintext_choice(&account, &machine_id) != choice)
-                .then(|| current.with_plaintext_choice(&account, &machine_id, choice))
+            let legacy = account_key(&current.account_token);
+            let stamp = super::session::account_stamp(current);
+            // The answer was captured under the stamp this session still is: the owner stamp,
+            // or the token fingerprint from before the roster named anyone.
+            if account != stamp && account != legacy {
+                return None;
+            }
+            let mut next = current.clone();
+            let adopted = super::session::prefs::adopt_legacy_token_stamps(&mut next);
+            let stamp = super::session::account_stamp(&next);
+            if next.plaintext_choice(&stamp, &machine_id) == choice {
+                return adopted.then_some(next);
+            }
+            Some(next.with_plaintext_choice(&stamp, &machine_id, choice))
         },
         move |landed| written(&answer, landed),
     );
@@ -669,19 +691,40 @@ fn rewrite_unsaved(now: u32) {
 }
 
 /// **What the person has answered, as the account `account_token` belongs to** — the persisted
-/// answers in `persisted` that carry its [`account_key`], overlaid by this launch's. The one
-/// reading of consent: [`PlaintextAsk::capture`] and Settings' list both use it.
+/// answers in `persisted` that carry its [`account_key`], overlaid by this launch's. Kept for a
+/// caller that has a token and no roster. A session that may name its owner uses [`choices_of`].
 pub fn choices(persisted: &[PlaintextConsent], account_token: &str) -> Vec<(String, PlaintextChoice)> {
-    let account = account_key(account_token);
-    if account.is_empty() {
+    choices_under(persisted, &account_key(account_token), "")
+}
+
+/// [`choices`] for the session that is signed in: the owner stamp, and the token fingerprint
+/// while an older build's answer has not been adopted yet.
+pub fn choices_of(session: &super::session::Session) -> Vec<(String, PlaintextChoice)> {
+    choices_under(&session.prefs.plaintext_consent, &super::session::account_stamp(session), &account_key(&session.account_token))
+}
+
+/// Persisted answers under `current`, falling back to `legacy` for a server `current` has not
+/// yet recorded, overlaid by this launch's answers under either stamp.
+fn choices_under(persisted: &[PlaintextConsent], current: &str, legacy: &str) -> Vec<(String, PlaintextChoice)> {
+    if current.is_empty() && legacy.is_empty() {
         return Vec::new();
     }
-    let mut choices: Vec<(String, PlaintextChoice)> = persisted
-        .iter()
-        .filter(|c| c.account == account)
-        .map(|c| (c.machine_id.clone(), c.choice))
-        .collect();
-    for a in ANSWERS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|a| a.account == account) {
+    let legacy_applies = !legacy.is_empty() && legacy != current;
+    let mut choices: Vec<(String, PlaintextChoice)> = Vec::new();
+    for consent in persisted {
+        let same = consent.account == current || (legacy_applies && consent.account == legacy);
+        if !same {
+            continue;
+        }
+        if legacy_applies && consent.account == legacy
+            && persisted.iter().any(|other| other.account == current && other.machine_id == consent.machine_id)
+        {
+            continue;
+        }
+        choices.push((consent.machine_id.clone(), consent.choice));
+    }
+    let honoured = |account: &str| account == current || (legacy_applies && account == legacy);
+    for a in ANSWERS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|a| honoured(&a.account)) {
         choices.retain(|(m, _)| *m != a.machine_id);
         choices.push((a.machine_id.clone(), a.choice));
     }
@@ -707,7 +750,14 @@ impl PlaintextAsk {
     pub fn capture(account_token: &str) -> Self {
         let session = super::session::peek();
         let consent = CONSENT.load(Ordering::Acquire);
-        Self { scope: scope(), consent, choices: choices(&session.prefs.plaintext_consent, account_token) }
+        // The worker's token is the one captured at spawn. It selects this session's owner
+        // stamp only while it is still that session's token.
+        let choices = if session.account_token == account_token {
+            choices_of(&session)
+        } else {
+            choices(&session.prefs.plaintext_consent, account_token)
+        };
+        Self { scope: scope(), consent, choices }
     }
 
     /// The generations this capture may mint and offer under.

@@ -529,13 +529,16 @@ a dead source is **absent** from Home and states itself in its own library secti
   `session.with_pref::<Marker>(v)` (a `Copy` row; it writes the TOP-LEVEL key, so for the ten
   per-profile settings it is a fixture builder for the legacy fallback, never what a pick does).
   **The ten player settings and hero trailer autoplay are per profile** (`prefs/profile_prefs.rs`): a profile's own picks sit
-  in `profile_prefs` (`[{user, account, prefs}]`, `account` the `grant::account_key` stamp, the owner
+  in `profile_prefs` (`[{user, account, prefs}]`, `account` the owner stamp `session::account_stamp`,
+  the token fingerprint while the roster names no owner, the owner
   `user: ""`), and what a profile reads is `stored_effective` = its own value, else the frozen
   top-level key (`Setting::get`, a garbage own value included), else the default. The top-level keys
   are never copied and never written by a pick (`persist_profile_pref`, for a `Copy` `Setting`, and `persist_profile_hud`, for the HUD package id string,
   are the only writers and share `persist_profile_with`; they
-  refuse without a seat, across a tenure or credential change and with an empty stamp, and prunes
-  records of other accounts). `profile_prefs` is account-bound (`ACCOUNT_BOUND_PREFERENCES`, so
+  refuse without a seat, across a tenure or credential change and with an empty stamp, and prune
+  records of other accounts). A same-owner re-sign-in keeps the records; an older build's token
+  stamp is adopted once while that token is still the session's. A known different owner drops the
+  list at that re-sign-in. An unnamed roster leaves it. `profile_prefs` is account-bound (`ACCOUNT_BOUND_PREFERENCES`, so
   sign-out drops it and the legacy keys stay). Who is seated is `session::Seat`
   (`Seat::of(profile, stamp)`, `current_seat()`); the live cells follow it in `plx_media::route`.
   `hold_hint_taught` is Install and never account-bound, so sign-out keeps it: which hold hints
@@ -556,7 +559,8 @@ a dead source is **absent** from Home and states itself in its own library secti
   at `MAX_RECENT`, written by `Bridge::note_live_tune` through `route::remember`) have no `Copy` value and no whole-list accessor:
   their markers implement `Row` only (not `ListRow`), and they are written only through
   `ProfileMemory::upsert_with`. `track_memory` is account-bound (no stamp, no write; a write prunes
-  every other account's record), its entry strings are bounded (an over-long one reads as absent, a
+  every other account's record, and leaves an owner-stamped record in place while the roster names
+  no owner), its entry strings are bounded (an over-long one reads as absent, a
   title is cut), and it is capped at 64 entries a profile and held to a 32 KiB HOUSEHOLD budget by
   eviction, never refusal. It is READ at resolve time (`route::recall_all` into `ResolveEnv::memory`, and
   only for the SEATED profile: `recall` and `recall_all` ask `session::is_seated_as`, so an unseated
@@ -604,7 +608,9 @@ a dead source is **absent** from Home and states itself in its own library secti
   (`MemoryEntry::ADOPTS_UNSTAMPED`), at the plex list a write with no account token is still
   accepted, kept unstamped, and prunes nothing (the media door refuses it: a seat needs a non-empty
   stamp), and a record stamped for another account reads as nothing and is
-  pruned by the next write. The media half (`route/prefs.rs` `remember`) stamps its mirror write with
+  pruned by the next write of a named owner. The stamp is `session::account_stamp` (the owner, not
+  the token). A same-owner re-sign-in keeps the record; an older build's token stamp is adopted
+  once. The media half (`route/prefs.rs` `remember`) stamps its mirror write with
   the stamp the mirror was seeded under (`decision_memory_tests`
   `a_retune_or_a_forget_reaches_the_stamped_record_the_restore_seeded`).
 - **The contract for a new setting.** Step 4 is a review rule: no test or CI check enforces it.

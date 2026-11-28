@@ -591,7 +591,7 @@ fn the_unencrypted_connection_switch_shows_the_grant_and_revokes_it_at_once() {
     let _sess = multi_user_session("root-plaintext-switch");
     plx_plex::plex::reset_servers_for_test();
     plx_plex::plex::grant::reset_for_test();
-    let account = plx_plex::plex::grant::account_key(&plx_plex::plex::session::peek().account_token);
+    let account = plx_plex::plex::session::account_stamp(&plx_plex::plex::session::peek());
     assert!(!account.is_empty(), "the fixture session is signed in");
     let mut saved = plx_plex::plex::session::peek().with_plaintext_choice(&account, "lan-machine", PlaintextChoice::Allowed);
     saved.sources.push(plx_plex::plex::session::SourceRef {

@@ -481,7 +481,7 @@ pub trait MemoryTenant: MemoryEntry + Send + 'static {
 }
 
 /// What a mirror was seeded under: the revocation tenure, and the account stamp
-/// (`grant::account_key` of the account token).
+/// ([`plx_plex::plex::session::account_stamp`]).
 type Seed = (u64, String);
 
 struct MirrorState<R> {
@@ -522,10 +522,14 @@ impl<R: ProfileKeyed + Clone> KeyedMirror<R> {
     /// or account stamp; otherwise leave it, since it already holds everything the record does
     /// plus the writes still in flight.
     pub fn reseed(&self, record: &Session) {
-        let seed = (session::tenure(), plx_plex::plex::grant::account_key(&record.account_token));
+        let seed = (session::tenure(), plx_plex::plex::session::account_stamp(record));
         let mut state = self.lock();
         if state.seeded.as_ref() != Some(&seed) {
-            state.lists = R::slot(record).clone();
+            // An older build's records are stamped with the token fingerprint. Adopt them into
+            // this copy so a read under the owner stamp finds them. The file adopts on its next write.
+            let mut adopted = record.clone();
+            plx_plex::plex::session::prefs::adopt_legacy_token_stamps(&mut adopted);
+            state.lists = R::slot(&adopted).clone();
             state.seeded = Some(seed);
         }
     }
@@ -670,7 +674,9 @@ impl MemoryTenant for SubtitleOffsetEntry {
 /// token, a replay) cannot write to the owner's record of whatever account is on disk.
 ///
 /// Every tenant is account-bound, so the mirror write and the queued file write carry the account
-/// stamp (the mirror's, and the file's own `account_key`) and [`recall`] reads under it. `track_memory`
+/// stamp (the mirror's seed, and the file's [`account_stamp`](plx_plex::plex::session::account_stamp))
+/// and [`recall`] reads under it. A queued write whose seed is neither the file's stamp nor its
+/// token fingerprint is dropped. `track_memory`
 /// is read through [`recall`] and [`recall_all`] and written here, by `commit_audio_pick` and
 /// `commit_subtitle_pick` (the track menu's pick) and by nothing else but the harness's
 /// `plxnative-trackmemory=clear` and `=fill` (`dev::scenarios::arm_track_memory`), which remove and
@@ -685,7 +691,7 @@ pub fn remember<E: MemoryTenant>(
         plx_base::eventlog::log(&format!("{}: not remembered — no profile seated", E::log_label()));
         return false;
     }
-    {
+    let stamp = {
         let mut state = E::mirror().lock();
         if !MemoryMirror::valid(&state) {
             drop(state);
@@ -694,13 +700,23 @@ pub fn remember<E: MemoryTenant>(
         }
         let stamp = MemoryMirror::stamp(&state).to_string();
         state.lists.upsert_with(user, &stamp, &key, f.clone());
-    }
+        stamp
+    };
     let user = user.to_string();
     session::queue_update(move |cur| {
-        // The file's own account: the guard has already dropped this edit if it is not the one
-        // the mirror was seeded under.
-        let stamp = if E::ACCOUNT_BOUND { plx_plex::plex::grant::account_key(&cur.account_token) } else { String::new() };
-        cur.with_memory::<E>(|m| m.upsert_with(&user, &stamp, &key, f))
+        let current = plx_plex::plex::session::account_stamp(cur);
+        let legacy = plx_plex::plex::grant::account_key(&cur.account_token);
+        if E::ACCOUNT_BOUND && stamp != current && stamp != legacy {
+            return None;
+        }
+        let mut next = cur.clone();
+        let adopted = plx_plex::plex::session::prefs::adopt_legacy_token_stamps(&mut next);
+        let write_stamp = if E::ACCOUNT_BOUND { plx_plex::plex::session::account_stamp(&next) } else { String::new() };
+        match next.with_memory::<E>(|m| m.upsert_with(&user, &write_stamp, &key, f)) {
+            Some(written) => Some(written),
+            None if adopted => Some(next),
+            None => None,
+        }
     })
 }
 

@@ -257,7 +257,7 @@ fn a_publication_seats_only_a_stamped_profile() {
     assert_eq!(profile(Some(""), "").seat(), Seat::Unseated, "the owner of an unstamped sign-in is unseated too");
     assert_eq!(profile(Some("kid"), STAMP).seat(), Seat::Seated { user: "kid".into(), stamp: STAMP.into() });
     assert_eq!(profile(Some(""), STAMP).seat(), Seat::Seated { user: String::new(), stamp: STAMP.into() });
-    assert_ne!(profile(Some("kid"), STAMP).seat(), profile(Some("kid"), OTHER_STAMP).seat(), "a re-login is a new seat");
+    assert_ne!(profile(Some("kid"), STAMP).seat(), profile(Some("kid"), OTHER_STAMP).seat(), "a different account stamp is a different seat");
     assert_eq!(profile(Some("kid"), STAMP).seat().user(), Some("kid"));
     assert_eq!(Seat::Unseated.user(), None);
 }
@@ -458,11 +458,11 @@ fn a_pick_is_refused_across_a_credential_or_client_change() {
         "neither refused pick left a trace");
 }
 
-/// **P-d9: a re-login without `ClearTenure` leaves the previous sign-in's picks unreachable, and the
-/// next write prunes them.** The boot path that replaces the account token over a stored record
-/// without a sign-out keeps the file's `profile_prefs`, which are stamped with the OLD token. Under
-/// the new stamp the old records are invisible (the profile reads the fallback, not a stranger's
-/// pick), and the first write under the new stamp drops them, so they cannot linger forever.
+/// **P-d9, for a sign-in that cannot name its owner.** The stamp is then still the token
+/// fingerprint, so a re-login without `ClearTenure` leaves the previous sign-in's picks
+/// unreachable, and the next write prunes them. A roster that names the same owner is not this
+/// case: that stamp does not change with the token
+/// (`memory_tests::a_same_owner_sign_in_keeps_track_memory_offsets_profile_prefs_and_consent`).
 #[test]
 fn relogin_without_clear_hides_and_prunes_profile_data() {
     let _g = plx_base::testlock::serial();

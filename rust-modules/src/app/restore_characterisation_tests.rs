@@ -209,10 +209,27 @@ struct Fixture {
     _session: session::TempSession,
 }
 
+/// The memory door's mirrors are process-global and keyed only by tenure and account stamp.
+/// `restore_install_rows` leaves a mirror that was already seeded under that stamp, because in the
+/// app the mirror is ahead of the file by the writes still queued. These fixtures all share
+/// `a0c-account`, so one test's boot (`dev_token_boot_is_unseated_and_reads_the_fallback` restores
+/// an empty recent list) would otherwise make the next test keep that empty mirror and show no
+/// stored channels. Drop the door here, the same way the profile-prefs mirror is dropped.
+fn unseed_memory_door() {
+    use plx_media::route::unseed_memory_for_test;
+    use plx_plex::plex::session::prefs::{RecentChannelEntry, TrackMemoryEntry};
+    use plx_plex::plex::session::{SubtitleOffsetEntry, VersionChoiceEntry};
+    unseed_memory_for_test::<RecentChannelEntry>();
+    unseed_memory_for_test::<TrackMemoryEntry>();
+    unseed_memory_for_test::<SubtitleOffsetEntry>();
+    unseed_memory_for_test::<VersionChoiceEntry>();
+}
+
 impl Fixture {
     fn new(tag: &str, record: &Session) -> Self {
         plx_plex::plex::reset_servers_for_test();
         plx_media::route::unseed_profile_prefs_for_test();
+        unseed_memory_door();
         let session = session::TempSession::new(tag);
         session::save(record);
         put(SCRAMBLED);
@@ -224,6 +241,7 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         put(DEFAULTS);
         plx_media::route::unseed_profile_prefs_for_test();
+        unseed_memory_door();
         plx_plex::plex::reset_servers_for_test();
     }
 }

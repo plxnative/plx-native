@@ -593,8 +593,8 @@ fn tier1_negative_control_a_new_public_slot_or_state_field_fails_decode() {
 #[test]
 fn tier1_real_shape_stamped_offsets_are_read_by_the_old_build_and_the_codec() {
     let original = rich();
-    let stamp = crate::plex::grant::account_key("tier1-account");
-    assert!(!stamp.is_empty());
+    let stamp = account_stamp(&original);
+    assert!(is_owner_stamp(&stamp), "the roster names an admin, so the stamp is the owner's");
     let (public, auth) = split_canonical(&original).unwrap();
     assert_eq!(public.preferences["subtitle_offsets"][0]["account"], serde_json::json!(stamp),
         "the real record is stamped with its own account");
@@ -624,13 +624,14 @@ fn tier1_real_shape_stamped_offsets_are_read_by_the_old_build_and_the_codec() {
 }
 
 /// **N7, at the persistence layer: a commit with a different account token carries the stored
-/// preferences through.** boot.rs :1105-1107 starts a QR sign-in with the stored session still on
-/// disk, so the new token replaces the old without a `ClearTenure`. `library_sorts` and
-/// `last_library` are cleared by sign-out (SO) but are not stamped, so THIS layer, which only writes
-/// what it is handed, keeps them. The login's own door clears them before it gets here
-/// (`memory_tests::a_login_over_another_accounts_session_does_not_inherit_its_library_views`). The
-/// stamped offsets do not pass either way: they stay in the file under the previous account's stamp,
-/// and read as nothing to the new one.
+/// preferences through.** boot.rs starts a QR sign-in with the stored session still on disk, so
+/// the new token replaces the old without a `ClearTenure`. `library_sorts` and `last_library`
+/// are cleared by sign-out but are not stamped, so THIS layer, which only writes what it is
+/// handed, keeps them. The login's own door clears them when the owner differs
+/// (`memory_tests::a_login_over_another_accounts_session_does_not_inherit_its_library_views`).
+/// Subtitle offsets are stamped with the owner, not the token, so the same roster keeps them
+/// readable under that stamp; a write adds to the record instead of pruning it. A different
+/// owner is dropped by the login door, not by this commit.
 #[test]
 fn relogin_without_clear_keeps_library_views() {
     use super::prefs::ProfileMemory;
@@ -655,13 +656,14 @@ fn relogin_without_clear_keeps_library_views() {
     }
     let offsets: Vec<SubtitleOffsets> = serde_json::from_value(after.preferences["subtitle_offsets"].clone()).unwrap();
     let key = (MACHINE.to_string(), "rk-1".to_string());
-    assert_eq!(offsets.get("u-7", &crate::plex::grant::account_key("tier1-account"), &key).map(|e| e.offset_ms), Some(1_500),
-        "the previous account's record is still in the file, under its own stamp");
+    let owner = account_stamp(&first);
+    assert_eq!(account_stamp(&second), owner, "the same roster is the same stamp");
+    assert_eq!(offsets.get("u-7", &owner, &key).map(|e| e.offset_ms), Some(1_500),
+        "the same owner's offset stays readable under the owner stamp");
     assert!(offsets.get("u-7", &crate::plex::grant::account_key("tier1-account-2"), &key).is_none(),
-        "and reads as nothing to the account that logged in over it");
+        "the new token's fingerprint is not the stamp");
 
-    // The new account's first writes: the view it inherited is still there beside its own, and the
-    // previous account's offsets are pruned by the write to the list.
+    // The same owner's next write adds an offset beside the one already stored.
     second.set_view_for("u-7", LibraryView {
         machine_id: MACHINE.into(), key: 2, sort: "titleSort".into(), desc: false, ..Default::default()
     });
@@ -674,8 +676,8 @@ fn relogin_without_clear_keeps_library_views() {
     assert_eq!(views.as_array().map(Vec::len), Some(2), "the inherited view stays beside the new one: {views}");
     assert_eq!(views[0]["sort"], serde_json::json!("addedAt"), "the previous account's view is still there");
     let offsets: Vec<SubtitleOffsets> = serde_json::from_value(written.preferences["subtitle_offsets"].clone()).unwrap();
-    assert_eq!(offsets.len(), 1, "the previous account's offsets are pruned: {offsets:?}");
-    assert_eq!(offsets[0].account, crate::plex::grant::account_key("tier1-account-2"));
-    assert_eq!(offsets[0].items.len(), 1);
-    assert_eq!(offsets[0].items[0].rating_key, "rk-2");
+    assert_eq!(offsets.len(), 1, "one profile, one record: {offsets:?}");
+    assert_eq!(offsets[0].account, account_stamp(&second));
+    let keys: Vec<_> = offsets[0].items.iter().map(|e| (e.rating_key.as_str(), e.offset_ms)).collect();
+    assert_eq!(keys, [("rk-1", 1_500), ("rk-2", 900)], "the same owner's earlier offset stays");
 }

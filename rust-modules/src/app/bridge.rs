@@ -1815,7 +1815,7 @@ impl Bridge<'_> {
         if self.retained.screen_grant_key != Some(key) {
             let session = &grant_session;
             let mut grants = plx_screens::inputs::GrantInputs { offers: grant::offers(),
-                choices: grant::choices(&session.prefs.plaintext_consent, &session.account_token),
+                choices: grant::choices_of(session),
                 connected: grant::granted_machines() };
             grants.connected.sort_unstable();
             if *next.grants != grants {

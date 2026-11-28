@@ -83,9 +83,10 @@ static CURRENT_PUBLICATION: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 pub struct CurrentProfile {
     pub user: Option<UserRef>,
     pub generation: u32,
-    /// `grant::account_key` of the account token the owner published this profile under: the half of
-    /// the [`Seat`] that says WHICH sign-in the profile belongs to. Empty before a sign-in and in a
-    /// publication recorded before the field existed.
+    /// `grant::account_key` of the account token the owner published this profile under, or the
+    /// owner stamp ([`account_stamp`]) once the roster names one: the half of the [`Seat`] that
+    /// says WHICH sign-in the profile belongs to. Empty before a sign-in and in a publication
+    /// recorded before the field existed.
     pub stamp: String,
 }
 
@@ -106,8 +107,10 @@ impl CurrentProfile {
 ///   change-profile, a sign-out, a dev token and a controlled replay. Nothing is restored for it and
 ///   nothing may be written for it.
 /// * [`Seat::Seated`] names the Plex Home user's `uuid` (`""` for the account owner) and the
-///   account stamp. Two seats are the same seat only when both match, so a re-login as the same
-///   person with a different token is a new seat.
+///   account stamp. Two seats are the same seat only when both match. The stamp is the owner's
+///   identity when the roster names one ([`account_stamp`]), so a re-login by the same owner is
+///   the same seat. A different owner, or a sign-in that cannot name its owner (the stamp falls
+///   back to the token fingerprint), is a different seat.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum Seat {
     #[default]
@@ -191,7 +194,7 @@ impl ProfilePublisher {
         }
     }
     /// Publish `user` as the active profile under the owner's `generation` and the account `stamp`
-    /// (`grant::account_key` of the account token) the owner published it under.
+    /// ([`account_stamp`]) the owner published it under.
     pub fn publish(&mut self, user: Option<UserRef>, generation: u32, stamp: String) {
         #[cfg(any(test, feature = "test-support"))]
         self.publish_with(user, generation, stamp, |_, _| {});
@@ -493,7 +496,7 @@ impl TempSession {
             next.account_token = account_token.into();
             Some(next)
         }), "the fixture session takes the account token");
-        let stamp = super::grant::account_key(account_token);
+        let stamp = account_stamp(&peek());
         publish_seat_for_test(Some(UserRef { uuid: uuid.into(), ..Default::default() }),
             current_gen().wrapping_add(1), stamp.clone());
         stamp
@@ -2065,9 +2068,11 @@ impl PlaintextChoice {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PlaintextConsent {
     pub machine_id: String,
-    /// The account that answered — `plex::grant::account_key`, a one-way fingerprint of its
-    /// plex.tv token. An entry is honoured only while that account is signed in; one with no
-    /// account (or another's) reads as never asked.
+    /// The account that answered — [`account_stamp`] of the session, which is
+    /// [`super::grant::account_key`] while the roster names no owner. An entry is honoured only
+    /// while that account is signed in; one with no account (or another's) reads as never asked.
+    /// A same-owner re-sign-in keeps it. A different owner, and an owner the roster cannot name
+    /// under a new token, is asked again.
     #[serde(default)]
     pub account: String,
     pub choice: PlaintextChoice,
@@ -2724,7 +2729,12 @@ impl Session {
     /// be honoured again while this one answers, and the file keeps only the live account's.
     pub fn with_plaintext_choice(&self, account: &str, machine_id: &str, choice: PlaintextChoice) -> Self {
         let mut next = self.clone();
-        next.prefs.plaintext_consent.retain(|c| c.account == account && c.machine_id != machine_id);
+        next.prefs.plaintext_consent.retain(|c| {
+            if c.machine_id == machine_id && c.account == account {
+                return false;
+            }
+            c.account == account || (!is_owner_stamp(account) && is_owner_stamp(&c.account))
+        });
         if choice != PlaintextChoice::Undecided && !machine_id.is_empty() && !account.is_empty() {
             next.prefs.plaintext_consent.push(PlaintextConsent {
                 machine_id: machine_id.to_owned(),
@@ -3128,7 +3138,8 @@ impl Session {
     /// other profile's alone — [`Session::set_view_for`]'s reason. A profile whose last entry is
     /// forgotten loses its record entirely, so the list never carries empties. The in-memory
     /// half of the memory door's `upsert_with` ([`prefs::ProfileMemory`]), stamping the record with
-    /// this session's own account (`grant::account_key`; none without an account token).
+    /// this session's account ([`account_stamp`]; the token fingerprint while the roster names
+    /// no owner, and none without an account token).
     pub fn set_subtitle_offset_for(&mut self, user: &str, machine_id: &str, rating_key: &str, offset_ms: Option<i64>) {
         let entry = offset_ms.map(|offset_ms| SubtitleOffsetEntry {
             machine_id: machine_id.to_string(),
@@ -3137,7 +3148,8 @@ impl Session {
             extensions: Default::default(),
         });
         let key = (machine_id.to_string(), rating_key.to_string());
-        let account = super::grant::account_key(&self.account_token);
+        prefs::adopt_legacy_token_stamps(self);
+        let account = account_stamp(self);
         self.prefs.subtitle_offsets.upsert_with(user, &account, &key, |_| entry);
     }
 }
@@ -4721,6 +4733,25 @@ pub fn replace_after_reauthentication_guarded_with_outcome(
     // never the token: a fresh QR sign-in always mints a new plex.tv token, so the same person
     // signing in again differs by token and must keep their pins, searches and library memory.
     // Unknown on either side (a roster not yet fetched, or one without a nameable admin) clears.
+    //
+    // The stamped account records follow the owner too, but they carry a stamp, so the rule is
+    // not "clear when unknown". A same owner moves records stamped with the stored token's
+    // fingerprint onto the owner stamp ([`account_stamp`]); records already on that stamp stay.
+    // A known different owner drops every stamped list ([`prefs::drop_stamped_account_records`]),
+    // so nothing of the previous account is left to read. An unnamed roster leaves them: moving
+    // them would hand them to whoever the unnamed token turns out to be, and dropping them would
+    // destroy the only copy. They stay unreadable under the new stamp until a write of a named
+    // owner prunes them.
+    if !cur.account_token.is_empty() && cur.account_token != next.account_token {
+        match (owner_identity(&cur.home_users), owner_identity(&next.home_users)) {
+            (Some(previous), Some(incoming)) if previous == incoming => {
+                prefs::rebind_account_records(&mut next, &super::grant::account_key(&cur.account_token));
+                prefs::adopt_legacy_token_stamps(&mut next);
+            }
+            (Some(_), Some(_)) => prefs::drop_stamped_account_records(&mut next),
+            _ => {}
+        }
+    }
     if !cur.account_token.is_empty() && !same_owner(&cur.home_users, &next.home_users) {
         next.prefs.last_library.clear();
         next.prefs.library_views.clear();
@@ -4746,6 +4777,39 @@ pub fn owner_identity(roster: &[HomeUserRef]) -> Option<String> {
 /// Do two rosters name the SAME account? Fails safe: an identity either side cannot name is "no".
 pub fn same_owner(a: &[HomeUserRef], b: &[HomeUserRef]) -> bool {
     matches!((owner_identity(a), owner_identity(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Prefix of a stamp derived from [`owner_identity`]. A token fingerprint is sixteen hex
+/// characters and never starts with this, so a write that does not yet know its owner can leave
+/// an owner-stamped record in place.
+pub const OWNER_STAMP_PREFIX: &str = "own:";
+
+/// Whether `stamp` was derived from an owner identity rather than from a token.
+pub fn is_owner_stamp(stamp: &str) -> bool {
+    stamp.starts_with(OWNER_STAMP_PREFIX)
+}
+
+/// **The stamp on account-bound records and on the published seat.**
+///
+/// When the roster names an owner this is [`OWNER_STAMP_PREFIX`] plus a one-way fingerprint of
+/// [`owner_identity`] (the roster admin's plex.tv id, the same id [`same_owner`] compares). A new
+/// sign-in token does not change it, so track memory, subtitle offsets, per-profile settings and
+/// plaintext consent stay readable. A Plex Home member's roster names that same admin, so the
+/// member shares the stamp: the boundary [`same_owner`] already draws for pins, searches and
+/// library memory. The session does not record which account the token itself belongs to, and
+/// naming that would take a new field.
+///
+/// When the roster names nobody, the stamp is [`super::grant::account_key`] of the token (empty
+/// without a token). Records written that way are adopted onto the owner stamp once the roster
+/// is known and the token still matches ([`prefs::adopt_legacy_token_stamps`], and a same-owner
+/// re-sign-in, which still holds the stored token). A different owner does not adopt them.
+pub fn account_stamp(session: &Session) -> String {
+    if let Some(identity) = owner_identity(&session.home_users) {
+        let mut stamp = String::from(OWNER_STAMP_PREFIX);
+        stamp.push_str(&super::grant::stamp_fingerprint("plx-owner:", &identity));
+        return stamp;
+    }
+    super::grant::account_key(&session.account_token)
 }
 
 /// What the routine-authority write actually did — the canonical verdict beside the

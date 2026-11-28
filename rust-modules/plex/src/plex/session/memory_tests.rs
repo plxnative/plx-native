@@ -471,3 +471,270 @@ fn a_login_keeps_what_belongs_to_the_same_account_identity_whatever_its_token() 
     login_with_roster("token-e", roster_of(7));
     assert_eq!(kept(&load()), (0, 0, 0, 0), "an unnamed stored identity clears");
 }
+
+const KEPT: (MarkerSkipMode, Option<i64>, bool, PlaintextChoice) =
+    (MarkerSkipMode::Automatic, Some(450), true, PlaintextChoice::Allowed);
+
+fn put_four(session: &mut Session, account: &str) {
+    assert!(prefs::put_own::<prefs::IntroSkipPref>(
+        &mut session.prefs.profile_prefs, "", account, MarkerSkipMode::Automatic));
+    session.prefs.subtitle_offsets.push(prefs::ProfileList {
+        user: String::new(),
+        account: account.into(),
+        items: vec![SubtitleOffsetEntry {
+            machine_id: "m".into(), rating_key: "rk".into(), offset_ms: 450, extensions: Default::default(),
+        }],
+        ..Default::default()
+    });
+    session.prefs.track_memory.push(prefs::ProfileList {
+        user: String::new(),
+        account: account.into(),
+        items: vec![prefs::TrackMemoryEntry {
+            machine_id: "m".into(),
+            show_rk: "1".into(),
+            audio: Some(prefs::AudioMemo { lang: "eng".into(), ..Default::default() }),
+            subtitle: None,
+        }],
+        ..Default::default()
+    });
+    session.prefs.plaintext_consent.push(PlaintextConsent {
+        machine_id: "m".into(),
+        account: account.into(),
+        choice: PlaintextChoice::Allowed,
+        extensions: Default::default(),
+    });
+}
+
+fn put_four_reset(session: &mut Session, account: &str) {
+    session.prefs.profile_prefs.clear();
+    session.prefs.subtitle_offsets.clear();
+    session.prefs.track_memory.clear();
+    session.prefs.plaintext_consent.clear();
+    put_four(session, account);
+}
+
+fn read_four(session: &Session) -> (MarkerSkipMode, Option<i64>, bool, PlaintextChoice) {
+    let stamp = account_stamp(session);
+    let legacy = crate::plex::grant::account_key(&session.account_token);
+    let seat = Seat::Seated { user: String::new(), stamp: stamp.clone() };
+    let intro = prefs::stored_effective::<prefs::IntroSkipPref>(session, &seat);
+    let offset_key = ("m".to_string(), "rk".to_string());
+    let show_key = ("m".to_string(), "1".to_string());
+    let under = |account: &str| (
+        session.prefs.subtitle_offsets.get("", account, &offset_key).map(|e| e.offset_ms),
+        session.prefs.track_memory.get("", account, &show_key).is_some(),
+    );
+    let (mut offset, mut track) = under(&stamp);
+    if stamp != legacy {
+        let (legacy_offset, legacy_track) = under(&legacy);
+        offset = offset.or(legacy_offset);
+        track |= legacy_track;
+    }
+    let mut consent = session.plaintext_choice(&stamp, "m");
+    if consent == PlaintextChoice::Undecided && stamp != legacy {
+        consent = session.plaintext_choice(&legacy, "m");
+    }
+    (intro, offset, track, consent)
+}
+
+fn stamped(session: &Session, account: &str) -> bool {
+    !session.prefs.profile_prefs.is_empty()
+        && session.prefs.profile_prefs.iter().all(|r| r.account == account)
+        && session.prefs.subtitle_offsets.iter().all(|r| r.account == account)
+        && session.prefs.track_memory.iter().all(|r| r.account == account)
+        && session.prefs.plaintext_consent.iter().all(|c| c.account == account)
+}
+
+/// The owner stamp is a fingerprint of the roster admin, not of the token. The same admin under
+/// two tokens is one stamp; another admin is not. With no admin the stamp is still the token
+/// fingerprint, and with no token it is empty.
+#[test]
+fn account_stamp_follows_the_owner_not_the_token() {
+    let named = Session { account_token: "token-a".into(), home_users: roster_of(7), ..Default::default() };
+    let again = Session { account_token: "token-b".into(), ..named.clone() };
+    let other = Session { home_users: roster_of(8), ..again.clone() };
+    let unnamed = Session { account_token: "token-a".into(), ..Default::default() };
+    assert_eq!(account_stamp(&named), "own:19afc47bcea99412");
+    assert_eq!(account_stamp(&named), account_stamp(&again), "a new token of the same owner");
+    assert_ne!(account_stamp(&named), account_stamp(&other));
+    assert_eq!(account_stamp(&unnamed), crate::plex::grant::account_key("token-a"));
+    assert_eq!(account_stamp(&Session::default()), "");
+    assert!(!is_owner_stamp(&account_stamp(&unnamed)));
+    assert!(is_owner_stamp(&account_stamp(&named)));
+}
+
+/// **A re-sign-in by the same owner keeps track memory, subtitle offsets, per-profile settings
+/// and plaintext consent.** They were written under the owner stamp, so the new token does not
+/// hide them. The install-wide skip key stays Manual: survival is the profile record.
+#[test]
+fn a_same_owner_sign_in_keeps_track_memory_offsets_profile_prefs_and_consent() {
+    let _serial = plx_base::testlock::serial();
+    let _root = TempSession::new("relogin-owner-stamp");
+    let mut first = Session {
+        client_id: "cid-1".into(), account_token: "token-a".into(), home_users: roster_of(7), ..Default::default()
+    };
+    let stamp = account_stamp(&first);
+    put_four(&mut first, &stamp);
+    save(&first);
+    assert_eq!(load().prefs.intro_skip, MarkerSkipMode::Manual, "control: the legacy key was not written");
+    assert_eq!(read_four(&load()), KEPT);
+
+    login_with_roster("token-b", roster_of(7));
+    let loaded = load();
+    assert_eq!(loaded.account_token, "token-b");
+    assert_eq!(read_four(&loaded), KEPT, "the same owner, a new token");
+    assert!(stamped(&loaded, &account_stamp(&loaded)), "the records stayed on the owner stamp");
+}
+
+/// **A record an older build stamped with the token fingerprint is adopted once** while that
+/// token is still this session's, and again at a same-owner re-sign-in, which still holds the
+/// stored token. A second adopt finds nothing. A stamp that is not this session's token is not
+/// adopted.
+#[test]
+fn an_older_builds_token_stamp_is_adopted_once() {
+    let _serial = plx_base::testlock::serial();
+    let _root = TempSession::new("relogin-adopt-once");
+    let mut first = Session {
+        client_id: "cid-1".into(), account_token: "token-a".into(), home_users: roster_of(7), ..Default::default()
+    };
+    let legacy = crate::plex::grant::account_key("token-a");
+    let stranger = crate::plex::grant::account_key("stranger");
+    put_four(&mut first, &legacy);
+    first.prefs.profile_prefs.push(prefs::ProfilePrefsRecord {
+        user: "other".into(),
+        account: stranger.clone(),
+        prefs: prefs::ProfilePrefs { intro_skip: Some(MarkerSkipMode::Disabled), ..Default::default() },
+    });
+    let owner = account_stamp(&first);
+    assert_ne!(legacy, owner);
+    assert!(prefs::adopt_legacy_token_stamps(&mut first), "the token stamp moves onto the owner");
+    assert!(first.prefs.profile_prefs.iter().filter(|r| r.user.is_empty()).all(|r| r.account == owner));
+    assert!(first.prefs.subtitle_offsets.iter().all(|r| r.account == owner));
+    assert!(first.prefs.track_memory.iter().all(|r| r.account == owner));
+    assert!(first.prefs.plaintext_consent.iter().all(|c| c.account == owner));
+    assert!(first.prefs.profile_prefs.iter().any(|r| r.account == stranger), "a stranger's stamp stays");
+    assert!(!prefs::adopt_legacy_token_stamps(&mut first), "a second adopt is a no-op");
+
+    put_four_reset(&mut first, &legacy);
+    save(&first);
+    login_with_roster("token-b", roster_of(7));
+    let loaded = load();
+    assert_eq!(read_four(&loaded), KEPT, "the same owner adopts the stored token's records");
+    assert!(stamped(&loaded, &account_stamp(&loaded)), "{:?}", loaded.prefs.profile_prefs);
+    assert!(loaded.prefs.profile_prefs.iter().all(|r| r.account != legacy));
+}
+
+/// **Version choices and recent channels move with the rest.** They are account-bound memory
+/// tenants too, so an older build's token-stamped records land on the owner stamp, not left
+/// behind under a stamp the next write prunes.
+#[test]
+fn an_older_builds_token_stamp_moves_version_choices_and_recent_channels() {
+    let mut session = Session {
+        client_id: "cid-1".into(), account_token: "token-a".into(), home_users: roster_of(7), ..Default::default()
+    };
+    let legacy = crate::plex::grant::account_key("token-a");
+    session.prefs.version_choices.push(prefs::ProfileList {
+        user: String::new(),
+        account: legacy.clone(),
+        items: vec![VersionChoiceEntry {
+            machine_id: "m".into(), rating_key: "rk".into(), media_id: 2, extensions: Default::default(),
+        }],
+        ..Default::default()
+    });
+    session.prefs.recent_channels.push(prefs::ProfileList {
+        user: String::new(),
+        account: legacy.clone(),
+        items: vec![prefs::RecentChannelEntry { machine_id: "m".into(), dvr: "d".into(), channel: "5".into() }],
+        ..Default::default()
+    });
+    let owner = account_stamp(&session);
+    assert!(prefs::adopt_legacy_token_stamps(&mut session));
+    assert!(session.prefs.version_choices.iter().all(|r| r.account == owner), "{:?}", session.prefs.version_choices);
+    assert!(session.prefs.recent_channels.iter().all(|r| r.account == owner), "{:?}", session.prefs.recent_channels);
+}
+
+/// **Version choices and recent channels follow the owner both ways.** A same-owner re-sign-in
+/// keeps the records already on the owner stamp. A different owner drops them, the same drop as
+/// the older stamped lists: leaving them would hand the previous account's chosen file and
+/// recent channels back when that owner signs in again.
+#[test]
+fn a_different_owner_drops_version_choices_and_recent_channels_and_the_same_owner_keeps_them() {
+    let _serial = plx_base::testlock::serial();
+    let _root = TempSession::new("relogin-version-recent");
+    let mut first = Session {
+        client_id: "cid-1".into(), account_token: "token-a".into(), home_users: roster_of(7), ..Default::default()
+    };
+    let stamp = account_stamp(&first);
+    first.prefs.version_choices.push(prefs::ProfileList {
+        user: String::new(),
+        account: stamp.clone(),
+        items: vec![VersionChoiceEntry {
+            machine_id: "m".into(), rating_key: "rk".into(), media_id: 2, extensions: Default::default(),
+        }],
+        ..Default::default()
+    });
+    first.prefs.recent_channels.push(prefs::ProfileList {
+        user: String::new(),
+        account: stamp,
+        items: vec![prefs::RecentChannelEntry { machine_id: "m".into(), dvr: "d".into(), channel: "5".into() }],
+        ..Default::default()
+    });
+    save(&first);
+
+    login_with_roster("token-b", roster_of(7));
+    let kept = load();
+    assert_eq!(kept.account_token, "token-b");
+    assert_eq!(kept.prefs.version_choices.len(), 1, "the same owner keeps the chosen file");
+    assert_eq!(kept.prefs.version_choices[0].account, account_stamp(&kept));
+    assert_eq!(kept.prefs.version_choices[0].items[0].media_id, 2);
+    assert_eq!(kept.prefs.recent_channels.len(), 1, "and the recent channel");
+    assert_eq!(kept.prefs.recent_channels[0].account, account_stamp(&kept));
+    assert_eq!(kept.prefs.recent_channels[0].items[0].channel, "5");
+
+    login_with_roster("token-c", roster_of(8));
+    let other = load();
+    assert!(other.prefs.version_choices.is_empty(), "a different owner drops the version choice: {:?}", other.prefs.version_choices);
+    assert!(other.prefs.recent_channels.is_empty(), "and the recent channels: {:?}", other.prefs.recent_channels);
+}
+
+/// A known different owner reads none of the four, and a later sign-in of that owner does not
+/// find them either. An unnamed roster neither moves them nor drops them.
+#[test]
+fn a_different_owner_reads_none_of_the_four_and_an_unnamed_roster_leaves_them() {
+    let _serial = plx_base::testlock::serial();
+    let _root = TempSession::new("relogin-other-owner");
+    let mut first = Session {
+        client_id: "cid-1".into(), account_token: "token-a".into(), home_users: roster_of(7), ..Default::default()
+    };
+    let stamp = account_stamp(&first);
+    put_four(&mut first, &stamp);
+    save(&first);
+
+    login_with_roster("token-b", roster_of(8));
+    let other = load();
+    assert!(other.prefs.profile_prefs.is_empty(), "a known different owner drops profile settings");
+    assert!(other.prefs.subtitle_offsets.is_empty());
+    assert!(other.prefs.track_memory.is_empty());
+    assert!(other.prefs.plaintext_consent.is_empty());
+    let read = read_four(&other);
+    assert_eq!(read.0, MarkerSkipMode::Manual);
+    assert_eq!(read.1, None);
+    assert!(!read.2);
+    assert_eq!(read.3, PlaintextChoice::Undecided);
+
+    login_with_roster("token-c", roster_of(8));
+    assert!(load().prefs.profile_prefs.is_empty(), "the next sign-in of that owner does not resurrect them");
+
+    put_four_reset(&mut first, &crate::plex::grant::account_key("token-a"));
+    first.home_users.clear();
+    save(&first);
+    login_with_roster("token-d", roster_of(7));
+    let unnamed = load();
+    assert_eq!(unnamed.account_token, "token-d");
+    assert_eq!(read_four(&unnamed).0, MarkerSkipMode::Manual, "the new stamp does not read them");
+    let old = crate::plex::grant::account_key("token-a");
+    assert!(unnamed.prefs.profile_prefs.iter().any(|r| r.account == old), "the old stamp's records are still in the file");
+    assert!(unnamed.prefs.subtitle_offsets.iter().any(|r| r.account == old));
+    assert!(unnamed.prefs.track_memory.iter().any(|r| r.account == old));
+    assert!(unnamed.prefs.plaintext_consent.iter().any(|c| c.account == old));
+}

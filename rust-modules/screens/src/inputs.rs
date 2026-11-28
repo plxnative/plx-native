@@ -134,7 +134,7 @@ pub(crate) fn capture_fixture() -> ScreenInputs {
     let settled = session::peek_settled();
     let stored = settled.clone().unwrap_or_else(session::peek);
     ScreenInputs { grants: Arc::new(GrantInputs { offers: grant::offers(),
-        choices: grant::choices(&stored.prefs.plaintext_consent, &stored.account_token),
+        choices: grant::choices_of(&stored),
         connected: grant::granted_machines() }), session: stored, settled: settled.is_some(),
         visible_generation: session::visible_generation(),
         revision: { let (cache, profile) = session::screen_input_revision(); cache.wrapping_add(profile) },

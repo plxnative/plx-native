@@ -8,7 +8,8 @@
 //! The list is `Preferences::track_memory`, a [`ProfileList`] per profile held through the memory
 //! door (`ProfileMemory::upsert_with`), keyed by `(machine_id, show_rk)`, at most [`CAP`] entries a
 //! profile, oldest first. It is **account-bound**: the record carries the account stamp
-//! (`grant::account_key`), a record stamped for any other account reads as nothing, a write without
+//! (`grant::account_key` while the roster names no owner, otherwise the owner stamp
+//! [`crate::plex::session::account_stamp`]), a record stamped for any other account reads as nothing, a write without
 //! a stamp is refused, and a write prunes every record that is not its own. It lives in the public
 //! half of the DB8 document, so it is also **bounded in bytes** — see [`BUDGET_BYTES`] and the
 //! bounds below. Those bounds are what make "64 entries for one profile" and "the whole household

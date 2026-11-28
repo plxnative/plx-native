@@ -826,7 +826,7 @@ fn a_dropped_plaintext_row_never_leaves_the_engine_on_a_neighbour_that_took_its_
     let _sess = multi_user_session("composed-reseat-plaintext");
     plx_plex::plex::reset_servers_for_test();
     plx_plex::plex::grant::reset_for_test();
-    let account = plx_plex::plex::grant::account_key(&plx_plex::plex::session::peek().account_token);
+    let account = plx_plex::plex::session::account_stamp(&plx_plex::plex::session::peek());
     let mut saved: plx_plex::plex::session::Session = (*plx_plex::plex::session::peek()).clone();
     for m in ["m-a", "m-b", "m-c"] {
         saved = saved.with_plaintext_choice(&account, m, PlaintextChoice::Allowed);

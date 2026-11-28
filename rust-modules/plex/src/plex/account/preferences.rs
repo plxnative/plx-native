@@ -81,7 +81,7 @@ impl PreferenceRequest {
         if self.user.id != 0 || !self.user.uuid.is_empty() { return Some(self); }
         if stored.user.id != 0 || !stored.user.uuid.is_empty() || !stored.active_profile_is_admin()
             || stored.account_token.is_empty() || self.credential != stored.account_token
-            || self.stamp != crate::plex::grant::account_key(&stored.account_token) {
+            || self.stamp != crate::plex::session::account_stamp(stored) {
             return None;
         }
         let mut admins = stored.home_users.iter().filter(|user| user.admin);
@@ -498,7 +498,7 @@ impl PreferenceRequest {
     fn home_admin_marker_request(&self, stored: &crate::plex::session::Session) -> Option<Self> {
         let seated = stored.home_users.iter().find(|u| !self.user.uuid.is_empty() && u.uuid == self.user.uuid)?;
         if seated.admin || stored.user.uuid != self.user.uuid || stored.active_profile_is_admin()
-            || stored.account_token.is_empty() || self.stamp != crate::plex::grant::account_key(&stored.account_token) {
+            || stored.account_token.is_empty() || self.stamp != crate::plex::session::account_stamp(stored) {
             return None;
         }
         let mut admins = stored.home_users.iter().filter(|u| u.admin);
@@ -541,7 +541,7 @@ mod marker_access_tests {
         let (mut raw, _) = PreferenceRequest::fixture_for_test(UserRef::default(), 1, Default::default());
         let mut stored = Session { account_token: raw.credential.clone(), home_users: vec![HomeUserRef {
             id: 1, uuid: "demo-user".into(), admin: true, ..Default::default() }], ..Default::default() };
-        raw.stamp = crate::plex::grant::account_key(&stored.account_token);
+        raw.stamp = crate::plex::session::account_stamp(&stored);
         let seat = CurrentProfile { user: Some(UserRef::default()), generation: 1, stamp: raw.stamp.clone() };
         assert_eq!(raw.load_marker_access_with(|| true, |_| Ok(br#"{"id":1,"uuid":"demo-user"}"#.to_vec())),
             Err(PreferenceError::Refused), "the raw unknown identity cannot authorize features");
@@ -608,7 +608,7 @@ mod marker_access_tests {
                 HomeUserRef { id: 1, uuid: "owner".into(), admin: true, ..Default::default() },
                 HomeUserRef { id: 2, uuid: "managed".into(), ..Default::default() }],
             ..Default::default() };
-        request.stamp = crate::plex::grant::account_key(&stored.account_token);
+        request.stamp = crate::plex::session::account_stamp(&stored);
         (stored, request)
     }
 

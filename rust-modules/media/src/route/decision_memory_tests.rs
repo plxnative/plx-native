@@ -214,6 +214,30 @@ fn the_door_stamps_its_writes_adopts_legacy_records_and_drops_another_accounts()
     tidy();
 }
 
+/// An older build stamped the offset with the token fingerprint. A restore for a roster that
+/// names the owner reads it under the owner stamp.
+#[test]
+fn a_restore_adopts_an_older_builds_token_stamp_for_the_same_owner() {
+    let _g = plx_base::testlock::serial();
+    let _session = session::TempSession::new("memory-owner-adopt");
+    unseed_memory_for_test::<SubtitleOffsetEntry>();
+    let legacy = plx_plex::plex::grant::account_key("acct");
+    let mut record = signed_in("acct");
+    record.home_users = vec![session::HomeUserRef {
+        id: 7, uuid: "owner-7".into(), title: "Synthetic".into(), admin: true, ..Default::default()
+    }];
+    record.prefs.subtitle_offsets = serde_json::from_value(serde_json::json!([
+        {"user": "", "account": legacy, "items": [{"machine_id": "m", "rating_key": "rk", "offset_ms": 450}]}
+    ])).unwrap();
+    assert_ne!(plx_plex::plex::session::account_stamp(&record), legacy);
+    session::save(&record);
+    _session.seated("", "acct");
+    restore_install_rows(&session::peek());
+    assert_eq!(recall::<SubtitleOffsetEntry>("", &key("m", "rk")).map(|e| e.offset_ms), Some(450),
+        "the mirror reads the older build's record under the owner stamp");
+    tidy();
+}
+
 /// **SO: the mirror half of the door stamps too.** A restore seeds the mirror from a file that
 /// already holds a STAMPED record of the item; re-tuning it, or forgetting it, must reach that same
 /// record. A mirror write that dropped the stamp would land in a second, unstamped record, and
