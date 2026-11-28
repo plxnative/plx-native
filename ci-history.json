@@ -1,4 +1,4 @@
-{"updated":"2026-11-28T03:05:05Z",
+{"updated":"2026-11-28T03:11:19Z",
 "ci":[
 {"id":33307798795,"at":"2026-08-30T10:59:48Z","sha":"c424c620a","title":"chore: share agent configuration across harnesses","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
 {"id":33331246356,"at":"2026-08-30T19:34:30Z","sha":"ddd75c6b1","title":"merge: align search and control materials","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6220,7 +6220,8 @@
 {"id":46067367373,"at":"2026-11-27T21:00:10Z","sha":"7f91525ec","title":"Test rig: settle waits for the storage worker too","pr":1604,"conclusion":"success","attempt":1,"jobs":{"macOS simulator build + launch":310,"macOS tests against bundled FFmpeg and ASS":230,"Linux simulator build + launch":375,"Windows launcher syntax":20}},
 {"id":46068077648,"at":"2026-11-27T21:06:21Z","sha":"3ea120b70","title":"pms-api: the window read's earlier lower bound is accepted, unproven on real data","pr":1603,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":239,"Linux simulator build + launch":336,"macOS simulator build + launch":333,"Windows launcher syntax":20}},
 {"id":46071865095,"at":"2026-11-27T21:40:55Z","sha":"0e723ea57","title":"Guide: a move lands on what is on air or ahead, not on a programme that has aired","pr":1603,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":18,"macOS simulator build + launch":231,"macOS tests against bundled FFmpeg and ASS":259,"Linux simulator build + launch":374}},
-{"id":46072957703,"at":"2026-11-27T21:51:19Z","sha":"60af58117","title":"Live TV Guide: keep programmes that aired in the window, one airing list","pr":1603,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":270,"Windows launcher syntax":19,"macOS simulator build + launch":137,"Linux simulator build + launch":347}}
+{"id":46072957703,"at":"2026-11-27T21:51:19Z","sha":"60af58117","title":"Live TV Guide: keep programmes that aired in the window, one airing list","pr":1603,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":270,"Windows launcher syntax":19,"macOS simulator build + launch":137,"Linux simulator build + launch":347}},
+{"id":46101122134,"at":"2026-11-28T03:04:56Z","sha":"f3088630e","title":"player: focus Skip on marker offer so auto-skip countdown isn't cancelled","pr":1538,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":190,"Linux simulator build + launch":362,"macOS simulator build + launch":357,"Windows launcher syntax":26}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
