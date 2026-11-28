@@ -1,4 +1,4 @@
-{"updated":"2026-11-28T08:27:57Z",
+{"updated":"2026-11-28T11:29:20Z",
 "ci":[
 {"id":33307798795,"at":"2026-08-30T10:59:48Z","sha":"c424c620a","title":"chore: share agent configuration across harnesses","pr":null,"conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":96},"failed":["host checks (NOT a device gate)"]},
 {"id":33331246356,"at":"2026-08-30T19:34:30Z","sha":"ddd75c6b1","title":"merge: align search and control materials","pr":null,"conclusion":"failure","attempt":1,"jobs":{},"failed":["cross-build (armv7) + artifact assertions","host checks (NOT a device gate)"]},
@@ -6228,7 +6228,8 @@
 {"id":46071865095,"at":"2026-11-27T21:40:55Z","sha":"0e723ea57","title":"Guide: a move lands on what is on air or ahead, not on a programme that has aired","pr":1603,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Windows launcher syntax":18,"macOS simulator build + launch":231,"macOS tests against bundled FFmpeg and ASS":259,"Linux simulator build + launch":374}},
 {"id":46072957703,"at":"2026-11-27T21:51:19Z","sha":"60af58117","title":"Live TV Guide: keep programmes that aired in the window, one airing list","pr":1603,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":270,"Windows launcher syntax":19,"macOS simulator build + launch":137,"Linux simulator build + launch":347}},
 {"id":46101122134,"at":"2026-11-28T03:04:56Z","sha":"f3088630e","title":"player: focus Skip on marker offer so auto-skip countdown isn't cancelled","pr":1538,"conclusion":"success","attempt":1,"jobs":{"macOS tests against bundled FFmpeg and ASS":190,"Linux simulator build + launch":362,"macOS simulator build + launch":357,"Windows launcher syntax":26}},
-{"id":46125299500,"at":"2026-11-28T08:19:49Z","sha":"ded01cc9d","title":"Keyboard: drain the Wayland connection before raising the panel","pr":1608,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":362,"Windows launcher syntax":19,"macOS tests against bundled FFmpeg and ASS":233,"macOS simulator build + launch":321}}
+{"id":46125299500,"at":"2026-11-28T08:19:49Z","sha":"ded01cc9d","title":"Keyboard: drain the Wayland connection before raising the panel","pr":1608,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":362,"Windows launcher syntax":19,"macOS tests against bundled FFmpeg and ASS":233,"macOS simulator build + launch":321}},
+{"id":46139700378,"at":"2026-11-28T11:23:57Z","sha":"b1120371b","title":"Subtitles over a remux: place embedded cues by the anchor keyframe's fed time","pr":1609,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":311,"macOS tests against bundled FFmpeg and ASS":297,"macOS simulator build + launch":299,"Windows launcher syntax":18}}
 ],
 "nightly":[
 {"id":35412511191,"at":"2026-09-19T01:23:39Z","sha":"6d0599e36","title":"ci: nightly runs as a dry run on the pull requests that change it","pr":140,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"plan today's nightly":10},"failed":["ARM build + gates / build + verify"]},
